@@ -1,10 +1,10 @@
 //-------------------------------------------------------------------------------
 // vpdp1170 - DEC PDP-11/70 emulator on Freenove ESP32-S3 2.8" Display
 //
-// Cloned from vpdp1140 on 2026-07-01 as the host scaffold for a future
-// PDP-11/70 emulator. The current baseline still uses the vpdp1140/sam11
-// 11/40-derived core while the 11/70 CPU, 22-bit MMU, bus, and devices are
-// being replaced with a PDP-11/70-capable engine.
+// Cloned from vpdp1140 on 2026-07-01 as the host scaffold for a PDP-11/70
+// emulator. V1.0 boots Unix V6 through the kek PDP-11/70 CPU/MMU adapter;
+// the inherited 11/40-derived core remains in the tree for reference and
+// fallback while the kek device set is brought across in phases.
 //
 // Initial source candidate for the 11/70 engine is Folkert van Heusden's
 // kek emulator (MIT), kept under _upstream_kek for reference/import work.
@@ -129,16 +129,16 @@ enum {
 // Boot drive unit label (e.g. "DL0", "DL1", "DL2", "DL3", "RK0") and the
 // configured image path for the slot named by cfg.boot_drive ('a'..'d').
 static const char* boot_unit_label() {
+  if (cfg.boot_kind == AppConfig::BK_RK) return "RK0";
   int slot = (cfg.boot_drive >= 'a' && cfg.boot_drive <= 'd')
                ? (cfg.boot_drive - 'a') : 0;
   static const char* rl_names[4] = { "DL0", "DL1", "DL2", "DL3" };
-  if (slot == 0 && cfg.boot_kind == AppConfig::BK_RK) return "RK0";
   return rl_names[slot];
 }
 static const String& boot_image_path() {
+  if (cfg.boot_kind == AppConfig::BK_RK) return cfg.disk_rk0;
   int slot = (cfg.boot_drive >= 'a' && cfg.boot_drive <= 'd')
                ? (cfg.boot_drive - 'a') : 0;
-  if (slot == 0 && cfg.boot_kind == AppConfig::BK_RK) return cfg.disk_rk0;
   const String* paths[4] = { &cfg.disk_a, &cfg.disk_b, &cfg.disk_c, &cfg.disk_d };
   return *paths[slot];
 }
@@ -248,28 +248,23 @@ static void sd_and_config_init() {
   }
 }
 
-// Mount the four guest drives from /pdpconfig.ini paths.
-// When boot=rk0 we substitute disk_rk0 into slot 0 (so the RK11 controller
-// sees the RK05 image as drive 0) and the corresponding unit name flips
-// from "DL0" to "RK0".
+// Mount guest drives from /pdpconfig.ini paths. DL0..DL3, RK0, and RP0 are
+// independent host slots; boot= only chooses the bootstrap/controller path.
 static void disks_mount() {
   if (!sd_ok) { LOGE("disks_mount: SD not available"); return; }
   for (int s = 0; s < DRIVE_COUNT; s++)
     disk_dismount(s);
 
-  const bool rk_boot = (cfg.boot_kind == AppConfig::BK_RK);
   const String* paths[4] = {
-    rk_boot ? &cfg.disk_rk0 : &cfg.disk_a,
-    &cfg.disk_b, &cfg.disk_c, &cfg.disk_d
+    &cfg.disk_a, &cfg.disk_b, &cfg.disk_c, &cfg.disk_d
   };
   const char* unit_names[4] = {
-    rk_boot ? "RK0" : "DL0", "DL1", "DL2", "DL3"
+    "DL0", "DL1", "DL2", "DL3"
   };
   for (int s = 0; s < 4; s++) {
     if (paths[s]->length() == 0) continue;
     bool ok = disk_mount(s, paths[s]->c_str());
-    bool is_rl_slot = !(rk_boot && s == DRIVE_A);
-    if (ok && is_rl_slot && !rl11::validate_mounted_media(s)) {
+    if (ok && !rl11::validate_mounted_media(s)) {
       uint32_t bytes = disk_size_bytes(s);
       LOGE("disks_mount %s: \"%s\" rejected, RL image size is %u bytes; expected RL01=%u or RL02=%u",
            unit_names[s], paths[s]->c_str(), (unsigned)bytes,
@@ -280,6 +275,11 @@ static void disks_mount() {
     }
     LOG("disks_mount %s: \"%s\" -> %s",
         unit_names[s], paths[s]->c_str(), ok ? "mounted" : "FAILED");
+  }
+  if (cfg.disk_rk0.length()) {
+    bool ok = disk_mount(DRIVE_RK0, cfg.disk_rk0.c_str());
+    LOG("disks_mount RK0: \"%s\" -> %s",
+        cfg.disk_rk0.c_str(), ok ? "mounted" : "FAILED");
   }
   if (cfg.disk_rp0.length()) {
     bool ok = disk_mount(DRIVE_RP0, cfg.disk_rp0.c_str());
@@ -305,7 +305,12 @@ static void draw_status_bar() {
     (cfg.boot_kind == AppConfig::BK_RK) ? "RK0" : "DL0",
     "DL1", "DL2", "DL3"
   };
-  for (int s = 0; s < 4; s++) {
+  const int visible_slots[4] = {
+    (cfg.boot_kind == AppConfig::BK_RK) ? DRIVE_RK0 : DRIVE_A,
+    DRIVE_B, DRIVE_C, DRIVE_D
+  };
+  for (int i = 0; i < 4; i++) {
+    int s = visible_slots[i];
     uint32_t r = 0, w = 0;
     disk_stats(s, &r, &w);
     bool active = (r + w) != prev_io[s];
@@ -313,11 +318,11 @@ static void draw_status_bar() {
     uint16_t col = !disk_is_mounted(s) ? 0x2945
                  : active             ? TFT_YELLOW
                                       : TFT_GREEN;
-    int bx = 6 + s * 36;
+    int bx = 6 + i * 36;
     tft.fillRoundRect(bx, sy + 5, 32, 16, 2, col);
     tft.setTextColor(TFT_BLACK, col);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString(unit_labels[s], bx + 16, sy + 13, 1);
+    tft.drawString(unit_labels[i], bx + 16, sy + 13, 1);
   }
   tft.setTextDatum(TL_DATUM);
 
@@ -409,12 +414,16 @@ static void ui_tap_locked(int x, int y) {
   xSemaphoreGive(g_ui_mutex);
 }
 
+static void poll_touch_once();
+
 // ---- core 0: all TFT rendering ----
 static void render_task(void* arg) {
   (void)arg;
   bool     was_open  = false;
   uint32_t status_ms = 0;
   for (;;) {
+    poll_touch_once();
+
     bool open = ui_is_open();
     if (was_open && !open) {
       // Menu just closed: clear the strip below the console, full repaint.
@@ -536,8 +545,7 @@ void setup() {
 
   wifi_connect();
 
-  // ---- boot/services: mount drives for the 11/40 scaffold, or stop at the
-  // kek CPU/MMU adapter milestone until PDP-visible devices are wired.
+  // ---- boot/services: mount drives and start the selected PDP core.
   if (cpu_ok && (!pdp_core::is_kek_engine() || selftest_ok)) {
     telnet_begin(cfg.telnet_port, cfg.telnet_enabled);
     ftp_begin(cfg.ftp_port, cfg.ftp_enabled,
@@ -551,15 +559,18 @@ void setup() {
       pdp_core::set_boot_kind(cfg.boot_kind == AppConfig::BK_RK ? 1 : 0);
       if (cfg.boot_kind == AppConfig::BK_RK) {
         LOG("--- booting kek PDP-11/70 from RK0, console -> TFT ---");
-        bool rk0_mounted = disk_is_mounted(DRIVE_A);
+        bool rk0_mounted = disk_is_mounted(DRIVE_RK0);
         tft_status(ROW_BOOT, "Boot RK0:",
                    rk0_mounted ? boot_image_path().c_str() : "not mounted",
                    rk0_mounted ? TFT_GREEN : TFT_RED);
         tft_status(ROW_CPU,  "CPU:   ", "kek RK0 boot", TFT_GREEN);
       } else {
-        LOG("--- kek PDP-11/70 CPU/MMU adapter online; only RK0 boot is wired so far ---");
-        tft_status(ROW_BOOT, "Boot:  ", "kek RK0 only", TFT_YELLOW);
-        tft_status(ROW_CPU,  "CPU:   ", "kek smoke ROM", TFT_GREEN);
+        LOG("--- booting kek PDP-11/70 from DL0, console -> TFT ---");
+        bool dl0_mounted = disk_is_mounted(DRIVE_A);
+        tft_status(ROW_BOOT, "Boot DL0:",
+                   dl0_mounted ? boot_image_path().c_str() : "not mounted",
+                   dl0_mounted ? TFT_GREEN : TFT_RED);
+        tft_status(ROW_CPU,  "CPU:   ", "kek DL0 boot", TFT_GREEN);
       }
       start_cpu(true);
       led(0, 0, 32);           // blue = PDP-11 boot stub running
@@ -591,22 +602,22 @@ void setup() {
   }
 }
 
-// loop() runs on core 1 and IS the PDP-11: CPU emulation plus FTP, touch and
-// settings-menu logic. It never touches the TFT; render_task owns the display
-// and net_task owns Telnet on core 0.
-// Touch handling lives at file scope so cpu_run's per-slice work and the
-// menu-open early-return path can share the same state. The 750 ms
-// window is wider than the original 450 ms because users were missing
-// the second tap of a fast double-tap when the timer rolled over.
+// loop() runs on core 1 and IS the PDP-11: CPU emulation plus FTP and
+// settings-menu command handling. It never touches the TFT; render_task owns
+// the display and polls touch on core 0 so fast taps are not missed while the
+// kek CPU is running a long instruction slice.
+// Touch handling lives at file scope so render_task can share the same
+// double-tap state with menu hit testing. The 750 ms window is wider than the
+// original 450 ms because users were missing the second tap of a fast
+// double-tap when the timer rolled over.
 static uint32_t g_last_tap_ms = 0;
 #define UI_DOUBLE_TAP_MS 750
 
 // Poll the touchscreen once. When the menu is open, route the tap into
 // the menu; when closed, accumulate it as a double-tap candidate that
 // opens the menu when two taps land within UI_DOUBLE_TAP_MS of each
-// other. Called from loop() once per slice so a fast double-tap can't
-// fall between two touch_poll calls (cpu_run runs ~40 ms total, and
-// the FT6336U doesn't buffer events for us).
+// other. Called from render_task every ~20 ms; the FT6336U edge event does
+// not survive long CPU slices on core 1.
 static void poll_touch_once() {
   int tx, ty;
   if (!touch_poll(&tx, &ty)) return;
@@ -629,8 +640,6 @@ void loop() {
   static bool     boot_done = false;
   static bool     btn_prev  = true;
 
-  poll_touch_once();
-
   // Onboard button (GPIO0, active low): press opens the menu.
   bool btn_now = digitalRead(BUTTON_PIN);
   if (btn_prev && !btn_now && !ui_is_open()) ui_open_locked();
@@ -642,49 +651,39 @@ void loop() {
   emu_control::poll();
   telnet_shell_poll();
   if (emu_control::consume_reboot_request()) {
-    if (pdp_core::is_kek_engine()) {
-      LOGE("EMU reboot ignored: kek disk/boot path is not wired yet");
+    LOG("EMU command: reboot PDP-11");
+    dl11_file::disconnect_all();
+    if (disk_reopen_all()) {
+      pdp_core::set_boot_kind(cfg.boot_kind == AppConfig::BK_RK ? 1 : 0);
+      start_cpu(true);
+      boot_done = false;
+      led(0, 0, 32);
     } else {
-      LOG("EMU command: reboot PDP-11");
-      dl11_file::disconnect_all();
-      if (disk_reopen_all()) {
-        start_cpu(true);
-        boot_done = false;
-        led(0, 0, 32);
-      } else {
-        LOGE("EMU reboot cancelled: one or more disk images could not be reopened");
-      }
+      LOGE("EMU reboot cancelled: one or more disk images could not be reopened");
     }
   }
 
   // Boot-source or boot-media changed from the menu; remount and cold boot.
   if (ui_consume_boot_change()) {
-    if (pdp_core::is_kek_engine()) {
-      LOGE("ui: boot change noted, but kek disk/boot path is not wired yet");
-    } else {
-      const char* boot_name = (cfg.boot_kind == AppConfig::BK_RK) ? "RK0" : "DL0";
-      LOG("ui: boot from %s", boot_name);
-      disks_mount();
-      pdp_core::set_boot_kind(cfg.boot_kind == AppConfig::BK_RK ? 1 : 0);
-      start_cpu(true);
-      boot_done = false;
-      led(0, 0, 32);
-    }
+    const char* boot_name = (cfg.boot_kind == AppConfig::BK_RK) ? "RK0" : "DL0";
+    LOG("ui: boot from %s", boot_name);
+    disks_mount();
+    pdp_core::set_boot_kind(cfg.boot_kind == AppConfig::BK_RK ? 1 : 0);
+    start_cpu(true);
+    boot_done = false;
+    led(0, 0, 32);
   }
 
   // "Reboot PDP-11" from the menu (the menu has already closed itself).
   if (ui_consume_reboot()) {
-    if (pdp_core::is_kek_engine()) {
-      LOGE("ui: reboot ignored: kek disk/boot path is not wired yet");
+    LOG("ui: reboot PDP-11");
+    if (disk_reopen_all()) {
+      pdp_core::set_boot_kind(cfg.boot_kind == AppConfig::BK_RK ? 1 : 0);
+      start_cpu(true);
+      boot_done = false;
+      led(0, 0, 32);
     } else {
-      LOG("ui: reboot PDP-11");
-      if (disk_reopen_all()) {
-        start_cpu(true);
-        boot_done = false;
-        led(0, 0, 32);
-      } else {
-        LOGE("ui: reboot cancelled: one or more disk images could not be reopened");
-      }
+      LOGE("ui: reboot cancelled: one or more disk images could not be reopened");
     }
   }
 
@@ -712,11 +711,6 @@ void loop() {
   // drain the KL11->host output FIFOs (USB-Serial + TFT) so the 8 KB
   // rings stay near empty during steady-state output.
   for (int slice = 0; slice < 5; slice++) {
-    // Per-slice touch poll: cpu_run(8000) takes ~8 ms, so polling here
-    // catches the second tap of a fast double-tap that would otherwise
-    // fall between two loop iterations (~40 ms gap). Cheap - touch_poll
-    // is a single I2C transaction to the FT6336U.
-    poll_touch_once();
     while (Serial.available())
       console_key_push((uint8_t)Serial.read());   // -> Serial-in FIFO
     ftp_poll();                  // accept + FTP commands/data against SD root

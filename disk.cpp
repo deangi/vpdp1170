@@ -31,10 +31,13 @@ const char* disk_last_error() {
 static bool slot_valid(int s) { return s >= 0 && s < DRIVE_COUNT; }
 static const char* slot_name(int s) {
   static char name[4];
+  if (s == DRIVE_RK0) return "RK0";
   if (s == DRIVE_RP0) return "RP0";
   if (s >= DRIVE_A && s <= DRIVE_D) {
-    name[0] = 'A' + s;
-    name[1] = 0;
+    name[0] = 'D';
+    name[1] = 'L';
+    name[2] = '0' + s;
+    name[3] = 0;
     return name;
   }
   return "?";

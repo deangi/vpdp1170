@@ -847,9 +847,9 @@ static void command_cp(const char* source_arg, const char* destination_arg) {
 }
 
 static const char* slot_label(int slot) {
+  if (slot == DRIVE_RK0) return "RK0";
   if (slot == DRIVE_RP0) return "RP0";
-  if (slot == DRIVE_A)
-    return cfg.boot_kind == AppConfig::BK_RK ? "RK0" : "RL0";
+  if (slot == DRIVE_A) return "RL0";
   if (slot == DRIVE_B) return "RL1";
   if (slot == DRIVE_C) return "RL2";
   return "RL3";
@@ -861,7 +861,7 @@ static void command_drives() {
       output_printf("%-3s  empty\r\n", slot_label(slot));
       continue;
     }
-    if (slot != DRIVE_RP0 && !(slot == DRIVE_A && cfg.boot_kind == AppConfig::BK_RK)) {
+    if (slot >= DRIVE_A && slot <= DRIVE_D) {
       output_printf("%-3s  %s  %lu bytes  %s  %s\r\n",
                     slot_label(slot), disk_path(slot),
                     (unsigned long)disk_size_bytes(slot),
@@ -883,11 +883,9 @@ static bool unit_is_rl(const char* unit) {
 static int unit_slot(const char* unit) {
   if (!unit) return -1;
   if (!strcasecmp(unit, "RP0")) return DRIVE_RP0;
-  if (!strcasecmp(unit, "RK0"))
-    return cfg.boot_kind == AppConfig::BK_RK ? DRIVE_A : -1;
+  if (!strcasecmp(unit, "RK0")) return DRIVE_RK0;
   if (!strcasecmp(unit, "RL0") || !strcasecmp(unit, "DL0"))
-    return cfg.boot_kind == AppConfig::BK_RL ? DRIVE_A : -1;
-  if (cfg.boot_kind != AppConfig::BK_RL) return -1;
+    return DRIVE_A;
   if (!strcasecmp(unit, "RL1") || !strcasecmp(unit, "DL1")) return DRIVE_B;
   if (!strcasecmp(unit, "RL2") || !strcasecmp(unit, "DL2")) return DRIVE_C;
   if (!strcasecmp(unit, "RL3") || !strcasecmp(unit, "DL3")) return DRIVE_D;
@@ -897,8 +895,8 @@ static int unit_slot(const char* unit) {
 static void notify_media(int slot, bool mounted) {
   if (slot == DRIVE_RP0)
     rh11::media_changed(mounted);
-  else if (cfg.boot_kind == AppConfig::BK_RK)
-    rk11::media_changed(slot, mounted);
+  else if (slot == DRIVE_RK0)
+    rk11::media_changed(0, mounted);
   else
     rl11::media_changed(slot, mounted);
 }

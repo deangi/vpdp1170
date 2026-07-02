@@ -2,7 +2,7 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vpdp1170"
-#define APP_VERSION     "V1.0"
+#define APP_VERSION     "V1.1"
 #define APP_BUILD_DATE  "2026-07-02"
 
 // ---- PDP core selection ----

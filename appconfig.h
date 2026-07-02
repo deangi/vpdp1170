@@ -94,21 +94,20 @@ struct AppConfig {
   bool   kwp_enabled = false;
 
   // [disks]
-  // Slot 0..3 holds host media mounted at RL11 units DL0..DL3.
+  // Slot DRIVE_A..DRIVE_D holds host media mounted at RL11 units DL0..DL3.
   String disk_a;
   String disk_b;
   String disk_c;
   String disk_d;
-  // Optional RK05 image. When boot_kind == BK_RK we mount this at slot 0
-  // (overriding disk_a) so the RK11 controller can find it as RK drive 0.
+  // Optional RK05 image mounted at the dedicated DRIVE_RK0 host slot.
   String disk_rk0;
   // Optional secondary RH11/RP image. Not bootable in the current host; guests
   // see it as RP0 via the RH11/RP register set.
   String disk_rp0;
   String disk_rp0_type = "rp06";
-  // Boot drive: which of the four physical slots is the boot disk (encoded
-  // as 'a'..'d' for slot 0..3). boot_kind tells cpu_reset() which boot ROM
-  // to install + which controller is being used (RL11 vs RK11).
+  // Boot drive: RL boot unit encoded as 'a'..'d' for DL0..DL3. RK boot uses
+  // the dedicated disk_rk0/DRIVE_RK0 slot. boot_kind selects the bootstrap
+  // controller path.
   char   boot_drive = 'a';
   enum BootKind { BK_RL = 0, BK_RK = 1 };
   uint8_t boot_kind = BK_RL;

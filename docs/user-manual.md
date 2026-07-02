@@ -36,9 +36,9 @@ disk before asking the emulator to detach its image.
 
 | Component | Emulation |
 | --- | --- |
-| CPU | PDP-11/70 KD11 core |
-| Memory | 256 KB address space minus the 8 KB I/O page, giving 248 KB RAM |
-| MMU | KT11-D style 18-bit mapping |
+| CPU | PDP-11/70 core through the kek adapter |
+| Memory | 4 MB target physical memory backed by ESP32-S3 PSRAM |
+| MMU | PDP-11/70 22-bit memory-management path, under active bring-up |
 | Console | KL11 console at `0177560`, vector `060` |
 | Alternate serial | Optional file-backed DL11-compatible TT1 at `0176500`, receive vector `0300`, transmit vector `0304` |
 | RK disk | RK11 controller for RK05 images |
@@ -47,8 +47,9 @@ disk before asking the emulator to detach its image.
 | Clocks | KW11-L line clock and optional KW11-P programmable clock |
 | Boot ROM | M9312-style boot stubs for RK0 and RL0 |
 
-The current memory model is sized for the PDP-11/70 18-bit physical address
-space. The top 8 KB is the UNIBUS I/O page, so usable RAM is 248 KB.
+The V1.1 bring-up path allocates the PDP-11/70 4 MB physical memory target in
+PSRAM. The inherited 11/40-derived CPU/MMU scaffold remains in the source tree
+for reference while the kek device set is ported.
 
 ## Supported Operating Systems
 
@@ -56,7 +57,7 @@ These systems boot with this release:
 
 | System | Typical media | Status |
 | --- | --- | --- |
-| RT-11 V5 | RK05 | Boots to the `.` prompt and runs `DIR` |
+| RT-11 V5.04 | RK05 | Boots to the `.` prompt and runs `DIR` |
 | RSTS V4B | RK05 | Boots to the `READY` prompt |
 | UNIX V6 | RK05 | Boots from `@` to the `#` shell |
 | XXDP V2.2 | RL02 | Boots the XXDP monitor |
@@ -309,8 +310,8 @@ config files should use `[diag]`.
 `rk0` and `dk0` are treated as the same boot target. `dk0` is useful when
 thinking in UNIX V6 naming.
 
-When `boot = rk0`, the RK image replaces host slot 0 so the RK11 controller sees
-it as RK drive 0. When booting RL, slots map to `DL0` through `DL3`.
+When `boot = rk0`, the RK image is mounted in a dedicated RK0 host slot. It no
+longer replaces `dl0`; RL slots continue to map to `DL0` through `DL3`.
 
 `rp0` is secondary storage in this build. RP0 support is in testing mode and has
 not been verified yet. The boot ROM and menu boot choices are for RK0 and RL0.
@@ -342,7 +343,8 @@ rk0 = /unixv6.dsk
 boot = rk0
 ```
 
-The emulator installs the RK boot stub and mounts `rk0` as RK drive 0.
+The emulator installs the RK boot stub and mounts `rk0` as RK drive 0. RK0 is
+independent from the DL0-DL3 RL slots.
 
 ### Boot From RL0
 
@@ -463,9 +465,8 @@ same SD-card lock as FTP and the emulator disk layer.
 | `exit` | Reconnect Telnet to the PDP-11 console. |
 
 RL units accept `RL0` through `RL3`, with `DL0` through `DL3` as aliases.
-`RK0` is available when the active configuration uses the RK controller.
-`RP0` addresses the experimental RH11/RP secondary disk. A drive must be
-empty before `mount`; use `dismount` first.
+`RK0` is a separate RK image slot. `RP0` addresses the experimental RH11/RP
+secondary disk. A drive must be empty before `mount`; use `dismount` first.
 RL mounts accept only exact RL pack images: 5,242,880 bytes for RL01 or
 10,485,760 bytes for RL02. Other file sizes are rejected.
 
@@ -678,9 +679,8 @@ DISK;STATUS;ALL;REPLY
 ```
 
 RL commands accept `RL0` through `RL3`; `DL0` through `DL3` are aliases. RK
-commands currently accept `RK0`. Commands are accepted only for the controller
-selected by the active configuration. Runtime changes are temporary and do
-not rewrite `/pdpconfig.ini`.
+commands currently accept `RK0`. Runtime changes are temporary and do not
+rewrite `/pdpconfig.ini`.
 
 The emulator cannot determine whether a guest filesystem has dirty buffers.
 The PDP operating system must flush and offline/dismount the device before the

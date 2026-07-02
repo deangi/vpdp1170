@@ -2,6 +2,8 @@
 // Released under MIT license
 
 #include <errno.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "bus.h"
@@ -11,6 +13,11 @@
 #include "log.h"
 #include "rl02.h"
 #include "utils.h"
+
+#if defined(ESP32)
+#include "../disk.h"
+#include "../platform.h"
+#endif
 
 
 constexpr const char * const regnames[] = {
@@ -30,6 +37,64 @@ constexpr const char * const commands[] = {
 	"read data",
 	"read data w/o header check"
 	};
+
+static int rl02_trace_left = 160;
+
+static constexpr uint32_t rl01_image_bytes = 5242880u;
+static constexpr uint32_t rl02_image_bytes = 10485760u;
+static constexpr int rl01_track_count = 256;
+
+static bool rl02_unit_is_rl02(const int unit)
+{
+#if defined(ESP32)
+	return disk_size_bytes(unit) == rl02_image_bytes;
+#else
+	(void)unit;
+	return true;
+#endif
+}
+
+static bool rl02_unit_attached(const int unit)
+{
+#if defined(ESP32)
+	return unit >= 0 && unit < 4 && disk_is_mounted(unit);
+#else
+	(void)unit;
+	return true;
+#endif
+}
+
+static int rl02_unit_track_count(const int unit)
+{
+#if defined(ESP32)
+	const uint32_t bytes = disk_size_bytes(unit);
+	if (bytes == rl01_image_bytes)
+		return rl01_track_count;
+	if (bytes == rl02_image_bytes)
+		return rl02_track_count;
+#else
+	(void)unit;
+#endif
+	return rl02_track_count;
+}
+
+static void rl02_trace(const char *fmt, ...)
+{
+#if defined(ESP32)
+	if (rl02_trace_left <= 0)
+		return;
+	rl02_trace_left--;
+
+	char buffer[192];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(buffer, sizeof buffer, fmt, ap);
+	va_end(ap);
+	LOG("kek RL02 %s", buffer);
+#else
+	(void)fmt;
+#endif
+}
 
 rl02::rl02(bus *const b, abool *const disk_read_activity, abool *const disk_write_activity) :
 	b(b),
@@ -154,6 +219,10 @@ uint16_t rl02::read_word(const uint16_t addr)
 	}
 
 	DOLOG(log_ss::LS_DISK, "RL02: read \"%s\"/%o: %06o", regnames[reg], addr, value);
+	rl02_trace("READ %-12s @ %06o -> %06o CSR=%06o BAR=%06o DAR=%06o MPR0=%06o trk=%d head=%u sec=%u",
+			regnames[reg], addr, value,
+			registers[0], registers[1], registers[2], mpr[0],
+			track, head, sector);
 
 	return value;
 }
@@ -213,22 +282,33 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 		int           device  = (v >> 8) & 3;
 
 		DOLOG(log_ss::LS_DISK, "RL02: device %d, set command %d, exec: %d (%s)", device, command, do_exec, commands[command]);
+		rl02_trace("WRITE CSR @ %06o val=%06o unit=%d cmd=%u(%s) exec=%d IE=%d CSR=%06o BAR=%06o DAR=%06o MPR=%06o trk=%d head=%u sec=%u slots=%u",
+				addr, v, device, command, commands[command], do_exec ? 1 : 0,
+				(v & 64) ? 1 : 0,
+				registers[0], registers[1], registers[2],
+				registers[(RL02_MPR - RL02_BASE) / 2],
+				track, head, sector, (unsigned)fhs.size());
 
 		bool          do_int  = false;
 
-		if (size_t(device) >= fhs.size()) {
+		if (size_t(device) >= fhs.size() || !rl02_unit_attached(device)) {
 			DOLOG(log_ss::LS_DISK, "RL02: PDP11/70 is accessing virtual disk %d which is not attached", device);
 
 			registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 15);
+			rl02_trace("NOT-ATTACHED unit=%d CSR=%06o", device, registers[(RL02_CSR - RL02_BASE) / 2]);
 
 			do_int = true;
 		}
 		else if (command == 2) {  // get status
-			mpr[0] = 5 /* lock on */ | (1 << 3) /* brush home */ | (1 << 4) /* heads over disk */ | (head << 6) | (1 << 7) /* RL02 */;
+			mpr[0] = 5 /* lock on */ | (1 << 3) /* brush home */ | (1 << 4) /* heads over disk */ | (head << 6);
+			if (rl02_unit_is_rl02(device))
+				mpr[0] |= (1 << 7) /* RL02 */;
 			mpr[1] = mpr[0];
+			rl02_trace("GETSTAT unit=%d media=%s -> MPR=%06o", device, rl02_unit_is_rl02(device) ? "RL02" : "RL01", mpr[0]);
 		}
 		else if (command == 3) {  // seek
 			uint16_t temp = registers[(RL02_DAR - RL02_BASE) / 2];
+			const int media_tracks = rl02_unit_track_count(device);
 
 			int cylinder_count = (temp >> 7) * (temp & 4 ? 1 : -1);
 
@@ -236,10 +316,12 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 
 			if (new_track < 0)
 				new_track = 0;
-			else if (new_track >= rl02_track_count)
-				new_track = rl02_track_count - 1;
+			else if (new_track >= media_tracks)
+				new_track = media_tracks - 1;
 
 			DOLOG(log_ss::LS_DISK, "RL02: device %d, seek from cylinder %d to %d (distance: %d, DAR: %06o)", device, track, new_track, cylinder_count, temp);
+			rl02_trace("SEEK unit=%d media=%s DAR=%06o old_track=%d new_track=%d distance=%d",
+					device, rl02_unit_is_rl02(device) ? "RL02" : "RL01", temp, track, new_track, cylinder_count);
 			track  = new_track;
 
 //			update_dar();
@@ -252,6 +334,8 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			mpr[2] = 0;  // TODO: CRC
 
 			DOLOG(log_ss::LS_DISK, "RL02: device %d, read header [cylinder: %d, head: %d, sector: %d] %06o", device, track, head, sector, mpr[0]);
+			rl02_trace("RDHDR unit=%d -> hdr=%06o trk=%d head=%u sec=%u",
+					device, mpr[0], track, head, sector);
 
 			do_int = true;
 		}
@@ -270,10 +354,24 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			sector = temp & 63;
 			head   = (temp >> 6) & 1;
 			track  = temp >> 7;
+			const int media_tracks = rl02_unit_track_count(device);
+			if (track >= media_tracks) {
+				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 15);
+				rl02_trace("WRITE-ERR unit=%d media=%s track=%d beyond max=%d",
+						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
+						track, media_tracks - 1);
+				do_int = true;
+				goto command_done;
+			}
 
 			uint32_t temp_disk_offset = calc_offset();
+			uint32_t words_done       = 0;
 
 			DOLOG(log_ss::LS_DISK, "RL02: device %d, write %d bytes (dec) to %d (dec) from %06o (oct) [cylinder: %d, head: %d, sector: %d]", device, count, temp_disk_offset, memory_address, track, head, sector);
+			rl02_trace("WRITE-DATA unit=%d bytes=%u disk_off=%u bus=%06o trk=%d head=%u sec=%u MPR=%06o",
+					device, (unsigned)count, (unsigned)temp_disk_offset,
+					(unsigned)memory_address, track, head, sector,
+					registers[(RL02_MPR - RL02_BASE) / 2]);
 
 			while(count > 0) {
 				uint32_t cur = std::min(uint32_t(sizeof xfer_buffer), count);
@@ -282,17 +380,16 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					// BA and MPR are increased by 2
 					xfer_buffer[i++] = b->read_unibus_byte(memory_address++);
 					xfer_buffer[i++] = b->read_unibus_byte(memory_address++);
-
-					// update_bus_address(memory_address);
-					mpr[0]++;
+					words_done++;
 				}
 
 				if (fhs.at(device) == nullptr || fhs.at(device)->write(temp_disk_offset, cur, xfer_buffer, 256) == false) {
 					DOLOG(log_ss::LS_DISK, "RL02: write error, device %d, disk offset %u, read size %u, cylinder %d, head %d, sector %d", device, temp_disk_offset, cur, track, head, sector);
+					rl02_trace("WRITE-ERR unit=%d disk_off=%u len=%u trk=%d head=%u sec=%u",
+							device, (unsigned)temp_disk_offset, (unsigned)cur,
+							track, head, sector);
 					break;
 				}
-
-				mpr[0] += count / 2;
 
 				temp_disk_offset += cur;
 
@@ -310,6 +407,15 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					}
 				}
 			}
+			update_bus_address(memory_address);
+			registers[(RL02_MPR - RL02_BASE) / 2] += words_done;
+			mpr[0] = registers[(RL02_MPR - RL02_BASE) / 2];
+			update_dar();
+			rl02_trace("WRITE-DONE unit=%d BAR=%06o DAR=%06o MPR=%06o trk=%d head=%u sec=%u words=%u",
+					device, registers[(RL02_BAR - RL02_BASE) / 2],
+					registers[(RL02_DAR - RL02_BASE) / 2],
+					registers[(RL02_MPR - RL02_BASE) / 2],
+					track, head, sector, (unsigned)words_done);
 
 			do_int = true;
 		}
@@ -328,18 +434,33 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			sector = temp & 63;
 			head   = (temp >> 6) & 1;
 			track  = temp >> 7;
+			const int media_tracks = rl02_unit_track_count(device);
+			if (track >= media_tracks) {
+				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 15);
+				rl02_trace("READ-ERR unit=%d media=%s track=%d beyond max=%d",
+						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
+						track, media_tracks - 1);
+				do_int = true;
+				goto command_done;
+			}
 
 			uint32_t temp_disk_offset = calc_offset();
+			uint32_t words_done       = 0;
 
 			DOLOG(log_ss::LS_DISK, "RL02: device %d, read %d bytes (dec) from %d (dec) to %06o (oct) [cylinder: %d, head: %d, sector: %d]", device, count, temp_disk_offset, memory_address, track, head, sector);
-
-//			update_dar();
+			rl02_trace("READ-DATA unit=%d bytes=%u disk_off=%u bus=%06o trk=%d head=%u sec=%u MPR=%06o",
+					device, (unsigned)count, (unsigned)temp_disk_offset,
+					(unsigned)memory_address, track, head, sector,
+					registers[(RL02_MPR - RL02_BASE) / 2]);
 
 			while(count > 0) {
 				uint32_t cur = std::min(uint32_t(sizeof xfer_buffer), count);
 
 				if (fhs.at(device) == nullptr || fhs.at(device)->read(temp_disk_offset, cur, xfer_buffer, 256) == false) {
 					DOLOG(log_ss::LS_DISK, "RL02: read error, device %d, disk offset %u, read size %u, cylinder %d, head %d, sector %d", device, temp_disk_offset, cur, track, head, sector);
+					rl02_trace("READ-ERR unit=%d disk_off=%u len=%u trk=%d head=%u sec=%u",
+							device, (unsigned)temp_disk_offset, (unsigned)cur,
+							track, head, sector);
 					break;
 				}
 
@@ -347,10 +468,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					// BA and MPR are increased by 2
 					b->write_unibus_byte(memory_address++, xfer_buffer[i++]);
 					b->write_unibus_byte(memory_address++, xfer_buffer[i++]);
-
-					// update_bus_address(memory_address);
-
-					mpr[0]++;
+					words_done++;
 				}
 
 				temp_disk_offset += cur;
@@ -368,9 +486,16 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 						track++;
 					}
 				}
-
-//				update_dar();
 			}
+			update_bus_address(memory_address);
+			registers[(RL02_MPR - RL02_BASE) / 2] += words_done;
+			mpr[0] = registers[(RL02_MPR - RL02_BASE) / 2];
+			update_dar();
+			rl02_trace("READ-DONE unit=%d BAR=%06o DAR=%06o MPR=%06o trk=%d head=%u sec=%u words=%u",
+					device, registers[(RL02_BAR - RL02_BASE) / 2],
+					registers[(RL02_DAR - RL02_BASE) / 2],
+					registers[(RL02_MPR - RL02_BASE) / 2],
+					track, head, sector, (unsigned)words_done);
 
 			do_int = true;
 		}
@@ -378,11 +503,18 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			DOLOG(log_ss::LS_DISK, "RL02: command %d not implemented", command);
 		}
 
+command_done:
 		if (do_int) {
 			if (registers[(RL02_CSR - RL02_BASE) / 2] & 64) {  // interrupt enable?
 				DOLOG(log_ss::LS_DISK, "RL02: triggering interrupt");
+				rl02_trace("IRQ unit=%d vec=160 BR5 CSR=%06o",
+						device, registers[(RL02_CSR - RL02_BASE) / 2]);
 
 				b->getCpu()->queue_interrupt(5, 0160);
+			}
+			else {
+				rl02_trace("NOIRQ unit=%d IE=0 CSR=%06o",
+						device, registers[(RL02_CSR - RL02_BASE) / 2]);
 			}
 		}
 	}

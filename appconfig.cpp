@@ -288,11 +288,9 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
                                                      val.equalsIgnoreCase("yes") ||
                                                      val.equalsIgnoreCase("on"));
   } else if (section == "disks") {
-    // Drive slot 0..3 maps to RL11 unit names dl0..dl3. Internally we
-    // still index by char 'a'..'d' to keep the slot-array indexing in
-    // vpdp1170.ino simple. rk0 is a separate logical key that, when boot=rk0,
-    // gets mounted at slot 0 in place of dl0 so the RK11 controller can find it.
-    // rp0 is a secondary RH11/RP disk and does not affect boot media.
+    // DL0..DL3, RK0, and RP0 have separate host media slots. boot= chooses
+    // which controller bootstrap is installed, but mounting one media type
+    // no longer hides another.
     if      (key == "dl0")      cfg.disk_a = val;
     else if (key == "dl1")      cfg.disk_b = val;
     else if (key == "dl2")      cfg.disk_c = val;
@@ -509,8 +507,6 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println("; rk0      = RK05 2.5 MB disk pack (e.g. RT-11).");
   f.println("; rp0      = optional secondary RH11/RP disk pack.");
   f.println("; rp0_type = rp04, rp05, or rp06. Default rp06.");
-  f.println("; When boot=rk0 (or dk0, the Unix V6 name) the rk0 image takes");
-  f.println("; slot 0 in place of dl0 so the RK11 controller sees it as drive 0.");
   f.println("; Leave a slot blank to dismount it at boot.");
   f.printf("dl0  = %s\r\n", cfg.disk_a.c_str());
   f.printf("dl1  = %s\r\n", cfg.disk_b.c_str());

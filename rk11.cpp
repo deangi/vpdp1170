@@ -87,9 +87,9 @@ static int selected_drive()
 
 static bool drive_exists(int drive)
 {
-    // RK and RL currently share slots 0-3. Only RK0 exists, and slot 0 is
-    // RK media only while the emulator is configured to boot through RK11.
-    return cfg.boot_kind == AppConfig::BK_RK && drive == 0;
+    // Only RK0 is exposed. Its host image lives in the dedicated DRIVE_RK0
+    // slot, separate from the RL11 DL0-DL3 slots.
+    return drive == 0;
 }
 
 static bool drive_attached(int drive)
@@ -130,7 +130,7 @@ void reset()
     irq_trace_left = 24;
     procNS::cancelinterrupt(INTRK);
     for (int i = 0; i < NUM_RK_DRIVES; i++)
-        attached_drives[i] = drive_exists(i) && disk_is_mounted(i);
+        attached_drives[i] = drive_exists(i) && disk_is_mounted(DRIVE_RK0);
     update_drive_status();
 }
 
@@ -243,14 +243,14 @@ static void execute()
                     scratch[i * 2]     = (uint8_t)(v & 0xFF);
                     scratch[i * 2 + 1] = (uint8_t)((v >> 8) & 0xFF);
                 }
-                if (disk_write(drv, off, scratch, chunk_bytes) < 0) {
+                if (disk_write(DRIVE_RK0, off, scratch, chunk_bytes) < 0) {
                     RKER |= RKOVR;
                     RKCS |= 0x8000;
                     failed = true;
                     break;
                 }
             } else {
-                if (disk_read(drv, off, scratch, chunk_bytes) < 0) {
+                if (disk_read(DRIVE_RK0, off, scratch, chunk_bytes) < 0) {
                     RKER |= RKOVR;
                     RKCS |= 0x8000;
                     failed = true;

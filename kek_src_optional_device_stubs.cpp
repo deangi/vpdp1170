@@ -127,17 +127,6 @@ void tty::write_word(const uint16_t addr, uint16_t v) {
 }
 void tty::operator()() {}
 
-rl02::rl02(bus *const b, abool *const disk_read_activity, abool *const disk_write_activity)
-  : b(b), registers{}, xfer_buffer{}, mpr{}, disk_read_activity(disk_read_activity), disk_write_activity(disk_write_activity) {}
-rl02::~rl02() {}
-void rl02::begin() {}
-void rl02::reset(const bool) {}
-void rl02::show_state(console *const) const {}
-uint8_t rl02::read_byte(const uint16_t) { return 0; }
-uint16_t rl02::read_word(const uint16_t) { return 0; }
-void rl02::write_byte(const uint16_t, const uint8_t) {}
-void rl02::write_word(const uint16_t, const uint16_t) {}
-
 rp06::rp06(bus *const b, abool *const disk_read_activity, abool *const disk_write_activity, const bool is_rp07)
   : b(b), is_rp07(is_rp07), disk_read_activity(disk_read_activity), disk_write_activity(disk_write_activity) {}
 rp06::~rp06() {}

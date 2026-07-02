@@ -22,6 +22,7 @@
 
 #if defined(ESP32)
 #include <esp_debug_helpers.h>
+#include "../kek_kwp.h"
 #endif
 
 
@@ -359,6 +360,11 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 
 	if (a == ADDR_LFC) // line frequency clock and status register
 		return kw11_l_->read_word(a);
+
+#if defined(ESP32)
+	if (kek_kwp::contains(a))
+		return word_mode == wm_byte ? kek_kwp::read_byte(a) : kek_kwp::read_word(a);
+#endif
 
 	if (a == ADDR_LP11CSR) { // printer, CSR register, LP11
 		uint16_t temp = 0x80;
@@ -741,6 +747,13 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 
 		return false;
 	}
+
+#if defined(ESP32)
+	if (kek_kwp::contains(a)) {
+		word_mode == wm_byte ? kek_kwp::write_byte(a, value) : kek_kwp::write_word(a, value);
+		return false;
+	}
+#endif
 
 #if !defined(TEENSY4_1)
 	if (tm11 && a >= TM_11_BASE && a < TM_11_END) {

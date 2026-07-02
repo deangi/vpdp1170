@@ -1,16 +1,16 @@
 # vpdp1170 — a DEC PDP-11/70 emulator for the ESP32-S3 with a touch screen display.
 
-> Development status: this project has been scaffolded from `vpdp1140`.
-> The ESP32 host side is present now: TFT console, touch menu, Telnet, FTP,
-> SD card configuration, monitor/shell, and disk image management. The actual
-> PDP-11/70 CPU/MMU/device replacement is not wired in yet. The current build
-> still contains the inherited `vpdp1140` 11/40-derived core as a baseline
-> while the `kek` PDP-11/70 engine is being evaluated and imported.
+> Development status: V1.1 boots Unix V6, RSTS V4B, and RT-11 V5.04 through
+> the `kek` PDP-11/70 adapter.
+> The ESP32 host side is inherited from `vpdp1140`: TFT console, touch menu,
+> Telnet, FTP, SD card configuration, monitor/shell, and disk image management.
+> The inherited 11/40-derived scaffold remains in the tree for reference and
+> fallback while the `kek` device set is brought across in phases.
 
 A **Freenove ESP32-S3 2.8" Display** board turned into a tiny DEC
 PDP-11/70 that boots **V6 Unix** from an SD-card disk image. The console
 appears on the onboard TFT, on Telnet, and on USB-Serial — all three live
-simultaneously. Also boots RT-11 V5, RSTS V4B, RSX-11M V4.0, RSX-11M V4.8
+simultaneously. Also boots RT-11 V5.04, RSTS V4B, RSX-11M V4.0, RSX-11M V4.8
 124KW, and XXDP.
 
 For full operating instructions, SD card setup, configuration-file reference,
@@ -32,40 +32,32 @@ For the 11/70 engine replacement plan and device source decisions, see
                  + Telnet + USB-Serial
 ```
 
-The current baseline CPU core is inherited from `vpdp1140` and is kept only
-as a working scaffold. The target CPU/MMU/device engine is
-[**kek**](https://github.com/folkertvanheusden/kek), an MIT-licensed
-PDP-11/70 emulator with ESP32 support. The host scaffolding (TFT console,
-Telnet server, FTP server, dual-core split, SD-backed block I/O,
-`/wificonfig.ini` + `/pdpconfig.ini`, capacitive-touch settings menu,
-WS2812 status LED) is inherited from `vpdp1140` and remains the board-facing
-side of this project.
+The active CPU/MMU path is the [**kek**](https://github.com/folkertvanheusden/kek)
+PDP-11/70 engine, adapted to the Freenove ESP32-S3 host. The host scaffolding
+(TFT console, Telnet server, FTP server, dual-core split, SD-backed block I/O,
+`/wificonfig.ini` + `/pdpconfig.ini`, capacitive-touch settings menu, WS2812
+status LED) is inherited from `vpdp1140` and remains the board-facing side of
+this project.
 
-## Current Scaffold Status
+## Current Bring-Up Status
 
-The active Arduino sketch now reports its CPU engine at boot and on the
-System Info screen. At this stage it should say `sam11 PDP-11/40 scaffold`.
-The desktop Visual Studio/CMake harness under `tools/kek_vs_core` proves a
-stripped `kek` CPU path can be built and stepped separately, but the Arduino
-sketch is not yet running the `kek` PDP-11/70 engine. The future selection
-switch is `VPDP1170_USE_KEK_CORE` in `config.h`; the internal compile gate is
-`VPDP1170_BUILD_KEK_ADAPTER`. Early Arduino adapter staging lives under
-`kek_port/` and remains gated until the kek include shims and source selection
-are ready.
+The active Arduino sketch reports the selected CPU engine at boot and on the
+System Info screen. For V1.1 it should report the `kek PDP-11/70 adapter` with
+4 MB target memory. Unix V6, RSTS V4B, and RT-11 V5.04 boot and accept console
+input. RL01/RL02 support is wired through the kek RL controller for DL0-DL3
+testing.
 
 | Guest OS              | Disk image          | Result                            |
 |-----------------------|---------------------|-----------------------------------|
 | **V6 Unix**           | `unixv6.dsk` (RK05) | ✅ Boots to `@`, then `#` shell   |
 | **XXDP+ diagnostics** | `xxdp25.dsk` (RL02) | ✅ Boots to XXDP-SM `.` monitor    |
-| RT-11 SJ V5           | `rt11v5.dsk` (RK05) | ✅ Boots to . prompt, runs DIR   |
+| RT-11 SJ V5.04        | `rt11v5.dsk` (RK05) | ✅ Boots to . prompt, runs DIR   |
 | RSTS V4B              | `RSTS11v4B.dsk`     |✅ Boots to READY prompt          |
 | RSX-11M V4.0          | RL01/RL02 image      | ✅ Boots successfully            |
 | RSX-11M V4.8          | RL01/RL02 image      | ✅ Boots 124KW mapped system     |
 
-The table above reflects inherited `vpdp1140` behavior, not completed
-PDP-11/70 validation. The `vpdp1170` bring-up target is to replace the
-PDP-visible hardware with `kek` CPU/MMU/devices while preserving the ESP32
-host services.
+The Unix V6, RSTS V4B, and RT-11 V5.04 rows are verified for V1.1. Broader
+validation on the kek PDP-11/70 path is ongoing.
 
 ## Hardware
 
@@ -77,7 +69,7 @@ host services.
 
 | Component       | What we emulate                                                   |
 |-----------------|-------------------------------------------------------------------|
-| CPU             | Target: PDP-11/70 via `kek`; current scaffold still uses inherited 11/40 core |
+| CPU             | PDP-11/70 via `kek`; inherited 11/40 scaffold remains for reference |
 | Memory          | Target: 4 MB PSRAM-backed 22-bit physical memory                  |
 | MMU             | Target: PDP-11/70 22-bit MMU with kernel/supervisor/user spaces   |
 | Console         | KL11 UART at `0o177560` (vector 060), bridged to TFT+Telnet+USB    |
@@ -187,7 +179,7 @@ kwp_enabled = false           ; true for RSTS V7 bring-up
 ; rk0      = RK05 pack       (RK11 controller)
 ; rp0      = optional RP04/RP05/RP06 pack (RH11 controller)
 ; rp0_type = rp04, rp05, or rp06
-; When boot=rk0 the rk0 image takes slot 0 in place of dl0.
+; rk0 uses a dedicated RK0 slot and does not replace dl0.
 dl0  = /xxdp25.dsk
 dl1  =
 dl2  =
@@ -205,16 +197,14 @@ The emulator can boot from either controller:
 - `boot = dl0` through `boot = dl3` selects the RL11 bootstrap and treats
   the four disk slots as RL drives `DL0` through `DL3`. RL mounts require
   exact RL01 images of 5,242,880 bytes or exact RL02 images of 10,485,760 bytes.
-- `boot = rk0` selects the RK11 bootstrap. The `rk0` image is mounted in
-  host slot 0 in place of `dl0`, so the guest sees it as RK drive `RK0`.
-  RK05 images are approximately 2.5 MB; some distributions use paired or
-  combined images of approximately 5 MB.
+- `boot = rk0` selects the RK11 bootstrap. The `rk0` image is mounted in a
+  dedicated RK0 host slot, separate from `dl0` through `dl3`. RK05 images are
+  approximately 2.5 MB; some distributions use paired or combined images of
+  approximately 5 MB.
 
-The current drive menu uses four shared host image slots. It does not assign
-some slots permanently to RL11 and others to RK11, and it does not validate
-an image's controller type. Mount RL images when using an RL boot and use the
-configured `rk0` image when using an RK boot. Simultaneous mixed RL/RK drive
-mapping is not currently supported.
+The current drive menu exposes RL units `DL0` through `DL3`, plus the separate
+`RK0` image slot. RL mounts are size-checked as RL01 or RL02 packs. RK0 is
+kept separate so an RL pack on DL0 is not hidden by an RK boot configuration.
 
 ### RP secondary disk
 
@@ -421,7 +411,7 @@ command. RP0 runtime commands are not supported by this interface.
 
 | File                          | Role                                                |
 |-------------------------------|-----------------------------------------------------|
-| `kd11.cpp` / `.h`             | Inherited PDP-11/40-derived CPU scaffold            |
+| `kd11.cpp` / `.h`             | Inherited PDP-11/40-derived CPU scaffold, retained for reference |
 | `kt11.cpp` / `.h`             | Inherited 18-bit MMU scaffold                       |
 | `ms11.cpp` / `.h`             | RAM controller — routed to our PSRAM block          |
 | `dd11.cpp` / `.h`             | UNIBUS backplane, I/O page dispatch                 |
