@@ -1,0 +1,58 @@
+// (C) 2018-2026 by Folkert van Heusden
+// Released under MIT license
+
+#pragma once
+
+#include "gen.h"
+#if IS_POSIX
+#include <ArduinoJson.h>
+#endif
+#include <mutex>
+#include <stdint.h>
+#include <stdio.h>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "bus.h"
+#include "console.h"
+
+
+#define PDP11TTY_TKS		0177560	// reader status
+#define PDP11TTY_TKB		0177562	// reader buffer
+#define PDP11TTY_TPS		0177564	// puncher status
+#define PDP11TTY_TPB		0177566	// puncher buffer
+#define PDP11TTY_BASE	PDP11TTY_TKS
+#define PDP11TTY_END	(PDP11TTY_TPB + 2)
+
+class memory;
+
+class tty
+{
+private:
+	console *const c      { nullptr };
+	bus     *const b      { nullptr };
+
+	uint16_t registers[4] { 0 };
+
+public:
+	tty(console *const c, bus *const b);
+	virtual ~tty();
+
+	void notify_rx();
+
+#if IS_POSIX
+	JsonDocument serialize();
+	static tty *deserialize(const JsonVariantConst j, bus *const b, console *const cnsl);
+#endif
+
+	void reset(const bool hard);
+
+	uint8_t read_byte(const uint16_t addr);
+	uint16_t read_word(const uint16_t addr);
+
+	void write_byte(const uint16_t addr, const uint8_t v);
+	void write_word(const uint16_t addr, uint16_t v);
+
+	void operator()();
+};

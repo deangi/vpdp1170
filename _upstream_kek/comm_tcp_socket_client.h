@@ -1,0 +1,56 @@
+// (C) 2024-2026 by Folkert van Heusden
+// Released under MIT license
+
+#include "gen.h"
+#include <atomic>
+#if !defined(BUILD_FOR_PICO2W)
+#include <mutex>
+#endif
+#include <string>
+#include <thread>
+
+#include "comm.h"
+#include "my_lock.h"
+#include "utils.h"
+
+#if defined(_WIN32)
+#include <ws2tcpip.h>
+#include <winsock2.h>
+#else
+#define SOCKET int
+#define INVALID_SOCKET -1
+#endif
+
+
+class comm_tcp_socket_client: public comm
+{
+private:
+	const std::string host;
+	const int         port      { -1             };
+	std::atomic_bool  stop_flag { false          };
+	SOCKET            cfd       { INVALID_SOCKET };
+        my_lock           cfd_lock;
+	std::thread      *th        { nullptr        };
+
+public:
+	comm_tcp_socket_client(const std::string & host, const int port);
+	virtual ~comm_tcp_socket_client();
+
+	bool    begin() override;
+
+#if IS_POSIX
+	JsonDocument serialize() const override;
+	static comm_tcp_socket_client *deserialize(const JsonVariantConst j);
+#endif
+
+	std::string get_identifier() const override { return host + format(":%d", port) + " (client)"; }
+
+	bool    is_connected() override;
+
+	bool    has_data() override;
+	uint8_t get_byte() override;
+
+	void    send_data(const uint8_t *const in, const size_t n) override;
+
+	void    operator()();
+};

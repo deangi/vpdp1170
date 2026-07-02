@@ -1,0 +1,41 @@
+// (C) 2024-2026 by Folkert van Heusden
+// Released under MIT license
+
+#include "gen.h"
+#include "comm.h"
+#include "log.h"
+
+
+class comm_esp32_hardwareserial: public comm
+{
+private:
+	const uart_port_t uart_nr { ESP32_UART };
+	const int rx_pin          { -1         };
+	const int tx_pin          { -1         };
+	const int bitrate         { 38400      };
+	bool      initialized     { false      };
+
+public:
+	comm_esp32_hardwareserial(const uart_port_t uart_nr, const int rx_pin, const int tx_pin, const int bps);
+	virtual ~comm_esp32_hardwareserial();
+
+	bool    begin() override;
+
+#if IS_POSIX
+	JsonDocument serialize() const override;
+	static comm_esp32_hardwareserial *deserialize(const JsonVariantConst j);
+#endif
+
+	std::string get_identifier() const;
+
+	bool    is_connected() override;
+
+	bool    has_data() override;
+	uint8_t get_byte() override;
+
+	void    send_data(const uint8_t *const in, const size_t n) override;
+};
+
+class comm;
+
+void search_SC16IS752(comm *const c);

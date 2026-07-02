@@ -1,0 +1,56 @@
+// (C) 2024-2026 by Folkert van Heusden
+// Released under MIT license
+
+#include "gen.h"
+#include <atomic>
+#include <mutex>
+#include <thread>
+
+#include "comm.h"
+#include "my_lock.h"
+#include "utils.h"
+
+#if defined(_WIN32)
+#include <ws2tcpip.h>
+#include <winsock2.h>
+#else
+#define SOCKET int
+#define INVALID_SOCKET -1
+#endif
+
+
+class comm_tcp_socket_server: public comm
+{
+private:
+	const int        port      { -1             };
+	const bool       setup_telnet { false       };
+	std::atomic_bool stop_flag { false          };
+	SOCKET           fd        { INVALID_SOCKET };
+	SOCKET           cfd       { INVALID_SOCKET };
+        my_lock          cfd_lock;
+	std::thread     *th        { nullptr        };
+
+	void setup_telnet_session();
+
+public:
+	comm_tcp_socket_server(const int port, const bool setup_telnet);
+	virtual ~comm_tcp_socket_server();
+
+	bool    begin() override;
+
+#if IS_POSIX
+	JsonDocument serialize() const override;
+	static comm_tcp_socket_server *deserialize(const JsonVariantConst j);
+#endif
+
+	std::string get_identifier() const override { return format(":%d", port) + " (server" + (setup_telnet ? ", telnet setup": "") + ")"; }
+
+	bool    is_connected() override;
+
+	bool    has_data() override;
+	uint8_t get_byte() override;
+
+	void    send_data(const uint8_t *const in, const size_t n) override;
+
+	void    operator()();
+};

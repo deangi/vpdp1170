@@ -1,0 +1,147 @@
+#pragma once
+
+#include "gen.h"
+#if IS_POSIX
+#include <ArduinoJson.h>
+#endif
+#include <cstdint>
+#include <string>
+#include "cpu.h"
+#include "device.h"
+#include "memory.h"
+
+
+#define ADDR_PDR_SV_START 0172200
+#define ADDR_PDR_SV_END   0172240
+#define ADDR_PAR_SV_START 0172240
+#define ADDR_PAR_SV_END   0172300
+
+#define ADDR_PDR_K_START 0172300
+#define ADDR_PDR_K_END   0172340
+#define ADDR_PAR_K_START 0172340
+#define ADDR_PAR_K_END   0172400
+
+#define ADDR_PDR_U_START 0177600
+#define ADDR_PDR_U_END   0177640
+#define ADDR_PAR_U_START 0177640
+#define ADDR_PAR_U_END   0177700
+
+
+typedef enum { T_PROCEED, T_ABORT_4, T_TRAP_250 } trap_action_t;
+
+typedef struct {
+	uint16_t virtual_address;
+	uint8_t  apf;  // active page field
+	uint32_t physical_instruction;
+	bool     physical_instruction_is_psw;
+	uint32_t physical_data;
+	bool     physical_data_is_psw;
+} memory_addresses_t;
+
+typedef struct {
+	uint32_t par_preshifted;
+	uint16_t pdr;
+} page_t;
+
+class mmu : public device
+{
+private:
+	// 8 pages, D/I, 3 modes and 1 invalid mode
+	page_t   pages[64];
+
+	uint16_t MMR0    { 0 };
+	uint16_t MMR1    { 0 };
+	uint16_t MMR2    { 0 };
+	uint16_t MMR3    { 0 };
+	uint16_t CPUERR  { 0 };
+	uint16_t PIR     { 0 };
+	uint16_t CSR     { 0 };
+	uint32_t io_base { 0 };
+
+	memory  *m      { nullptr };
+	cpu     *c      { nullptr };
+
+#if IS_POSIX
+	JsonDocument add_par_pdr(const int run_mode, const d_i_space_t d) const;
+	void set_par_pdr(const JsonVariantConst j_in, const int run_mode, const d_i_space_t d);
+#endif
+
+	void update_io_base() { io_base = is_enabled() ? (getMMR3() & 16 ? 017760000 : 0760000) : 0160000; }
+
+	void verify_page_access(const int page_index, const bool is_write);
+	void verify_page_length(const uint16_t virt_addr, const int page_index);
+
+public:
+	mmu();
+	virtual ~mmu();
+
+	void     begin(memory *const m, cpu *const c);
+
+#if IS_POSIX
+	JsonDocument serialize() const;
+	static mmu *deserialize(const JsonVariantConst j, memory *const m, cpu *const c);
+#endif
+
+	void     mmudebug(const uint16_t a);
+
+	void     reset(const bool hard) override;
+
+	void     dump_par_pdr(console *const cnsl, const int run_mode, const d_i_space_t d, const std::string & name, const int state, const std::optional<int> & selection) const;
+	void     show_state(console *const cnsl) const override;
+
+	bool     is_enabled() const { return MMR0 & 1; }
+	bool     is_locked()  const { return MMR0 & 0160000; }
+
+	int      calc_par_pdr_index(const int run_mode, const d_i_space_t d, const int apf) const { return apf + ((d == d_space) << 3) + (run_mode << 4); }
+	std::tuple<int, bool, int> explode_page_index(const int page) { return { page >> 4, (page >> 3) & 1, page & 7 }; }
+	void     set_page_accessed  (const int page_index) { pages[page_index].pdr |= 1 << 7; }
+	void     set_page_written_to(const int page_index) { pages[page_index].pdr |= (1 << 6) | (1 << 7); }  // implicit set_page_accessed
+	int      get_access_control (const int page_index) { return pages[page_index].pdr & 7; }
+	int      get_pdr_len        (const int page_index) { return (pages[page_index].pdr >> 8) & 127; }
+	int      get_pdr_direction  (const int page_index) { return pages[page_index].pdr & 8; }
+	uint32_t get_physical_memory_offset(const int page_index) const { return pages[page_index].par_preshifted; }
+	bool     get_use_data_space(const int run_mode) const;
+	uint32_t get_io_base() const { return io_base; }
+
+	memory_addresses_t            calculate_physical_address(const int run_mode, const uint16_t a) const;
+	std::pair<trap_action_t, int> get_trap_action(const int page_index, const bool is_write);
+	std::pair<uint32_t, int>      calculate_physical_address(const int run_mode, const uint16_t a, const bool is_write, const d_i_space_t space);
+
+	uint16_t getMMR0()  const { return  MMR0; }
+	uint16_t getMMR1()  const { return  MMR1; }
+	uint16_t getMMR2()  const { return  MMR2; }
+	uint16_t getMMR3()  const { return  MMR3; }
+
+	void     setMMR0_as_is(uint16_t value);
+	void     setMMR0(const uint16_t value);
+	void     setMMR1(const uint16_t value);
+	void     setMMR2(const uint16_t value);
+	void     setMMR3(const uint16_t value);
+
+	void     MMRStartInstruction(const uint16_t pc);
+
+	bool     isMMR1Locked() const { return MMR0 & 0160000; }
+	void     clearMMR1();
+	void     add_to_MMR1(const int8_t delta, const uint8_t reg);
+
+	void     trap_if_odd(const int page_index);
+
+	uint16_t getCPUERR() const { return CPUERR; }
+	void     setCPUERR(const uint16_t v) { CPUERR = v; }
+	void     setCPUERRBit(const int bit) { CPUERR |= 1 << bit; }
+
+	uint16_t getPIR() const { return PIR; };
+	void     setPIR(const uint16_t v) { PIR = v; }
+
+	uint16_t read_par(const uint32_t a, const int run_mode);
+	uint16_t read_pdr(const uint32_t a, const int run_mode);
+
+	void     write_pdr(const uint32_t a, const int run_mode, const uint16_t value, const word_mode_t word_mode);
+	void     write_par(const uint32_t a, const int run_mode, const uint16_t value, const word_mode_t word_mode);
+
+	uint8_t  read_byte(const uint16_t addr) override;
+	uint16_t read_word(const uint16_t addr) override;
+
+	void     write_byte(const uint16_t addr, const uint8_t v) override;
+	void     write_word(const uint16_t addr, uint16_t v)      override;
+};

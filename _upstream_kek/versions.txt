@@ -1,0 +1,16 @@
+ce12814 0000001eeeff
+af29aa9 0000001d97f7
+0ef9615 0000001dcc04
+5b91ec9 0000001df5d7
+        00000000fef7 teensy 4.1
+c8e8a6c 0000001d5b3a
+893b108 0000001d2ad5
+00e46a8 0000001cdb8c
+3c805a3 0000001b45c8
+2295079 0000001acb35
+ca4f049 00000019360a
+72f9035 00000017dd7b
+b8cb87f 000000183c87
+5f5eefc 000000198294
+        -- older than 831a597 has unusable kw11-l emulation --
+        -- tested on AMD Ryzen 9 7950X3D 16-Core Processor, turboboosts disabled! --

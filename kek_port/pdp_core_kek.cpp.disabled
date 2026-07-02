@@ -1,0 +1,385 @@
+// Staged Arduino adapter for the kek PDP-11/70 core.
+//
+// This is intentionally disabled. The object graph mirrors the working
+// Visual Studio harness in tools/kek_vs_core, but this file should not be
+// compiled by Arduino until the kek include shims and source-file selection
+// are ready.
+
+#include "pdp_core_kek.h"
+
+#include <Arduino.h>
+#include <atomic>
+#include <string>
+
+#include "../_upstream_kek/bus.h"
+#include "../_upstream_kek/cpu.h"
+#include "../_upstream_kek/disk_backend.h"
+#include "../_upstream_kek/kw11-l.h"
+#include "../_upstream_kek/memory.h"
+#include "../_upstream_kek/mmu.h"
+#include "../_upstream_kek/rk05.h"
+#include "../_upstream_kek/tty.h"
+#include "../bootrom.h"
+#include "../disk.h"
+#include "../platform.h"
+
+namespace pdp_core_kek {
+
+static std::atomic_uint32_t g_event { EVENT_NONE };
+static bus* g_bus = nullptr;
+static cpu* g_cpu = nullptr;
+static tty* g_tty = nullptr;
+static rk05* g_rk05 = nullptr;
+static bool g_paused = false;
+static int g_boot_kind = 0;
+static uint32_t g_trace_remaining = 0;
+static uint32_t g_last_clock_us = 0;
+static TaskHandle_t g_clock_task = nullptr;
+static abool g_disk_read_activity { false };
+static abool g_disk_write_activity { false };
+
+class host_slot_disk_backend : public disk_backend {
+public:
+  explicit host_slot_disk_backend(int slot) : slot_(slot) {}
+
+  std::string get_identifier() const override {
+    const char* path = disk_path(slot_);
+    if (!path || !path[0]) return "host-slot-unmounted";
+    return std::string(path);
+  }
+
+  void show_state(console *const cnsl) const override {
+    if (cnsl) cnsl->put_string_lf(get_identifier());
+  }
+
+  bool begin(const bool) override {
+    return disk_is_mounted(slot_);
+  }
+
+  bool read(const off_t offset, const size_t n, uint8_t *const target,
+            const size_t) override {
+    if (!target || !disk_is_mounted(slot_)) return false;
+    int got = disk_read(slot_, (uint32_t)offset, target, (uint32_t)n);
+    bool ok = got == (int)n;
+    log_io("READ", offset, n, ok);
+    return ok;
+  }
+
+  bool write(const off_t offset, const size_t n, const uint8_t *const from,
+             const size_t) override {
+    if (!from || !disk_is_mounted(slot_)) return false;
+    int wrote = disk_write(slot_, (uint32_t)offset, from, (uint32_t)n);
+    bool ok = wrote == (int)n;
+    log_io("WRITE", offset, n, ok);
+    return ok;
+  }
+
+private:
+  void log_io(const char* op, off_t offset, size_t n, bool ok) {
+    if (ok) return;
+    LOG("kek RK05 host %s slot=%d off=%u len=%u -> FAILED",
+        op, slot_, (unsigned)offset, (unsigned)n);
+  }
+
+  int slot_;
+};
+
+static void write_physical_bytes(uint32_t address, const char* text) {
+  uint32_t i = 0;
+  while (true) {
+    uint8_t lo = (uint8_t)text[i++];
+    uint8_t hi = lo ? (uint8_t)text[i++] : 0;
+    g_bus->write_physical(address, (uint16_t)lo | ((uint16_t)hi << 8));
+    address += 2;
+    if (!lo || !hi) break;
+  }
+}
+
+static bool ensure_rk05_attached() {
+  if (!g_bus) return false;
+  if (!disk_is_mounted(DRIVE_A)) return false;
+  if (g_rk05) return true;
+
+  g_rk05 = new rk05(g_bus, &g_disk_read_activity, &g_disk_write_activity);
+  if (!g_rk05) return false;
+  g_rk05->access_disk_backends()->push_back(new host_slot_disk_backend(DRIVE_A));
+  g_rk05->begin();
+  g_bus->add_rk05(g_rk05);
+  LOG("kek RK05 attached to host RK0 slot: %s (%u bytes)",
+      disk_path(DRIVE_A), (unsigned)disk_size_bytes(DRIVE_A));
+  return true;
+}
+
+static void install_boot_stub() {
+  if (!g_bus || !g_cpu) return;
+
+  bool boot_rk = (g_boot_kind == 1) && ensure_rk05_attached();
+
+  if (boot_rk) {
+    const uint32_t rk_words = sizeof(bootrom_rk0) / sizeof(uint16_t);
+    for (uint32_t i = 0; i < rk_words; i++) {
+      g_bus->write_physical(BOOT_START + (i * 2), bootrom_rk0[i]);
+    }
+  }
+
+  // Same diagnostic banner style as the inherited scaffold, but it runs on
+  // the kek CPU and writes through the kek TTY registers. If RK0 is mounted,
+  // the banner jumps into the real RK boot ROM at 02000. Otherwise it remains
+  // a local smoke test and loops after printing a clear diagnostic.
+  static const uint16_t banner_prog[] = {
+    0012700, 0001100,   // MOV  #01100, R0
+    0112001,            // MOVB (R0)+, R1
+    0001406,            // BEQ  +6 -> JMP/idle at 01024
+    0105737, 0177564,   // TSTB @#TPS
+    0100375,            // BPL  -3 -> back to TSTB
+    0110137, 0177566,   // MOVB R1, @#TPB
+    0000770,            // BR   -8 -> next char
+    0000137, 0002000,   // JMP @#02000, patched below to BR . if no RK0
+  };
+
+  for (uint32_t i = 0; i < sizeof(banner_prog) / sizeof(banner_prog[0]); i++) {
+    g_bus->write_physical(0001000 + (i * 2), banner_prog[i]);
+  }
+  if (!boot_rk) {
+    g_bus->write_physical(0001024, 0000777);  // BR .
+  }
+
+  const char* msg = boot_rk
+      ? "vpdp1170: kek PDP-11/70 adapter console OK; trying RK0 boot...\r\n"
+      : "vpdp1170: kek PDP-11/70 adapter console OK\r\n"
+        "vpdp1170: RK0 boot device not wired yet - looping in smoke ROM\r\n";
+  write_physical_bytes(0001100, msg);
+
+  g_cpu->setPC(0001000);
+  LOG("kek boot stub installed: banner @01000, RK0 boot ROM @02000%s",
+      boot_rk ? "" : " (RK0 not attached)");
+}
+
+static void trace_next_instruction() {
+  if (!g_bus || !g_cpu) return;
+
+  uint16_t address = g_cpu->getPC();
+  uint16_t opcode = 0;
+  auto value = g_bus->peek_word(g_cpu->getPSW_runmode(), address);
+  if (value.has_value()) opcode = value.value();
+
+  char disasm[96];
+  if (!disassemble_next(disasm, sizeof(disasm))) {
+    disasm[0] = 0;
+  }
+
+  LOG("kek trace: PC=%06o ins=%06o PS=%06o R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s",
+      (unsigned)address,
+      (unsigned)opcode,
+      (unsigned)g_cpu->getPSW(),
+      (unsigned)g_cpu->get_register(0),
+      (unsigned)g_cpu->get_register(1),
+      (unsigned)g_cpu->get_register(2),
+      (unsigned)g_cpu->get_register(3),
+      (unsigned)g_cpu->get_register(4),
+      (unsigned)g_cpu->get_register(5),
+      (unsigned)g_cpu->get_register(6),
+      disasm);
+}
+
+static void service_line_clock() {
+  if (!g_bus || !g_cpu || !g_bus->getKW11_L()) return;
+  if (g_tty) g_tty->notify_rx();
+
+  constexpr uint32_t kClockPeriodUs = 16667;  // KW11-L line clock, ~60 Hz.
+  uint32_t now = micros();
+  if (g_last_clock_us == 0) {
+    g_last_clock_us = now;
+    return;
+  }
+
+  int delivered = 0;
+  while ((uint32_t)(now - g_last_clock_us) >= kClockPeriodUs && delivered < 4) {
+    g_last_clock_us += kClockPeriodUs;
+
+    kw11_l* clock = g_bus->getKW11_L();
+    uint16_t csr = clock->read_word(ADDR_LFC);
+    csr |= 0200;                 // monitor bit / tick happened
+    clock->write_word(ADDR_LFC, csr);
+
+    if (csr & 0100) {            // interrupt enable
+      g_cpu->queue_interrupt(6, 0100);
+    }
+    delivered++;
+  }
+}
+
+static void line_clock_task(void*) {
+  for (;;) {
+    service_line_clock();
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+}
+
+bool init() {
+  if (g_bus && g_cpu) return true;
+
+  g_bus = new bus();
+  if (!g_bus) return false;
+
+  g_bus->set_memory_size((int)kFullMemoryPages);
+
+  g_cpu = new cpu(g_bus, &g_event);
+  if (!g_cpu) return false;
+  g_bus->add_cpu(g_cpu);
+
+  g_tty = new tty(nullptr, g_bus);
+  if (!g_tty) return false;
+  g_bus->add_tty(g_tty);
+
+  if (!g_clock_task) {
+    xTaskCreatePinnedToCore(line_clock_task, "kek-kw11l", 3072, nullptr,
+                            3, &g_clock_task, 0);
+    LOG("kek KW11-L line clock task started at 60 Hz");
+  }
+
+  return g_bus->getRAM() && g_bus->getMMU();
+}
+
+void reset() {
+  if (!g_cpu) return;
+  g_cpu->reset();
+  g_last_clock_us = 0;
+  install_boot_stub();
+}
+
+void cold_boot() {
+  if (!g_bus || !g_cpu) return;
+  g_bus->reset(true);
+  g_cpu->reset();
+  g_last_clock_us = 0;
+  install_boot_stub();
+}
+
+uint32_t run(uint32_t max_cycles) {
+  if (!g_cpu || g_paused) return 0;
+  uint32_t ran = 0;
+  while (ran < max_cycles) {
+    if (g_trace_remaining) trace_next_instruction();
+    if (!g_cpu->step()) break;
+    ran++;
+    if (g_trace_remaining) g_trace_remaining--;
+  }
+  return ran;
+}
+
+bool selftest() {
+  if (!init()) return false;
+
+  g_cpu->reset();
+  g_cpu->setPC(01000);
+
+  g_bus->write_physical(01000, 0012700);  // MOV #5,R0
+  g_bus->write_physical(01002, 0000005);
+  g_bus->write_physical(01004, 0012701);  // MOV #7,R1
+  g_bus->write_physical(01006, 0000007);
+  g_bus->write_physical(01010, 0060001);  // ADD R0,R1
+  g_bus->write_physical(01012, 0000777);  // BR .
+
+  for (int i = 0; i < 8; i++)
+    if (!g_cpu->step()) break;
+
+  return g_cpu->get_register(0) == 0000005 &&
+         g_cpu->get_register(1) == 0000014;
+}
+
+uint8_t* memory() {
+  return nullptr;  // kek memory owns its buffer; expose examine/deposit instead.
+}
+
+uint32_t memory_size() {
+  return g_bus ? g_bus->get_memory_size() : 0;
+}
+
+uint16_t reg16(int idx) {
+  if (!g_cpu) return 0;
+  if (idx == 7) return g_cpu->getPC();
+  if (idx >= 0 && idx < 7) return g_cpu->get_register(idx);
+  return 0;
+}
+
+uint16_t pc() {
+  return g_cpu ? g_cpu->getPC() : 0;
+}
+
+uint16_t psw() {
+  return g_cpu ? g_cpu->getPSW() : 0;
+}
+
+uint32_t instruction_count() {
+  return g_cpu ? (uint32_t)g_cpu->get_instructions_executed_count() : 0;
+}
+
+bool next_instruction(uint16_t* address, uint16_t* opcode) {
+  if (!g_bus || !g_cpu || !address || !opcode) return false;
+  *address = g_cpu->getPC();
+  auto value = g_bus->peek_word(g_cpu->getPSW_runmode(), *address);
+  if (!value.has_value()) return false;
+  *opcode = value.value();
+  return true;
+}
+
+bool disassemble_next(char* buffer, size_t size) {
+  if (!buffer || !size) return false;
+  buffer[0] = 0;
+  if (!g_cpu) return false;
+
+  auto info = g_cpu->disassemble(g_cpu->getPC());
+  auto it = info.find("instruction-text");
+  if (it == info.end() || it->second.empty()) return false;
+
+  const std::string& text = it->second.front();
+  size_t i = 0;
+  while (i + 1 < size && i < text.size()) {
+    buffer[i] = text[i];
+    i++;
+  }
+  buffer[i] = 0;
+  return true;
+}
+
+bool read_physical_word(uint32_t address, uint16_t* value) {
+  if (!g_bus || !value || (address & 1)) return false;
+  *value = g_bus->read_physical(address);
+  return true;
+}
+
+bool write_physical_word(uint32_t address, uint16_t value) {
+  if (!g_bus || (address & 1)) return false;
+  g_bus->write_physical(address, value);
+  return true;
+}
+
+void set_boot_kind(int kind) {
+  g_boot_kind = kind;
+}
+
+void set_trace(bool) {}
+void monitor_pause() { g_paused = true; }
+void monitor_continue() { g_paused = false; }
+bool monitor_paused() { return g_paused; }
+
+uint32_t monitor_step() {
+  if (!g_cpu) return 0;
+  bool was_paused = g_paused;
+  g_paused = true;
+  trace_next_instruction();
+  uint32_t ran = g_cpu->step() ? 1 : 0;
+  g_paused = was_paused ? true : g_paused;
+  return ran;
+}
+
+void monitor_trace_next(uint32_t count) {
+  g_trace_remaining = count;
+}
+
+uint32_t monitor_trace_remaining() {
+  return g_trace_remaining;
+}
+
+}  // namespace pdp_core_kek

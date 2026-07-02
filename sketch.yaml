@@ -1,0 +1,10 @@
+# Arduino CLI sketch project file.
+# See: https://docs.arduino.cc/arduino-cli/sketch-project-file/
+#
+# Board target: ESP32S3 Dev Module for the Freenove ESP32-S3 2.8" display.
+# Important options encoded below:
+#   USB CDC on boot enabled
+#   16 MB flash
+#   16M Flash (3MB APP/9.9MB FATFS) partition scheme
+#   OPI PSRAM
+default_fqbn: esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi

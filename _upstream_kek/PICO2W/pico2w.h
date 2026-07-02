@@ -1,0 +1,9 @@
+#pragma once
+
+#if defined(BUILD_FOR_PICO2W)
+#include <Arduino.h>
+#include <FreeRTOS.h>
+#include <SD.h>
+#include <semphr.h>
+#include <task.h>
+#endif

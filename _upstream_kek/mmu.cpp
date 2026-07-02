@@ -1,0 +1,522 @@
+#include <cassert>
+#include <cstring>
+
+#include "bus.h"  // for (at least) ADDR_PSW
+#include "gen.h"
+#include "log.h"
+#include "mmu.h"
+#include "utils.h"
+
+
+constexpr const int di_ena_mask[4] = { 4, 2, 0, 1 };
+
+mmu::mmu()
+{
+	reset(true);
+}
+
+mmu::~mmu()
+{
+}
+
+void mmu::begin(memory *const m, cpu *const c)
+{
+	this->m = m;
+	this->c = c;
+
+	reset(true);
+}
+
+void mmu::reset(const bool hard)
+{
+	if (hard) {
+		memset(pages, 0x00, sizeof pages);
+		CPUERR = MMR0 = MMR1 = MMR2 = MMR3 = PIR = CSR = 0;
+	}
+	update_io_base();
+}
+
+void mmu::dump_par_pdr(console *const cnsl, const int run_mode, const d_i_space_t d, const std::string & name, const int state, const std::optional<int> & selection) const
+{
+	if (state == 0 || state == 2)
+		cnsl->put_string_lf(name);
+	else
+		cnsl->put_string_lf(format("%s DISABLED", name.c_str()));
+
+	cnsl->put_string_lf("   PAR             PDR    LEN");
+
+	for(int i=0; i<8; i++) {
+		if (selection.has_value() && i != selection.value())
+			continue;
+		int      page_index = calc_par_pdr_index(run_mode, d, i);
+		uint16_t par_value  = pages[page_index].par_preshifted >> 6;
+		uint16_t pdr_value  = pages[page_index].pdr;
+
+		uint16_t pdr_len    = (((pdr_value >> 8) & 127) + 1) * 64;
+
+		cnsl->put_string_lf(format("%d] %06o %08o %06o %04o D%d A%d", i, par_value, par_value * 64, pdr_value, pdr_len, !!(pdr_value & 8), pdr_value & 7));
+	}
+}
+
+FLASHMEM void mmu::show_state(console *const cnsl) const
+{
+	cnsl->put_string_lf(MMR0 & 1 ? "MMU enabled" : "MMU NOT enabled");
+
+	cnsl->put_string_lf(format("MMR0: %06o", MMR0));
+	cnsl->put_string_lf(format("MMR1: %06o", MMR1));
+	cnsl->put_string_lf(format("MMR2: %06o", MMR2));
+	cnsl->put_string_lf(format("MMR3: %06o", MMR3));
+
+	dump_par_pdr(cnsl, 1, i_space, "supervisor i-space", 0,                  { });
+	dump_par_pdr(cnsl, 1, d_space, "supervisor d-space", 1 + (!!(MMR3 & 2)), { });
+
+	dump_par_pdr(cnsl, 0, i_space, "kernel i-space",     0,                  { });
+	dump_par_pdr(cnsl, 0, d_space, "kernel d-space",     1 + (!!(MMR3 & 2)), { });
+
+	dump_par_pdr(cnsl, 3, i_space, "user i-space",       0,                  { });
+	dump_par_pdr(cnsl, 3, d_space, "user d-space",       1 + (!!(MMR3 & 2)), { });
+}
+
+uint16_t mmu::read_pdr(const uint32_t a, const int run_mode)
+{
+	int         page       = (a >> 1) & 7;
+	d_i_space_t d          = a & 16 ? d_space : i_space;
+	int         page_index = calc_par_pdr_index(run_mode, d, page);
+	return pages[page_index].pdr;
+}
+
+uint16_t mmu::read_par(const uint32_t a, const int run_mode)
+{
+	int         page       = (a >> 1) & 7;
+	d_i_space_t d          = a & 16 ? d_space : i_space;
+	int         page_index = calc_par_pdr_index(run_mode, d, page);
+	return pages[page_index].par_preshifted >> 6;
+}
+
+void mmu::setMMR0_as_is(uint16_t value)
+{
+	MMR0 = value;
+	update_io_base();
+}
+
+void mmu::setMMR0(uint16_t value)
+{
+	value &= ~(3 << 10);  // bit 10 & 11 always read as 0
+
+	if (value & 1)
+		value &= ~(7l << 13);  // reset error bits
+
+	if (MMR0 & 0160000) {
+		if ((value & 1) == 0)
+			value &= 254;  // bits 7...1 are protected 
+	}
+
+	MMR0 = value;
+	update_io_base();
+}
+
+void mmu::setMMR1(const uint16_t value) 
+{
+	MMR1 = value;
+}
+
+void mmu::setMMR2(const uint16_t value) 
+{
+	MMR2 = value;
+}
+
+void mmu::setMMR3(const uint16_t value) 
+{
+	MMR3 = value;
+	update_io_base();
+}
+
+bool mmu::get_use_data_space(const int run_mode) const
+{
+	return MMR3 & di_ena_mask[run_mode];
+}
+
+void mmu::clearMMR1()
+{
+	MMR1 = 0;
+}
+
+void mmu::add_to_MMR1(const int8_t delta, const uint8_t reg)
+{
+	assert(reg >= 0 && reg <= 7);
+	assert(delta >= -2 && delta <= 2);
+
+	assert((getMMR0() & 0160000) == 0);  // MMR1 should not be locked
+
+	MMR1 <<= 8;
+	MMR1 |= (delta & 31) << 3;
+	MMR1 |= reg;
+}
+
+void mmu::write_pdr(const uint32_t a, const int run_mode, const uint16_t value, const word_mode_t word_mode)
+{
+	d_i_space_t d          = a & 16 ? d_space : i_space;
+	int         page       = (a >> 1) & 7;
+	int         page_index = calc_par_pdr_index(run_mode, d, page);
+
+	if (word_mode == wm_byte) {
+		assert(a != 0 || value < 256);
+
+		update_word(&pages[page_index].pdr, a & 1, value);
+	}
+	else {
+		pages[page_index].pdr = value;
+	}
+
+	pages[page_index].pdr &= ~(32768 + 128 /*A*/ + 64 /*W*/ + 32 + 16);  // set bit 4, 5 & 15 to 0 as they are unused and A/W are set to 0 by writes
+
+	DOLOG(log_ss::LS_MMU, "mmu WRITE-I/O PDR run-mode %d: %c for %d: %o [%d]", run_mode, d == d_space ? 'D' : 'I', page, value, word_mode);
+}
+
+void mmu::write_par(const uint32_t a, const int run_mode, const uint16_t value, const word_mode_t word_mode)
+{
+	d_i_space_t d          = a & 16 ? d_space : i_space;
+	int         page       = (a >> 1) & 7;
+	int         page_index = calc_par_pdr_index(run_mode, d, page);
+
+	if (word_mode == wm_byte) {
+		uint16_t par = pages[page_index].par_preshifted >> 6;
+		update_word(&par, a & 1, value);
+		pages[page_index].par_preshifted = par << 6;
+	}
+	else {
+		pages[page_index].par_preshifted = value << 6;
+	}
+
+	pages[page_index].pdr &= ~(128 /*A*/ + 64 /*W*/);  // reset PDR A/W when PAR is written to
+
+	DOLOG(log_ss::LS_MMU, "mmu WRITE-I/O PAR run-mode %d: %c for %d: %o (%07o)", run_mode, d == d_space ? 'D' : 'I', page, word_mode == wm_byte ? value & 0xff : value, pages[page_index].par_preshifted);
+}
+
+uint16_t mmu::read_word(const uint16_t a)
+{
+	uint16_t v = 0;
+
+	if (a >= ADDR_PDR_SV_START && a < ADDR_PDR_SV_END)
+		v = read_pdr(a, 1);
+	else if (a >= ADDR_PAR_SV_START && a < ADDR_PAR_SV_END)
+		v = read_par(a, 1);
+	else if (a >= ADDR_PDR_K_START && a < ADDR_PDR_K_END)
+		v = read_pdr(a, 0);
+	else if (a >= ADDR_PAR_K_START && a < ADDR_PAR_K_END)
+		v = read_par(a, 0);
+	else if (a >= ADDR_PDR_U_START && a < ADDR_PDR_U_END)
+		v = read_pdr(a, 3);
+	else if (a >= ADDR_PAR_U_START && a < ADDR_PAR_U_END)
+		v = read_par(a, 3);
+
+	return v;
+}
+
+uint8_t mmu::read_byte(const uint16_t addr)
+{
+	uint16_t v = read_word(addr);
+
+	if (addr & 1)
+		return v >> 8;
+
+	return v;
+}
+
+void mmu::write_word(const uint16_t a, const uint16_t value)
+{
+	// supervisor
+	if (a >= ADDR_PDR_SV_START && a < ADDR_PDR_SV_END)
+		write_pdr(a, 1, value, wm_word);
+	else if (a >= ADDR_PAR_SV_START && a < ADDR_PAR_SV_END)
+		write_par(a, 1, value, wm_word);
+	// kernel
+	else if (a >= ADDR_PDR_K_START && a < ADDR_PDR_K_END)
+		write_pdr(a, 0, value, wm_word);
+	else if (a >= ADDR_PAR_K_START && a < ADDR_PAR_K_END)
+		write_par(a, 0, value, wm_word);
+	// user
+	else if (a >= ADDR_PDR_U_START && a < ADDR_PDR_U_END)
+		write_pdr(a, 3, value, wm_word);
+	else if (a >= ADDR_PAR_U_START && a < ADDR_PAR_U_END)
+		write_par(a, 3, value, wm_word);
+}
+
+void mmu::write_byte(const uint16_t a, const uint8_t value)
+{
+	// supervisor
+	if (a >= ADDR_PDR_SV_START && a < ADDR_PDR_SV_END)
+		write_pdr(a, 1, value, wm_byte);
+	else if (a >= ADDR_PAR_SV_START && a < ADDR_PAR_SV_END)
+		write_par(a, 1, value, wm_byte);
+	// kernel
+	else if (a >= ADDR_PDR_K_START && a < ADDR_PDR_K_END)
+		write_pdr(a, 0, value, wm_byte);
+	else if (a >= ADDR_PAR_K_START && a < ADDR_PAR_K_END)
+		write_par(a, 0, value, wm_byte);
+	// user
+	else if (a >= ADDR_PDR_U_START && a < ADDR_PDR_U_END)
+		write_pdr(a, 3, value, wm_byte);
+	else if (a >= ADDR_PAR_U_START && a < ADDR_PAR_U_END)
+		write_par(a, 3, value, wm_byte);
+}
+
+void mmu::trap_if_odd(const int page_index)
+{
+	MMR0 &= ~(7 << 1);
+	MMR0 |= (page_index & 7) << 1;
+
+	CPUERR |= 0100;
+}
+
+memory_addresses_t mmu::calculate_physical_address(const int run_mode, const uint16_t a) const
+{
+	const uint8_t apf = a >> 13; // active page field
+
+	if (is_enabled() == false) {
+		bool is_psw = a == ADDR_PSW;
+		return { a, apf, a, is_psw, a, is_psw };
+	}
+
+	int      page_index           = calc_par_pdr_index(run_mode, d_space, apf);
+	uint32_t physical_instruction = get_physical_memory_offset(page_index + 0);
+	uint32_t physical_data        = get_use_data_space(run_mode) ?
+					get_physical_memory_offset(page_index + 8) : physical_instruction;
+
+	uint16_t p_offset = a & 8191;  // page offset
+
+	physical_instruction += p_offset;
+	physical_data        += p_offset;
+
+	if ((getMMR3() & 16) == 0) {  // offset is 18bit
+		physical_instruction &= 0x3ffff;
+		physical_data        &= 0x3ffff;
+	}
+
+	bool     physical_instruction_is_psw = (physical_instruction - io_base + 0160000) == ADDR_PSW;
+	bool     physical_data_is_psw        = (physical_data        - io_base + 0160000) == ADDR_PSW;
+
+	return { a, apf, physical_instruction, physical_instruction_is_psw, physical_data, physical_data_is_psw };
+}
+
+std::pair<trap_action_t, int> mmu::get_trap_action(const int page_index, const bool is_write)
+{
+	const int access_control = get_access_control(page_index);
+
+	constexpr const trap_action_t map[8][2] {
+			{ T_ABORT_4,  T_ABORT_4  },
+			{ T_TRAP_250, T_ABORT_4  },
+			{ T_PROCEED,  T_ABORT_4  },
+			{ T_ABORT_4,  T_ABORT_4  },
+			{ T_TRAP_250, T_TRAP_250 },
+			{ T_PROCEED,  T_TRAP_250 },
+			{ T_PROCEED,  T_PROCEED  },
+			{ T_ABORT_4,  T_ABORT_4  },
+	};
+
+	assert(map[1][false] == T_TRAP_250);
+	assert(map[1][true ] == T_ABORT_4 );
+
+	return { map[access_control][is_write], access_control };
+}
+
+void mmu::mmudebug(const uint16_t a)
+{
+#if !defined(TURBO)
+	for(int rm=0; rm<4; rm++) {
+		auto ma = calculate_physical_address(rm, a);
+		DOLOG(log_ss::LS_MMU, "RM %d, a: %06o, apf: %d, PI: %08o (PSW: %d), PD: %08o (PSW: %d)", rm, ma.virtual_address, ma.apf, ma.physical_instruction, ma.physical_instruction_is_psw, ma.physical_data, ma.physical_data_is_psw);
+	}
+#endif
+}
+
+void mmu::verify_page_access(const int page_index, const bool is_write)
+{
+	const auto [ trap_action, access_control ] = get_trap_action(page_index, is_write);
+	if (trap_action == T_PROCEED) [[likely]]
+		return;
+
+	if (is_locked() == false) {
+		uint16_t temp = getMMR0();
+
+		temp &= ~((1l << 15) | (1 << 14) | (1 << 13) | (1 << 12) | (3 << 5) | (7 << 1) | (1 << 4));
+
+		if (is_write && access_control != 6)
+			temp |= 1 << 13;  // read-only
+
+		if (access_control == 0 || access_control == 4)
+			temp |= 1l << 15;  // not resident
+		else if (access_control == 1 || access_control == 2)
+			temp |= 1 << 13;
+		else if (access_control == 3 || access_control == 7)
+			temp |= 1 << 15;
+
+		temp |= page_index << 1;
+
+		setMMR0_as_is(temp);
+
+		DOLOG(log_ss::LS_MMU, "MMR0: %06o", temp);
+	}
+
+	DOLOG(log_ss::LS_MMU, "TRAP 250 for page access");
+	c->trap(0250);  // abort
+	throw 5;
+}
+
+void mmu::verify_page_length(const uint16_t virt_addr, const int page_index)
+{
+	uint16_t pdr_len    = get_pdr_len(page_index);
+	uint16_t pdr_cmp   = (virt_addr >> 6) & 127;
+	bool     direction = get_pdr_direction(page_index);
+
+	if (direction == false ? pdr_cmp > pdr_len : pdr_cmp < pdr_len) [[unlikely]] {
+		DOLOG(log_ss::LS_MMU, "mmu::verify_page_length::p_offset %o versus %o direction %d", pdr_cmp, pdr_len, direction);
+		DOLOG(log_ss::LS_MMU, "TRAP(0250) (throw 7) on address %06o", virt_addr);
+
+		if (is_locked() == false) {
+			uint16_t temp = getMMR0();
+
+			temp &= 017777;
+			temp |= 1 << 14;  // length
+
+			const auto [ run_mode, d, apf ] = explode_page_index(page_index);
+
+			temp &= ~14;  // add current page
+			temp |= apf << 1;
+
+			temp &= ~(3 << 5);
+			temp |= run_mode << 5;
+
+			temp &= ~(1 << 4);
+			temp |= d << 4;
+
+			setMMR0_as_is(temp);
+		}
+
+		DOLOG(log_ss::LS_MMU, "TRAP 250 for page length");
+		c->trap(0250);  // invalid access
+
+		throw 7;
+	}
+}
+
+std::pair<uint32_t, int> mmu::calculate_physical_address(const int run_mode, const uint16_t a, const bool is_write, const d_i_space_t space)
+{
+	if (is_enabled() || (is_write && (getMMR0() & (1 << 8 /* maintenance check */)))) {
+		uint16_t p_offset   = a & 8191;  // page offset
+		uint8_t  apf        = a >> 13;  // active page field
+		int      page_index = calc_par_pdr_index(run_mode, space, apf);
+
+		uint32_t m_offset   = get_physical_memory_offset(page_index);
+		m_offset += p_offset;
+
+		if ((getMMR3() & 16) == 0)  // off is 18bit
+			m_offset &= 0x3ffff;
+
+		verify_page_access(page_index, is_write);
+
+		verify_page_length(a, page_index);
+
+		return { m_offset, page_index };
+	}
+
+	return { a, a >> 13 };
+}
+
+#if IS_POSIX
+JsonDocument mmu::add_par_pdr(const int run_mode, const d_i_space_t d) const
+{
+	JsonDocument j;
+
+	JsonDocument ja_par;
+	JsonArray ja_par_work = ja_par.to<JsonArray>();
+	for(int i=0; i<8; i++) {
+		int page_index = calc_par_pdr_index(run_mode, d, i);
+		ja_par_work.add(pages[page_index].par_preshifted);
+	}
+	j["par"] = ja_par;
+
+	JsonDocument ja_pdr;
+	JsonArray ja_pdr_work = ja_pdr.to<JsonArray>();
+	for(int i=0; i<8; i++) {
+		int page_index = calc_par_pdr_index(run_mode, d, i);
+		ja_pdr_work.add(pages[page_index].pdr);
+	}
+	j["pdr"] = ja_pdr;
+
+	return j;
+}
+
+JsonDocument mmu::serialize() const
+{
+	JsonDocument j;
+
+	for(int run_mode=0; run_mode<4; run_mode++) {
+		if (run_mode == 2)
+			continue;
+
+		j[format("runmode_%d_d_%d", run_mode, d_space)] = add_par_pdr(run_mode, d_space);
+		j[format("runmode_%d_d_%d", run_mode, i_space)] = add_par_pdr(run_mode, i_space);
+	}
+
+        j["MMR0"]   = MMR0;
+        j["MMR1"]   = MMR1;
+        j["MMR2"]   = MMR2;
+        j["MMR3"]   = MMR3;
+        j["CPUERR"] = CPUERR;
+        j["PIR"]    = PIR;
+        j["CSR"]    = CSR;
+
+	return j;
+}
+
+void mmu::set_par_pdr(const JsonVariantConst j_in, const int run_mode, const d_i_space_t d)
+{
+	JsonArrayConst j_par = j_in["par"];
+	int       i_par = 0;
+	for(auto v: j_par) {
+		int page_index = calc_par_pdr_index(run_mode, d, i_par++);
+		pages[page_index].par_preshifted = v;
+	}
+
+	JsonArrayConst j_pdr = j_in["pdr"];
+	int       i_pdr = 0;
+	for(auto v: j_pdr) {
+		int page_index = calc_par_pdr_index(run_mode, d, i_pdr++);
+		pages[page_index].pdr = v;
+	}
+}
+
+mmu *mmu::deserialize(const JsonVariantConst j, memory *const mem, cpu *const c)
+{
+	mmu *m = new mmu();
+	m->begin(mem, c);
+
+	for(int run_mode=0; run_mode<4; run_mode++) {
+		if (run_mode == 2)
+			continue;
+
+		m->set_par_pdr(j[format("runmode_%d_d_%d", run_mode, d_space)].as<JsonVariantConst>(), run_mode, d_space);
+		m->set_par_pdr(j[format("runmode_%d_d_%d", run_mode, i_space)].as<JsonVariantConst>(), run_mode, i_space);
+	}
+
+        m->MMR0   = j["MMR0"];
+        m->MMR1   = j["MMR1"];
+        m->MMR2   = j["MMR2"];
+        m->MMR3   = j["MMR3"];
+	m->update_io_base();
+        m->CPUERR = j["CPUERR"];
+        m->PIR    = j["PIR"];
+        m->CSR    = j["CSR"];
+
+	return m;
+}
+#endif
+
+void mmu::MMRStartInstruction(const uint16_t pc)
+{
+	if (!isMMR1Locked()) {
+		setMMR2(pc);
+		clearMMR1();
+	}
+}

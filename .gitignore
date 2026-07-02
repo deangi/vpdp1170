@@ -1,0 +1,18 @@
+# Upstream reference material (clones of sam11 / sam11-derived sources used
+# while building cpu_pdp11.cpp). Not needed to build - the aggregated
+# translation unit is committed.
+_upstream_sam11/
+
+# Build artifacts
+build/
+tools/kek_vs_core/build-min/
+*.bin
+
+# Plan / scratch
+*.tmp
+
+# Disk images - keep local copies but don't bloat git with multi-MB binaries.
+DiskImages/
+*.dsk
+*.hdd
+*.img

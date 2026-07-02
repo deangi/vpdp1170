@@ -1,0 +1,13 @@
+*.dsk
+*.rk
+*.gz
+*.tgz
+.pio
+tests/*.lst
+tests/*.bin
+*.log
+work/
+tests-work/
+build/
+version.cpp
+build-win32/

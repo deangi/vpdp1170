@@ -1,0 +1,10 @@
+SD_FTP_Server	KEYWORD1
+Config	KEYWORD1
+
+begin	KEYWORD2
+poll	KEYWORD2
+listening	KEYWORD2
+connected	KEYWORD2
+port	KEYWORD2
+
+SDFTPServer	LITERAL1

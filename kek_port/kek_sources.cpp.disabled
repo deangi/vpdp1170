@@ -1,0 +1,35 @@
+// Gated upstream kek source import for the Arduino bring-up.
+//
+// This file is included by the sketch-root pdp_core_kek_sources.cpp only when
+// VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER are both true.
+//
+// The list is intentionally broader than the adapter directly instantiates:
+// upstream bus.cpp contains references to the optional devices, so the linker
+// needs their method bodies even while the initial self-test only creates
+// memory, mmu, bus, cpu, and KW11-L.
+
+#include "../_upstream_kek/device.cpp"
+#include "../_upstream_kek/error.cpp"
+#include "../_upstream_kek/log.cpp"
+#include "../_upstream_kek/my_lock.cpp"
+#include "../_upstream_kek/utils.cpp"
+
+#include "../_upstream_kek/memory.cpp"
+#include "../_upstream_kek/mmu.cpp"
+#include "../_upstream_kek/cpu.cpp"
+#include "../_upstream_kek/bus.cpp"
+#include "../_upstream_kek/kw11-l.cpp"
+
+// Bus-referenced devices. These remain unconfigured for the first self-test,
+// but bus.cpp calls their methods when present, so their symbols must exist.
+#include "../_upstream_kek/tty.cpp"
+#include "../_upstream_kek/rk05.cpp"
+#include "../_upstream_kek/rl02.cpp"
+#include "../_upstream_kek/rp06.cpp"
+#include "../_upstream_kek/dc11.cpp"
+#include "../_upstream_kek/dz11.cpp"
+#include "../_upstream_kek/deqna.cpp"
+#include "../_upstream_kek/tm-11.cpp"
+
+// Disk-device sources pulled by RK/RL/RP/TM implementations.
+#include "../_upstream_kek/disk_backend.cpp"

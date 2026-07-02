@@ -1,0 +1,182 @@
+// (C) 2018-2026 by Folkert van Heusden
+// Released under MIT license
+
+#if defined(NEOPIXELS_PIN)
+#include <Adafruit_NeoPixel.h>
+#endif
+#include <stdint.h>
+#include <stdio.h>
+#include <unistd.h>
+
+#include "blinkenlights.h"
+#include "bus.h"
+#include "console_esp32.h"
+#include "cpu.h"
+#if defined(BUILD_FOR_PICO2W)
+#include "pico2w.h"
+#elif defined(TEENSY4_1)
+#include "teensy4_1.h"
+#else
+#include "esp32.h"
+#endif
+#include "ddp.h"
+#include "error.h"
+#include "utils.h"
+
+
+console_esp32::console_esp32(kek_event_t *const stop_event, comm *const io_port, const int t_width, const int t_height) :
+	console_comm(stop_event, io_port, t_width, t_height)
+{
+#if defined(WAVESHARE_S3_ETH)
+	rgb_led.begin();
+	rgb_led.setBrightness(50);
+#endif
+}
+
+console_esp32::~console_esp32()
+{
+	stop_thread();
+}
+
+int console_esp32::wait_for_char_ll(const int timeout)
+{
+	for(int i=0; i<timeout / 10; i++) {
+		if (io_port->has_data())
+			return io_port->get_byte();
+
+		vTaskDelay(10 / portTICK_PERIOD_MS);
+	}
+
+	return -1;
+}
+
+void console_esp32::put_char_ll(const char c)
+{
+	io_port->send_data(reinterpret_cast<const uint8_t *>(&c), 1);
+}
+
+void console_esp32::put_string_lf(const std::string & what)
+{
+	put_string(what);
+	put_string("\r\n");
+}
+
+void console_esp32::resize_terminal()
+{
+}
+
+void console_esp32::refresh_virtual_terminal()
+{
+}
+
+#if defined(NEOPIXELS_PIN)
+void test_leds(Adafruit_NeoPixel *const pixels, const int n_leds, const uint8_t brightness)
+{
+	// initial animation
+	for(int i=0; i<n_leds; i++) {
+		pixels->setPixelColor(i, brightness, brightness, brightness);
+		int p = i - 10;
+		if (p < 0)
+			p += n_leds;
+		pixels->setPixelColor(p, 0, 0, 0);
+		pixels->show();
+
+		delay(10);
+	}
+}
+#endif
+
+#if defined(NEOPIXELS_PIN)
+Adafruit_NeoPixel *pixels = nullptr;
+#endif
+
+void console_esp32::panel_update_thread()
+{
+	DOLOG(log_ss::LS_COMM, "panel task started");
+	cpu *const c = b->getCpu();
+
+#if defined(NEOPIXELS_PIN)
+	constexpr const uint8_t n_leds = 64;
+#if defined(GRBW_PIXELS)
+	pixels = new Adafruit_NeoPixel(n_leds, NEOPIXELS_PIN, NEO_GRBW + NEO_KHZ800);
+#elif defined(RGBW_PIXELS)
+	pixels = new Adafruit_NeoPixel(n_leds, NEOPIXELS_PIN, NEO_RGBW + NEO_KHZ800);
+#else
+	pixels = new Adafruit_NeoPixel(n_leds, NEOPIXELS_PIN, NEO_RGB  + NEO_KHZ800);
+#endif
+	pixels->begin();
+	pixels->clear();
+	pixels->show();
+
+#if defined(NEOPIXELS_PIN)
+	test_leds(pixels, n_leds, brightness);
+#endif
+
+	pixels->clear();
+	pixels->show();
+
+	while(!stop_panel) {
+		vTaskDelay(1000 / (portTICK_PERIOD_MS * refreshrate));
+
+		if (do_test_panel) {
+			do_test_panel = false;
+			if (p_blinkenlights)
+				p_blinkenlights->test();
+			if (p_ddp)
+				p_ddp->test();
+#if defined(NEOPIXELS_PIN)
+			test_leds(pixels, n_leds, brightness);
+#endif
+		}
+
+		if (p_blinkenlights)
+			p_blinkenlights->push(b, running_flag);
+
+		if (p_ddp)
+			p_ddp->push(this, b, brightness);
+
+		std::vector<std::tuple<uint8_t, uint8_t, uint8_t> > pixel_vec;
+		generate_panel_colors(pixel_vec, n_leds, b, b->getCpu(), brightness);
+
+		for(size_t i=0; i<pixel_vec.size(); i++) {
+			auto & pixel = pixel_vec.at(i);
+			pixels->setPixelColor(i, std::get<0>(pixel), std::get<1>(pixel), std::get<2>(pixel));
+		}
+		pixels->show();
+	}
+
+	pixels->clear();
+	pixels->show();
+	delete pixels;
+#endif
+
+	DOLOG(log_ss::LS_COMM, "panel task terminating");
+}
+
+void console_esp32::set_LED_state(const bool state)
+{
+	led_pulses = state;
+#if 0
+#if defined(WAVESHARE_S3_ETH)
+	uint8_t intensity = state ? 255 : 0;
+	rgb_led.setPixelColor(0, intensity, intensity, intensity);
+	rgb_led.show();
+#elif !defined(BUILD_FOR_PICO2W)
+	my_unique_lock lck(&led_lock);
+	digitalWrite(HEARTBEAT_PIN, state);
+#endif
+#endif
+}
+
+void console_esp32::pulse_LED()
+{
+#if 0
+#if defined(WAVESHARE_S3_ETH)
+	if (led_pulses <= 5)
+		led_pulses++;
+	uint8_t intensity = 255 - (led_pulses - 1) * 50;
+	rgb_led.setPixelColor(0, 255, intensity, intensity);
+	rgb_led.show();
+#endif
+#endif
+}
