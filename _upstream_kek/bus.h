@@ -48,6 +48,12 @@
 #define ADDR_MICROPROG_BREAK_REG 0177770
 #define ADDR_CCR 0177746
 #define ADDR_SYSTEM_ID 0177764
+#define ADDR_UNIBUS_MAP_START 0170200
+#define ADDR_UNIBUS_MAP_END   0170377
+
+constexpr uint32_t UNIBUS_MAP_PAGE_SIZE = 020000;
+constexpr uint32_t UNIBUS_MAP_PAGE_MASK = UNIBUS_MAP_PAGE_SIZE - 1;
+constexpr int      UNIBUS_MAP_ENTRIES   = 32;
 
 class console;
 class cpu;
@@ -90,11 +96,16 @@ private:
 
 	uint16_t console_switches { 0 };
 	uint16_t console_leds     { 0 };
+	uint32_t unibus_map[UNIBUS_MAP_ENTRIES] { 0 };
 
 	uint16_t read_IO (const uint16_t a, const word_mode_t word_mode, const int run_mode, const d_i_space_t space, const int page, const int page_index);
 	bool     write_IO(const uint16_t a, const word_mode_t word_mode,                                              const int page, uint16_t value);
 
 	void     verify_pointer_bounds(const uint32_t m_offset, const int page_index);
+	void     reset_unibus_map();
+	uint16_t read_unibus_map_register(const uint16_t a, const word_mode_t word_mode) const;
+	void     write_unibus_map_register(const uint16_t a, const word_mode_t word_mode, const uint16_t value);
+	uint32_t translate_unibus_address(const uint32_t a) const;
 
 public:
 	bus();
@@ -150,6 +161,12 @@ public:
 #endif
 	rp06   *getRP06()   { return rp06_;   }
 	deqna  *getDEQNA()  { return deqna_;  }
+	uint32_t get_unibus_map_entry(int entry) const {
+		return entry >= 0 && entry < UNIBUS_MAP_ENTRIES ? unibus_map[entry] : 0;
+	}
+	uint32_t translate_unibus_for_monitor(uint32_t address) const {
+		return translate_unibus_address(address);
+	}
 
 	uint16_t read(const uint16_t a, const word_mode_t word_mode, const int run_mode, const d_i_space_t s = i_space);
 	uint8_t  read_byte(const uint16_t a) override { return read(a, wm_byte, c->getPSW_runmode()); }
@@ -158,11 +175,14 @@ public:
 	std::optional<uint16_t> peek_word(const int run_mode, const uint16_t a);
 	uint8_t  read_unibus_byte(const uint32_t a) const;
 	uint16_t read_unibus_word(const uint32_t a) const;
+	uint32_t read_unibus_block(uint32_t a, uint8_t *target, uint32_t n) const;
 	uint16_t read_physical(const uint32_t a);
 	uint16_t read_physical_byte(const uint32_t a);
+	bool     clear_physical_block(const uint32_t a, const uint32_t n);
 
 	bool     write(const uint16_t a, const word_mode_t word_mode, const uint16_t value, const int run_mode, const d_i_space_t s = i_space);
 	void     write_unibus_byte(const uint32_t a, const uint8_t value);
+	uint32_t write_unibus_block(uint32_t a, const uint8_t *source, uint32_t n);
 	void     write_byte(const uint16_t a, const uint8_t value) override { write(a, wm_byte, value, c->getPSW_runmode()); }
 	void     write_word(const uint16_t a, const uint16_t value, const d_i_space_t s);
 	void     write_word(const uint16_t a, const uint16_t value) override { write_word(a, value, i_space); }

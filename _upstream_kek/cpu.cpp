@@ -3,9 +3,15 @@
 
 #include "gen.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(ESP32)
+#include <Arduino.h>
+extern "C" bool vpdp1170_kek_trace_enabled();
+#endif
 
 #include "breakpoint.h"
 #include "bus.h"
@@ -37,6 +43,7 @@ void cpu::init_interrupt_queue()
 {
 	for(uint8_t level=0; level<8; level++)
 		queued_interrupts[level].clear();
+	any_queued_interrupts = false;
 }
 
 std::optional<std::pair<breakpoint &, const std::string> > cpu::check_breakpoint()
@@ -80,9 +87,18 @@ void cpu::reset()
 	pc   = 0;
 	psw  = 0;  // 7 << 5;
 	fpsr = 0;
+	fp_fec = 0;
+	fp_fea = 0;
+	memset(fp_ac, 0x00, sizeof fp_ac);
 	init_interrupt_queue();
 	instructions_executed = 0;
 	processing_trap_depth = 0;
+	instruction_active = false;
+	instruction_pc = 0;
+	last_instruction_valid = false;
+	last_instruction_pc = 0;
+	last_instruction_word = 0;
+	last_instruction_phys = 0;
 	kw11l_counter         = 0;
 }
 
@@ -267,6 +283,8 @@ int cpu::getPSW_spl() const
 
 void cpu::setPSW(const uint16_t v, const bool limited)
 {
+	const int old_spl = getPSW_spl();
+
 	if (limited) {
 		int cur_mode  = std::max( v >> 14,       psw >> 14);
 		int prev_mode = std::max((v >> 12) & 3, (psw >> 12) & 3);
@@ -274,6 +292,21 @@ void cpu::setPSW(const uint16_t v, const bool limited)
 	}
 	else {
 		psw = v & 0174377;  // mask off reserved bits
+	}
+
+	// Lowering processor priority can immediately unblock an already queued
+	// interrupt. Wake the step loop so KL/KW/DL-style deferred interrupts do
+	// not wait for another device edge to be noticed.
+	if (getPSW_spl() < old_spl) {
+		any_queued_interrupts = true;
+#if defined(FREERTOS)
+		if (qi_q && uxQueueMessagesWaiting(qi_q) == 0) {
+			uint8_t value = 1;
+			xQueueSend(qi_q, &value, 0);
+		}
+#else
+		qi_cv.notify_one();
+#endif
 	}
 }
 
@@ -370,6 +403,41 @@ void cpu::queue_interrupt(const uint8_t level, const uint16_t vector)
 #endif
 
 	any_queued_interrupts = true;
+}
+
+bool cpu::has_queued_interrupt(const uint8_t level, const uint16_t vector)
+{
+#if defined(FREERTOS)
+	xSemaphoreTake(qi_lock, portMAX_DELAY);
+#else
+	std::unique_lock<std::mutex> lck(qi_lock);
+#endif
+
+	const bool found = level < queued_interrupts.size() &&
+	                   queued_interrupts[level].find(vector) != queued_interrupts[level].end();
+
+#if defined(FREERTOS)
+	xSemaphoreGive(qi_lock);
+#endif
+
+	return found;
+}
+
+std::array<std::set<uint16_t>, 8> cpu::get_queued_interrupts() const
+{
+#if defined(FREERTOS)
+	xSemaphoreTake(qi_lock, portMAX_DELAY);
+#else
+	std::unique_lock<std::mutex> lck(qi_lock);
+#endif
+
+	auto snapshot = queued_interrupts;
+
+#if defined(FREERTOS)
+	xSemaphoreGive(qi_lock);
+#endif
+
+	return snapshot;
 }
 
 void cpu::unqueue_interrupt(const uint8_t level, const uint16_t vector)
@@ -811,6 +879,471 @@ bool cpu::additional_double_operand_instructions(const uint16_t instr)
 	}
 
 	return false;
+}
+
+int cpu::fp_word_count() const
+{
+	return (fpsr & 0200) ? 4 : 2;
+}
+
+void cpu::fp_set_fpsr_nz(const int ac)
+{
+	fpsr &= ~017;
+
+	bool zero = true;
+	for(int i=0; i<fp_word_count(); i++) {
+		if (fp_ac[ac][i]) {
+			zero = false;
+			break;
+		}
+	}
+
+	if (zero)
+		fpsr |= 004;
+	else if (fp_ac[ac][0] & 0100000)
+		fpsr |= 010;
+}
+
+bool cpu::fp_get_operand_address(const uint8_t mode, const uint8_t reg, const int words, uint16_t *addr)
+{
+	if (mode == 0 || addr == nullptr)
+		return false;
+
+	const int run_mode = getPSW_runmode();
+	const int bytes = words * 2;
+	uint16_t next_word = 0;
+	uint16_t temp = 0;
+
+	switch(mode) {
+		case 1:  // (Rn)
+			*addr = get_register(reg);
+			return true;
+
+		case 2:  // (Rn)+
+			*addr = get_register(reg);
+			add_register(reg, reg == 7 ? 2 : bytes);
+			add_to_MMR1(reg, reg == 7 ? 2 : bytes);
+			return true;
+
+		case 3:  // @(Rn)+
+			*addr = b->read(get_register(reg), wm_word, run_mode, reg == 7 ? i_space : d_space);
+			add_register(reg, 2);
+			add_to_MMR1(reg, 2);
+			return true;
+
+		case 4:  // -(Rn)
+			temp = add_register(reg, -bytes);
+			add_to_MMR1(reg, -bytes);
+			*addr = temp;
+			return true;
+
+		case 5:  // @-(Rn)
+			temp = add_register(reg, -2);
+			add_to_MMR1(reg, -2);
+			*addr = b->read(temp, wm_word, run_mode, d_space);
+			return true;
+
+		case 6:  // x(Rn)
+			next_word = b->read(getPC(), wm_word, run_mode, i_space);
+			add_register(7, 2);
+			*addr = get_register(reg) + next_word;
+			return true;
+
+		case 7:  // @x(Rn)
+			next_word = b->read(getPC(), wm_word, run_mode, i_space);
+			add_register(7, 2);
+			*addr = b->read(get_register(reg) + next_word, wm_word, run_mode, d_space);
+			return true;
+	}
+
+	return false;
+}
+
+bool cpu::fp_read_operand(const uint8_t mode, const uint8_t reg, uint16_t *words, const int count)
+{
+	if (words == nullptr || count <= 0)
+		return false;
+
+	for(int i=0; i<count; i++)
+		words[i] = 0;
+
+	if (mode == 0) {
+		words[0] = get_register(reg);
+		return true;
+	}
+
+	uint16_t addr = 0;
+	if (!fp_get_operand_address(mode, reg, count, &addr))
+		return false;
+
+	for(int i=0; i<count; i++)
+		words[i] = b->read(addr + i * 2, wm_word, getPSW_runmode(), d_space);
+
+	return true;
+}
+
+bool cpu::fp_write_operand(const uint8_t mode, const uint8_t reg, const uint16_t *words, const int count)
+{
+	if (words == nullptr || count <= 0)
+		return false;
+
+	if (mode == 0) {
+		set_register(reg, words[0]);
+		return true;
+	}
+
+	uint16_t addr = 0;
+	if (!fp_get_operand_address(mode, reg, count, &addr))
+		return false;
+
+	bool ok = true;
+	for(int i=0; i<count; i++)
+		ok = b->write(addr + i * 2, wm_word, words[i], getPSW_runmode(), d_space) == false && ok;
+
+	return ok;
+}
+
+double cpu::fp_to_double(const uint16_t *words) const
+{
+	if (words == nullptr)
+		return 0.0;
+
+	const uint16_t high = words[0];
+	const int exponent = (high >> 7) & 0377;
+	if (exponent == 0)
+		return 0.0;
+
+	uint64_t fraction = uint64_t(high & 0177) << 48;
+	fraction |= uint64_t(words[1]) << 32;
+	if (fpsr & 0200) {
+		fraction |= uint64_t(words[2]) << 16;
+		fraction |= uint64_t(words[3]);
+	}
+
+	double mantissa = 0.5;
+	double place = 0.25;
+	const int bits = (fpsr & 0200) ? 55 : 23;
+	for(int bit=0; bit<bits; bit++) {
+		if (fraction & (uint64_t(1) << (54 - bit)))
+			mantissa += place;
+		place *= 0.5;
+	}
+
+	double value = ldexp(mantissa, exponent - 0200 + 1);
+	if (high & 0100000)
+		value = -value;
+	return value;
+}
+
+void cpu::double_to_fp(double value, uint16_t *words) const
+{
+	if (words == nullptr)
+		return;
+
+	for(int i=0; i<4; i++)
+		words[i] = 0;
+
+	if (value == 0.0 || !isfinite(value))
+		return;
+
+	bool neg = value < 0.0;
+	if (neg)
+		value = -value;
+
+	int exp2 = 0;
+	double mantissa = frexp(value, &exp2);  // 0.5 <= mantissa < 1.0
+	int biased = exp2 - 1 + 0200;
+	if (biased <= 0 || biased > 0377)
+		return;
+
+	double frac = (mantissa - 0.5) * 2.0;
+	const int bits = (fpsr & 0200) ? 55 : 23;
+	uint64_t fraction = 0;
+	for(int bit=0; bit<bits; bit++) {
+		frac *= 2.0;
+		if (frac >= 1.0) {
+			fraction |= uint64_t(1) << (54 - bit);
+			frac -= 1.0;
+		}
+	}
+
+	words[0] = (neg ? 0100000 : 0) | ((uint16_t)biased << 7) | ((fraction >> 48) & 0177);
+	words[1] = (fraction >> 32) & 0177777;
+	if (fpsr & 0200) {
+		words[2] = (fraction >> 16) & 0177777;
+		words[3] = fraction & 0177777;
+	}
+}
+
+bool cpu::floating_point_instructions(const uint16_t instr)
+{
+	if ((instr & 0170000) != 0170000)
+		return false;
+
+	const uint8_t fop = (instr >> 8) & 017;
+	const uint8_t ac = (instr >> 6) & 03;
+	const uint8_t dst = instr & 077;
+	const uint8_t dst_mode = dst >> 3;
+	const uint8_t dst_reg = dst & 07;
+	const int words = fp_word_count();
+
+	switch(fop) {
+		case 000: {  // FP11 miscellaneous/status group
+			switch(ac) {
+				case 0:
+					switch(instr & 077) {
+						case 000:  // CFCC
+							psw = (psw & ~017) | (fpsr & 017);
+							return true;
+
+						case 001:  // SETF
+							fpsr &= ~0200;
+							return true;
+
+						case 002:  // SETI
+							fpsr &= ~0100;
+							return true;
+
+						case 011:  // SETD
+							fpsr |= 0200;
+							return true;
+
+						case 012:  // SETL
+							fpsr |= 0100;
+							return true;
+
+						default:
+							break;
+					}
+					break;
+
+				case 1: {  // LDFPS
+					auto g = getGAM(dst_mode, dst_reg, wm_word);
+					fpsr = g.value & 0147777;
+					return true;
+				}
+
+				case 2: {  // STFPS
+					auto g = getGAMAddress(dst_mode, dst_reg, wm_word);
+					putGAM(g, fpsr);
+					return true;
+				}
+
+				case 3: {  // STST: store FEC and FEA
+					if (dst_mode == 0) {
+						set_register(dst_reg, fp_fec);
+					}
+					else {
+						auto g = getGAMAddress(dst_mode, dst_reg, wm_word);
+						if (putGAM(g, fp_fec)) {
+							g.addr += 2;
+							putGAM(g, fp_fea);
+						}
+					}
+					return true;
+				}
+			}
+			break;
+		}
+
+		case 001: {  // CLRF/CLRD, TSTF/TSTD, ABSF/ABSD, NEGF/NEGD
+			switch(ac) {
+				case 0: {  // CLRF/CLRD
+					uint16_t zero[4] = { 0, 0, 0, 0 };
+					fp_write_operand(dst_mode, dst_reg, zero, words);
+					fpsr = (fpsr & ~017) | 004;
+					return true;
+				}
+
+				case 1: {  // TSTF/TSTD
+					uint16_t operand[4] = { 0, 0, 0, 0 };
+					fp_read_operand(dst_mode, dst_reg, operand, words);
+					fpsr &= ~017;
+					if ((operand[0] | operand[1] | operand[2] | operand[3]) == 0)
+						fpsr |= 004;
+					else if (operand[0] & 0100000)
+						fpsr |= 010;
+					return true;
+				}
+
+				case 2: {  // ABSF/ABSD
+					uint16_t operand[4] = { 0, 0, 0, 0 };
+					fp_read_operand(dst_mode, dst_reg, operand, words);
+					operand[0] &= ~0100000;
+					fp_write_operand(dst_mode, dst_reg, operand, words);
+					memcpy(fp_ac[0], operand, sizeof(uint16_t) * words);
+					fp_set_fpsr_nz(0);
+					return true;
+				}
+
+				case 3: {  // NEGF/NEGD
+					uint16_t operand[4] = { 0, 0, 0, 0 };
+					fp_read_operand(dst_mode, dst_reg, operand, words);
+					if (operand[0] | operand[1] | operand[2] | operand[3])
+						operand[0] ^= 0100000;
+					fp_write_operand(dst_mode, dst_reg, operand, words);
+					memcpy(fp_ac[0], operand, sizeof(uint16_t) * words);
+					fp_set_fpsr_nz(0);
+					return true;
+				}
+			}
+			break;
+		}
+
+		case 002:   // MULF/MULD
+		case 003:   // MODF/MODD
+		case 004:   // ADDF/ADDD
+		case 006:   // SUBF/SUBD
+		case 011: { // DIVF/DIVD
+			uint16_t operand[4] = { 0, 0, 0, 0 };
+			fp_read_operand(dst_mode, dst_reg, operand, words);
+			double lhs = fp_to_double(fp_ac[ac]);
+			double rhs = fp_to_double(operand);
+			double result = lhs;
+			if (fop == 002 || fop == 003)
+				result = lhs * rhs;
+			else if (fop == 004)
+				result = lhs + rhs;
+			else if (fop == 006)
+				result = lhs - rhs;
+			else if (rhs != 0.0)
+				result = lhs / rhs;
+			else {
+				fp_fec = 014;
+				fp_fea = instruction_pc;
+				fpsr |= 0100000 | 002;
+				return true;
+			}
+			double_to_fp(result, fp_ac[ac]);
+			fp_set_fpsr_nz(ac);
+			return true;
+		}
+
+		case 005: {  // LDF/LDD
+			uint16_t operand[4] = { 0, 0, 0, 0 };
+			fp_read_operand(dst_mode, dst_reg, operand, words);
+			memcpy(fp_ac[ac], operand, sizeof(uint16_t) * words);
+			fp_set_fpsr_nz(ac);
+			return true;
+		}
+
+		case 007: {  // CMPF/CMPD
+			uint16_t operand[4] = { 0, 0, 0, 0 };
+			fp_read_operand(dst_mode, dst_reg, operand, words);
+			double diff = fp_to_double(fp_ac[ac]) - fp_to_double(operand);
+			fpsr &= ~017;
+			if (diff == 0.0)
+				fpsr |= 004;
+			else if (diff < 0.0)
+				fpsr |= 010;
+			return true;
+		}
+
+		case 010: {  // STF/STD
+			fp_write_operand(dst_mode, dst_reg, fp_ac[ac], words);
+			fp_set_fpsr_nz(ac);
+			return true;
+		}
+
+		case 012: {  // STEXP: store exponent as word integer
+			const uint16_t high = fp_ac[ac][0];
+			const bool zero = (fp_ac[ac][0] | fp_ac[ac][1] | fp_ac[ac][2] | fp_ac[ac][3]) == 0;
+			const int16_t exp = zero ? 0 : int16_t((high >> 7) & 0377) - 0200;
+			const uint16_t value = uint16_t(exp);
+
+			if (dst_mode == 0)
+				set_register(dst_reg, value);
+			else {
+				auto g = getGAMAddress(dst_mode, dst_reg, wm_word);
+				putGAM(g, value);
+			}
+
+			fpsr &= ~017;
+			if (value & 0100000)
+				fpsr |= 010;
+			else if (value == 0)
+				fpsr |= 004;
+			return true;
+		}
+
+		case 013: {  // STCFI/STCDI: store converted integer/long
+			double value = fp_to_double(fp_ac[ac]);
+			int32_t ivalue = (int32_t)value;
+			if (fpsr & 0100) {
+				uint16_t out[2] = { (uint16_t)(ivalue >> 16), (uint16_t)ivalue };
+				fp_write_operand(dst_mode, dst_reg, out, 2);
+			}
+			else {
+				uint16_t out = (uint16_t)ivalue;
+				if (dst_mode == 0)
+					set_register(dst_reg, out);
+				else {
+					auto g = getGAMAddress(dst_mode, dst_reg, wm_word);
+					putGAM(g, out);
+				}
+			}
+			fpsr &= ~017;
+			if (ivalue == 0)
+				fpsr |= 004;
+			else if (ivalue < 0)
+				fpsr |= 010;
+			return true;
+		}
+
+		case 014: {  // STCFD/STCDF: store converted float/double
+			uint16_t out[4] = { fp_ac[ac][0], fp_ac[ac][1], fp_ac[ac][2], fp_ac[ac][3] };
+			fp_write_operand(dst_mode, dst_reg, out, words);
+			fp_set_fpsr_nz(ac);
+			return true;
+		}
+
+		case 015: {  // LDEXP: load exponent from word integer
+			auto g = getGAM(dst_mode, dst_reg, wm_word);
+			const int16_t exp = int16_t(g.value);
+			const uint16_t biased = uint16_t(exp + 0200) & 0377;
+
+			fp_ac[ac][0] &= ~077600;
+			fp_ac[ac][0] |= biased << 7;
+
+			fpsr &= ~017;
+			if (fp_ac[ac][0] & 0100000)
+				fpsr |= 010;
+			else if ((fp_ac[ac][0] | fp_ac[ac][1] | fp_ac[ac][2] | fp_ac[ac][3]) == 0)
+				fpsr |= 004;
+			return true;
+		}
+
+		case 016: {  // LDCIF/LDCID: load converted integer/long
+			int32_t ivalue = 0;
+			if (fpsr & 0100) {
+				uint16_t in[2] = { 0, 0 };
+				fp_read_operand(dst_mode, dst_reg, in, 2);
+				ivalue = (int32_t(uint32_t(in[0]) << 16) | in[1]);
+			}
+			else {
+				auto g = getGAM(dst_mode, dst_reg, wm_word);
+				ivalue = int16_t(g.value);
+			}
+			double_to_fp((double)ivalue, fp_ac[ac]);
+			fp_set_fpsr_nz(ac);
+			return true;
+		}
+
+		case 017: {  // LDCDF/LDCFD: load converted float/double
+			uint16_t operand[4] = { 0, 0, 0, 0 };
+			fp_read_operand(dst_mode, dst_reg, operand, words);
+			memcpy(fp_ac[ac], operand, sizeof(uint16_t) * words);
+			fp_set_fpsr_nz(ac);
+			return true;
+		}
+	}
+
+	fp_fec = 002;  // undefined FP opcode
+	fp_fea = instruction_pc;
+	fpsr |= 0100000;
+	instruction_active = false;
+	trap(010);
+	return true;
 }
 
 bool cpu::single_operand_instructions(const uint16_t instr)
@@ -1488,18 +2021,81 @@ uint16_t cpu::pop_stack()
 	return temp;
 }
 
+bool cpu::jsr_instruction(const uint16_t instr)
+{
+	if ((instr & 0177000) != 004000)
+		return false;
+
+	int dst_mode = (instr >> 3) & 7;
+	if (dst_mode == 0)  // cannot jump to a register
+		return false;
+
+	int      dst_reg   = instr & 7;
+	uint16_t dst_value = 0;
+	uint16_t return_pc = getPC();
+
+	if (dst_reg == 7 && (dst_mode == 6 || dst_mode == 7)) {
+		const int run_mode = getPSW_runmode();
+		const uint16_t extension_pc = getPC();
+		const uint16_t displacement = b->read(extension_pc, wm_word, run_mode, i_space);
+		return_pc = extension_pc + 2;
+		setPC(return_pc);
+
+		const uint16_t effective = return_pc + displacement;
+		dst_value = dst_mode == 6
+			? effective
+			: b->read(effective, wm_word, run_mode, d_space);
+	}
+	else {
+		auto a = getGAMAddress(dst_mode, dst_reg, wm_word);
+		dst_value = a.addr;
+		return_pc = getPC();
+	}
+
+	int link_reg = (instr >> 6) & 7;
+	const uint16_t link_value = link_reg == 7 ? return_pc : get_register(link_reg);
+
+	// PUSH link
+	push_stack(link_value);
+	if (mmu_->isMMR1Locked() == false)
+		mmu_->add_to_MMR1(-2, 6);
+
+	// MOVE PC,link
+	if (link_reg != 7)
+		set_register(link_reg, return_pc);
+
+	// JMP dst
+	setPC(dst_value);
+
+	return true;
+}
+
 bool cpu::misc_operations(const uint16_t instr)
 {
 	switch(instr) {
 		case 0b0000000000000000: // HALT
-			if (getPSW_runmode() == 0)  // only in kernel mode
+			if (getPSW_runmode() == 0) { // only in kernel mode
 				*event = EVENT_HALT;
-			else
+			}
+			else {
+				instruction_active = false;
 				trap(4);
+			}
 			return true;
 
 		case 0b0000000000000001: // WAIT
 			{
+#if defined(ESP32)
+				if (check_pending_interrupts() == false) {
+					if (wait_stuck == false) {
+						wait_stuck = true;
+						DOLOG(log_ss::LS_CPU, "cpu: WAIT idle, returning to host loop");
+					}
+					setPC(getPC() - 2);
+					vTaskDelay(1);
+					return true;
+				}
+#else
 				uint64_t start = get_us();
 
 				do
@@ -1521,8 +2117,10 @@ bool cpu::misc_operations(const uint16_t instr)
 					}
 				}
 				while(check_pending_interrupts() == false);
+#endif
 			}
 
+			wait_stuck = false;
 			DOLOG(log_ss::LS_TRACE, "WAIT returned");
 
 			return true;
@@ -1533,10 +2131,12 @@ bool cpu::misc_operations(const uint16_t instr)
 			return true;
 
 		case 0b0000000000000011: // BPT
+			instruction_active = false;
 			trap(014);
 			return true;
 
 		case 0b0000000000000100: // IOT
+			instruction_active = false;
 			trap(020);
 			return true;
 
@@ -1547,6 +2147,7 @@ bool cpu::misc_operations(const uint16_t instr)
 
 		case 0b0000000000000111: // MFPT
 			//set_register(0, 0);
+			instruction_active = false;
 			trap(010); // does not exist on PDP-11/70
 			return true;
 
@@ -1559,11 +2160,13 @@ bool cpu::misc_operations(const uint16_t instr)
 	}
 
 	if ((instr >> 8) == 0b10001000) { // EMT
+		instruction_active = false;
 		trap(030);
 		return true;
 	}
 
 	if ((instr >> 8) == 0b10001001) { // TRAP
+		instruction_active = false;
 		trap(034);
 		return true;
 	}
@@ -1581,41 +2184,26 @@ bool cpu::misc_operations(const uint16_t instr)
 		return true;
 	}
 
-	if ((instr & 0b1111111000000000) == 0b0000100000000000) { // JSR
-		int dst_mode = (instr >> 3) & 7;
-		if (dst_mode == 0)  // cannot jump to a register
-			return false;
-
-		int  dst_reg   = instr & 7;
-
-		auto a         = getGAMAddress(dst_mode, dst_reg, wm_word);
-		auto dst_value = a.addr;
-
-		int  link_reg  = (instr >> 6) & 7;
-
-		// PUSH link
-		push_stack(get_register(link_reg));
-		if (mmu_->isMMR1Locked() == false)
-			mmu_->add_to_MMR1(-2, 6);
-
-		// MOVE PC,link
-		set_register(link_reg, getPC());
-
-		// JMP dst
-		setPC(dst_value);
-
+	if (jsr_instruction(instr))
 		return true;
-	}
 
 	if ((instr & 0b1111111111111000) == 0b0000000010000000) { // RTS
 		const int link_reg = instr & 7;
+		const uint16_t old_sp = get_register(6);
+		const uint16_t return_pc = get_register(link_reg);
+		const uint16_t word_on_stack = b->read_word(old_sp, d_space);
+
+		if (link_reg == 7) {
+			add_register(6, 2);
+			setPC(word_on_stack);
+
+			return true;
+		}
 
 		// MOVE link, PC
-		setPC(get_register(link_reg));
+		setPC(return_pc);
 
 		// POP link
-		uint16_t word_on_stack = b->read_word(get_register(6), d_space);
-
 		set_register(link_reg, word_on_stack);
 
 		// do not overwrite SP when it was just set
@@ -1663,13 +2251,14 @@ void cpu::trap(uint16_t vector, const int new_ipl, const bool is_interrupt)
 				set_register(6, 04);
 			}
 			before_psw = getPSW();
-			before_pc  = getPC();
+			before_pc  = is_interrupt == false && instruction_active ? instruction_pc : getPC();
 
 			// make sure the trap vector is retrieved from kernel space
 			psw &= 037777;  // mask off 14/15 to make it into kernel-space
 
 			auto space = mmu_->get_use_data_space(0) ? d_space : i_space;
-			setPC(b->read_word(vector + 0, space));
+			uint16_t target_pc = b->read_word(vector + 0, space);
+			setPC(target_pc);
 
 			// switch to kernel mode & update 'previous mode'
 			uint16_t new_psw = b->read_word(vector + 2, space) & 0147777;  // mask off old 'previous mode'
@@ -2342,9 +2931,111 @@ std::unordered_map<std::string, std::vector<std::string> > cpu::disassemble(cons
 			instruction_words.push_back(next_word);
 	}
 	else if (do_opcode == 0b111) {
-		if (word_mode == wm_byte)
-			name = "?";
-		else {
+		if (word_mode == wm_byte) {
+			switch(instruction) {
+				case 0170000:
+					text = "CFCC";
+					break;
+				case 0170001:
+					text = "SETF";
+					break;
+				case 0170002:
+					text = "SETI";
+					break;
+				case 0170011:
+					text = "SETD";
+					break;
+				case 0170012:
+					text = "SETL";
+					break;
+			}
+		}
+		if (word_mode == wm_byte && text.empty() && (instruction & 07400) == 00000) {
+			auto addressing = addressing_to_string(dst_register, addr + 2, wm_word);
+			might_be_io = addressing.valid == false;
+			auto dst_text { addressing };
+
+			auto next_word = dst_text.instruction_part;
+			if (next_word != -1)
+				instruction_words.push_back(next_word);
+
+			work_values.push_back(dst_text.work_value);
+
+			switch((instruction >> 6) & 03) {
+				case 1:
+					text = "LDFPS " + dst_text.operand;
+					break;
+				case 2:
+					text = "STFPS " + dst_text.operand;
+					break;
+				case 3:
+					text = "STST " + dst_text.operand;
+					break;
+			}
+		}
+		if (word_mode == wm_byte && text.empty()) {
+			const uint8_t fop = (instruction >> 8) & 017;
+			const char *fp_name = nullptr;
+			switch(fop) {
+				case 002: fp_name = "MULF"; break;
+				case 003: fp_name = "MODF"; break;
+				case 004: fp_name = "ADDF"; break;
+				case 005: fp_name = "LDF"; break;
+				case 006: fp_name = "SUBF"; break;
+				case 007: fp_name = "CMPF"; break;
+				case 010: fp_name = "STF"; break;
+				case 011: fp_name = "DIVF"; break;
+				case 012: fp_name = "STEXP"; break;
+				case 013: fp_name = "STCFI"; break;
+				case 014: fp_name = "STCFD"; break;
+				case 015: fp_name = "LDEXP"; break;
+				case 016: fp_name = "LDCIF"; break;
+				case 017: fp_name = "LDCDF"; break;
+			}
+			if (fp_name) {
+				auto addressing = addressing_to_string(dst_register, addr + 2, wm_word);
+				might_be_io = addressing.valid == false;
+				auto dst_text { addressing };
+
+				auto next_word = dst_text.instruction_part;
+				if (next_word != -1)
+					instruction_words.push_back(next_word);
+
+				work_values.push_back(dst_text.work_value);
+				text = std::string(fp_name) + " " +
+					format("F%d,", (instruction >> 6) & 03) + dst_text.operand;
+
+				if (dst_text.valid == false)
+					text += " (INVF)";
+			}
+		}
+		if (word_mode == wm_byte && text.empty()) {
+			auto addressing_src = addressing_to_string(src_register, addr + 2, wm_word);
+			might_be_io = addressing_src.valid == false;
+			auto src_text { addressing_src };
+
+			auto next_word_src = src_text.instruction_part;
+			if (next_word_src != -1)
+				instruction_words.push_back(next_word_src);
+
+			work_values.push_back(src_text.work_value);
+
+			auto addressing_dst = addressing_to_string(dst_register, addr + src_text.length, wm_word);
+			might_be_io = might_be_io || addressing_dst.valid == false;
+			auto dst_text { addressing_dst };
+
+			auto next_word_dst = dst_text.instruction_part;
+			if (next_word_dst != -1)
+				instruction_words.push_back(next_word_dst);
+
+			work_values.push_back(dst_text.work_value);
+
+			text = "FP11/UNIMPL " + src_text.operand + comma + dst_text.operand;
+
+			if (src_text.valid == false || dst_text.valid == false)
+				text += " (INVF)";
+		}
+		else if (word_mode != wm_byte) {
 			std::string src_text = format("R%d", (instruction >> 6) & 7);
 			auto        addressing = addressing_to_string(dst_register, addr + 2, word_mode);
 			might_be_io = addressing.valid == false;
@@ -2410,10 +3101,7 @@ std::unordered_map<std::string, std::vector<std::string> > cpu::disassemble(cons
 				break;
 
 			case 0b110:
-				if (word_mode == wm_byte)
-					name = "SUB";
-				else
-					name = "ADD";
+				name = instruction & 0100000 ? "SUB" : "ADD";
 				break;
 		}
 
@@ -2704,24 +3392,72 @@ bool cpu::step()
 	}
 
 	try {
-		mmu_->MMRStartInstruction(pc);
+		instruction_pc = pc;
+		instruction_active = true;
+		mmu_->MMRStartInstruction(instruction_pc);
+		auto instruction_meta = mmu_->calculate_physical_address(getPSW_runmode(), pc);
 		uint16_t instr = b->read_word(pc);
+		last_instruction_valid = true;
+		last_instruction_pc = instruction_pc;
+		last_instruction_word = instr;
+		last_instruction_phys = instruction_meta.physical_instruction;
 		add_register(7, 2);
 
-		if (double_operand_instructions(instr) || conditional_branch_instructions(instr) || condition_code_operations(instr) || misc_operations(instr)) {
+		// JSR is in the 004xxx opcode block. Handle it before the broad
+		// operand decoders so its extension word can never be mistaken for
+		// the next instruction in trace-heavy bring-up builds.
+		if (jsr_instruction(instr)) {
+			instruction_active = false;
+			return true;
+		}
+
+		if (misc_operations(instr) || double_operand_instructions(instr) || floating_point_instructions(instr) || conditional_branch_instructions(instr) || condition_code_operations(instr)) {
+			instruction_active = false;
 			return true;
 		}
 
 		DOLOG(log_ss::LS_CPU, "UNHANDLED instruction %06o @ %06o", instr, pc - 2);
+		if ((instr & 0170000) == 0170000) {
+			// FPP/FP11 is not emulated.  A real PDP-11 without usable
+			// floating-point hardware reports this to the guest via vector 010;
+			// it should not stop the host emulator.
+			instruction_active = false;
+			trap(010);
+			return true;
+		}
 
-		trap(010);  // floating point nog niet geimplementeerd
-
-		return false;
+		// Reserved/illegal instructions are also guest-visible instruction
+		// traps.  Stopping the host here prevents operating systems from using
+		// their normal probe/recovery paths.
+		instruction_active = false;
+		trap(010);
+		return true;
 	}
 	catch(const int exception_nr) {
+		instruction_active = false;
 		DOLOG(log_ss::LS_TRACE, "trap during execution of command (%d)", exception_nr);
 	}
 
+	instruction_active = false;
+	return true;
+}
+
+bool cpu::get_last_instruction(uint16_t *address, uint16_t *opcode) const
+{
+	if (!last_instruction_valid || !address || !opcode)
+		return false;
+
+	*address = last_instruction_pc;
+	*opcode = last_instruction_word;
+	return true;
+}
+
+bool cpu::get_last_instruction_physical(uint32_t *address) const
+{
+	if (!last_instruction_valid || !address)
+		return false;
+
+	*address = last_instruction_phys;
 	return true;
 }
 

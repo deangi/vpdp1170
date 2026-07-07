@@ -149,6 +149,11 @@ static uint32_t da_to_offset(uint16_t da)
     return ((cyl * SURFACES + surf) * SECS_PER_TRACK + sec) * BYTES_PER_SEC;
 }
 
+static uint32_t nominal_image_bytes()
+{
+    return (MAX_CYLINDER + 1) * SURFACES * SECS_PER_TRACK * BYTES_PER_SEC;
+}
+
 // 18-bit bus address: low 16 in RKBA, high 2 in RKCS bits 5:4.
 static uint32_t bus_addr()
 {
@@ -213,19 +218,17 @@ static void execute()
     case 1:  // WRITE
     case 2: {// READ
         uint32_t cyl = (RKDA >> 5) & 0xFF;
-        if (cyl > MAX_CYLINDER) {
-            RKER |= RKNXC;
-            RKCS |= 0x8000;
-            break;
-        }
         uint32_t sec = RKDA & 0xF;
-        if (sec >= SECS_PER_TRACK) {
-            RKER |= RKNXS;
-            RKCS |= 0x8000;
-            break;
-        }
-
         bool writing = (func == 1);
+        bool zero_read = false;
+        if (cyl > MAX_CYLINDER || sec >= SECS_PER_TRACK) {
+            if (!writing) zero_read = true;
+            else {
+                RKER |= (cyl > MAX_CYLINDER) ? RKNXC : RKNXS;
+                RKCS |= 0x8000;
+                break;
+            }
+        }
         uint32_t off = da_to_offset(RKDA);
         uint32_t ba  = bus_addr();
         uint32_t words_left = (uint32_t)((~RKWC + 1) & 0xFFFF);
@@ -250,11 +253,24 @@ static void execute()
                     break;
                 }
             } else {
-                if (disk_read(DRIVE_RK0, off, scratch, chunk_bytes) < 0) {
-                    RKER |= RKOVR;
-                    RKCS |= 0x8000;
-                    failed = true;
-                    break;
+                uint32_t nominal_bytes = nominal_image_bytes();
+                if (zero_read || off >= nominal_bytes) {
+                    memset(scratch, 0, chunk_bytes);
+                    zero_read = true;
+                } else {
+                    uint32_t read_bytes = chunk_bytes;
+                    if (off + read_bytes > nominal_bytes)
+                        read_bytes = nominal_bytes - off;
+                    if (disk_read(DRIVE_RK0, off, scratch, read_bytes) < 0) {
+                        RKER |= RKOVR;
+                        RKCS |= 0x8000;
+                        failed = true;
+                        break;
+                    }
+                    if (read_bytes < chunk_bytes) {
+                        memset(scratch + read_bytes, 0, chunk_bytes - read_bytes);
+                        zero_read = true;
+                    }
                 }
                 for (uint32_t i = 0; i < chunk_words; i++) {
                     uint16_t v = (uint16_t)scratch[i * 2]
@@ -285,6 +301,11 @@ static void execute()
                 nsec -= SECS_PER_TRACK;
                 nsurf ^= 1;
                 if (nsurf == 0) ncyl++;
+            }
+            if (ncyl > MAX_CYLINDER) {
+                ncyl = MAX_CYLINDER;
+                nsurf = SURFACES - 1;
+                nsec = SECS_PER_TRACK - 1;
             }
             RKDA = (uint16_t)(((RKDA & 0xE000))
                               | ((ncyl & 0xFF) << 5)

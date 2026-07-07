@@ -267,6 +267,8 @@ void mmu::trap_if_odd(const int page_index)
 	MMR0 |= (page_index & 7) << 1;
 
 	CPUERR |= 0100;
+	if (c)
+		c->trap(004);
 }
 
 memory_addresses_t mmu::calculate_physical_address(const int run_mode, const uint16_t a) const
@@ -291,6 +293,10 @@ memory_addresses_t mmu::calculate_physical_address(const int run_mode, const uin
 	if ((getMMR3() & 16) == 0) {  // offset is 18bit
 		physical_instruction &= 0x3ffff;
 		physical_data        &= 0x3ffff;
+	}
+	else {
+		physical_instruction &= 017777777;
+		physical_data        &= 017777777;
 	}
 
 	bool     physical_instruction_is_psw = (physical_instruction - io_base + 0160000) == ADDR_PSW;
@@ -412,6 +418,8 @@ std::pair<uint32_t, int> mmu::calculate_physical_address(const int run_mode, con
 
 		if ((getMMR3() & 16) == 0)  // off is 18bit
 			m_offset &= 0x3ffff;
+		else
+			m_offset &= 017777777;
 
 		verify_page_access(page_index, is_write);
 

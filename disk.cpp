@@ -4,6 +4,7 @@
 #include "SD_FTP_Server/src/SD_FTP_Server.h"
 #include <Arduino.h>
 #include <SD_MMC.h>
+#include <string.h>
 
 struct DriveSlot {
   File     file;
@@ -43,6 +44,53 @@ static const char* slot_name(int s) {
   return "?";
 }
 
+bool disk_size_within_tolerance(uint32_t bytes, uint32_t nominal) {
+  const uint32_t delta = (nominal * DISK_SIZE_TOLERANCE_PERCENT) / 100u;
+  return bytes >= nominal - delta && bytes <= nominal + delta;
+}
+
+bool disk_size_is_rk(uint32_t bytes) {
+  return disk_size_within_tolerance(bytes, DISK_RK05_IMAGE_BYTES);
+}
+
+bool disk_size_is_rl01(uint32_t bytes) {
+  return disk_size_within_tolerance(bytes, DISK_RL01_IMAGE_BYTES);
+}
+
+bool disk_size_is_rl02(uint32_t bytes) {
+  return disk_size_within_tolerance(bytes, DISK_RL02_IMAGE_BYTES);
+}
+
+bool disk_size_is_rl(uint32_t bytes) {
+  return disk_size_is_rl01(bytes) || disk_size_is_rl02(bytes);
+}
+
+static bool validate_slot_image_size(int slot, uint32_t bytes) {
+  if (slot >= DRIVE_A && slot <= DRIVE_D) {
+    if (disk_size_is_rl(bytes)) return true;
+    snprintf(g_last_error, sizeof(g_last_error),
+             "RL image size %u is outside RL01/RL02 +/- %u%%",
+             (unsigned)bytes, (unsigned)DISK_SIZE_TOLERANCE_PERCENT);
+    return false;
+  }
+
+  if (slot == DRIVE_RK0) {
+    if (disk_size_is_rk(bytes)) return true;
+    snprintf(g_last_error, sizeof(g_last_error),
+             "RK image size %u is outside RK05 +/- %u%%",
+             (unsigned)bytes, (unsigned)DISK_SIZE_TOLERANCE_PERCENT);
+    return false;
+  }
+
+  const uint32_t MIN_IMAGE = 100u * 1024u;
+  const uint32_t MAX_IMAGE = 256u * 1024u * 1024u;
+  if (bytes >= MIN_IMAGE && bytes <= MAX_IMAGE) return true;
+  snprintf(g_last_error, sizeof(g_last_error),
+           "image size %u is outside the supported range",
+           (unsigned)bytes);
+  return false;
+}
+
 bool disk_mount_mode(int slot, const char* path, bool force_readonly) {
   SD_FTP_StorageGuard guard;
   set_last_error("");
@@ -76,19 +124,9 @@ bool disk_mount_mode(int slot, const char* path, bool force_readonly) {
   }
   uint32_t sz = (uint32_t)f.size();
 
-  // PDP-11 era disk images come in several sizes (RL01 = 5 MB,
-  // RL02 = 10 MB, RK05 = 2.5 MB) and some carry small SimH-style
-  // headers. Accept anything between 100 KB and 256 MB; the RL11/RK11/RH11
-  // emulators are responsible for sanity-checking offsets against the
-  // slot's actual size.
-  const uint32_t MIN_IMAGE = 100u * 1024u;
-  const uint32_t MAX_IMAGE = 256u * 1024u * 1024u;
-  if (sz < MIN_IMAGE || sz > MAX_IMAGE) {
-    LOGE("disk_mount[%d]: %s is %u bytes, out of range [%u..%u]",
-         slot, path, (unsigned)sz, (unsigned)MIN_IMAGE, (unsigned)MAX_IMAGE);
-    snprintf(g_last_error, sizeof(g_last_error),
-             "image size %u is outside the supported range",
-             (unsigned)sz);
+  if (!validate_slot_image_size(slot, sz)) {
+    LOGE("disk_mount[%s]: %s is %u bytes, invalid for this drive: %s",
+         slot_name(slot), path, (unsigned)sz, g_last_error);
     f.close();
     return false;
   }
@@ -202,23 +240,32 @@ uint32_t disk_size_bytes(int slot) {
 int disk_read(int slot, uint32_t byte_offset, void* buf, uint32_t bytes) {
   SD_FTP_StorageGuard guard;
   if (!disk_is_mounted(slot)) return -1;
+  if (bytes == 0) return 0;
   DriveSlot& d = g_drv[slot];
-  if (byte_offset > d.size || bytes > d.size - byte_offset) {
-    LOGE("disk_read[%s]: out of range off=%u len=%u size=%u",
-         slot_name(slot), (unsigned)byte_offset, (unsigned)bytes, (unsigned)d.size);
-    return -1;
+  uint8_t* out = (uint8_t*)buf;
+  if (!out) return -1;
+
+  if (byte_offset >= d.size) {
+    memset(out, 0, bytes);
+    d.reads++;
+    return (int)bytes;
   }
+
+  uint32_t available = d.size - byte_offset;
+  uint32_t read_len = bytes < available ? bytes : available;
   if (!d.file.seek(byte_offset)) {
     LOGE("disk_read[%s]: seek to %u failed", slot_name(slot), (unsigned)byte_offset);
     return -1;
   }
-  size_t n = d.file.read((uint8_t*)buf, bytes);
+  size_t n = d.file.read(out, read_len);
   d.reads++;
-  if (n != bytes) {
+  if (n != read_len) {
     LOGE("disk_read[%s]: short read %u/%u at off %u",
-         slot_name(slot), (unsigned)n, (unsigned)bytes, (unsigned)byte_offset);
+         slot_name(slot), (unsigned)n, (unsigned)read_len, (unsigned)byte_offset);
     return -1;
   }
+  if (read_len < bytes)
+    memset(out + read_len, 0, bytes - read_len);
   return (int)bytes;
 }
 

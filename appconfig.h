@@ -6,6 +6,9 @@ struct AppConfig {
   String title;
   String version;
   String build;
+  static const int MEM_SIZE_KW_MIN = 32;
+  static const int MEM_SIZE_KW_MAX = 2048;
+  int mem_size_kw = MEM_SIZE_KW_MAX;
 
   // [wifi]
   String wifi_ssid;
@@ -62,6 +65,10 @@ struct AppConfig {
   // Number of upcoming characters read from or written to the KL11 console
   // data registers to log. The counter decreases to zero automatically.
   int    diag_console_trace = 0;
+
+  // Number of upcoming kek RL/DL controller and host disk events to log.
+  // The counter decreases to zero automatically. 0 disables DL tracing.
+  int    diag_dl_trace = 0;
 
   // Per-instruction trace ring for panic diagnosis. Disabled by default
   // because it costs an MMU decode, instruction read, and register snapshot

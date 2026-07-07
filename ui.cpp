@@ -365,10 +365,11 @@ static void activate(int idx) {        // idx = absolute item index
       } else {
         uint32_t bytes = 0;
         if (!valid_rl_file_size(path, &bytes)) {
-          LOGE("ui: mount %c: %s rejected, RL image size is %u bytes; expected RL01=%u or RL02=%u",
+          LOGE("ui: mount %c: %s rejected, RL image size is %u bytes; expected RL01=%u or RL02=%u +/- %u%%",
                'A' + g_sel, path, (unsigned)bytes,
                (unsigned)rl11::RL01_IMAGE_BYTES,
-               (unsigned)rl11::RL02_IMAGE_BYTES);
+               (unsigned)rl11::RL02_IMAGE_BYTES,
+               (unsigned)DISK_SIZE_TOLERANCE_PERCENT);
           go(SC_DRIVES);
           break;
         }
@@ -521,9 +522,9 @@ static void draw_info() {
   T->drawString(line, 10, y, 2); y += 18;
   snprintf(line, sizeof(line), "Core: %s", pdp_core::engine_name());
   T->drawString(line, 10, y, 2); y += 18;
-  snprintf(line, sizeof(line), "RAM: %uK active / %uK target",
-           (unsigned)(pdp_core::memory_size() / 1024),
-           (unsigned)(pdp_core::target_memory_bytes() / 1024));
+  snprintf(line, sizeof(line), "RAM: %uKW active / %uKW config",
+           (unsigned)(pdp_core::memory_size() / 2048),
+           (unsigned)(pdp_core::target_memory_bytes() / 2048));
   T->drawString(line, 10, y, 2); y += 20;
 
   if (WiFi.status() == WL_CONNECTED) {

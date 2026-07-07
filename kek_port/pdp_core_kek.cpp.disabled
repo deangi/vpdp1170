@@ -8,7 +8,9 @@
 #include "pdp_core_kek.h"
 
 #include <Arduino.h>
+#include <algorithm>
 #include <atomic>
+#include <stdlib.h>
 #include <string>
 #include <string.h>
 
@@ -41,12 +43,51 @@ static uint32_t g_last_clock_us = 0;
 static TaskHandle_t g_clock_task = nullptr;
 static abool g_disk_read_activity { false };
 static abool g_disk_write_activity { false };
-static int g_rl_host_trace_left = 96;
+static int g_rl_host_trace_left = 0;
+static uint32_t g_target_memory_kw = 2048;
+
+static constexpr uint32_t kTraceRingSize = 512;
+
+struct TraceEntry {
+  bool valid;
+  uint16_t pc;
+  uint16_t opcode;
+  uint32_t phys_pc;
+  uint16_t psw;
+  uint16_t regs[7];
+  char disasm[96];
+};
+
+static TraceEntry* g_trace_ring = nullptr;
+static uint32_t g_trace_ring_next = 0;
+static bool g_trace_ring_wrapped = false;
+static bool g_trace_enabled = false;
+static bool g_panic_trace_dumped = false;
+static bool g_trace_frozen = false;
+
+extern "C" bool vpdp1170_kek_trace_enabled() {
+  return g_trace_enabled;
+}
+
+static uint32_t load_event() {
+  return g_event.load(std::memory_order_relaxed);
+}
+
+static void store_event(uint32_t value) {
+  g_event.store(value, std::memory_order_relaxed);
+}
 
 class host_slot_disk_backend : public disk_backend {
 public:
   host_slot_disk_backend(int slot, const char* device_name)
       : slot_(slot), device_name_(device_name ? device_name : "disk") {}
+
+  ~host_slot_disk_backend() override {
+    if (read_cache_) {
+      free(read_cache_);
+      read_cache_ = nullptr;
+    }
+  }
 
   std::string get_identifier() const override {
     const char* path = disk_path(slot_);
@@ -65,15 +106,59 @@ public:
   bool read(const off_t offset, const size_t n, uint8_t *const target,
             const size_t) override {
     if (!target || !disk_is_mounted(slot_)) return false;
-    int got = disk_read(slot_, (uint32_t)offset, target, (uint32_t)n);
-    bool ok = got == (int)n;
-    log_io("READ", offset, n, ok, got);
+    if (n == 0) return true;
+    refresh_cache_identity();
+
+    const uint32_t request_offset = (uint32_t)offset;
+    const uint32_t request_len = (uint32_t)n;
+    const uint32_t disk_bytes = disk_size_bytes(slot_);
+    if (read_cache_ &&
+        request_offset >= read_cache_offset_ &&
+        request_offset + request_len <= read_cache_offset_ + read_cache_len_) {
+      memcpy(target, read_cache_ + (request_offset - read_cache_offset_), request_len);
+      return true;
+    }
+
+    if (request_offset >= disk_bytes) {
+      memset(target, 0, request_len);
+      log_io("READ-ZERO", request_offset, request_len, true, request_len);
+      return true;
+    }
+
+    const uint32_t available = disk_bytes - request_offset;
+    const uint32_t read_len = std::min<uint32_t>(request_len, available);
+
+    if (request_len <= kReadCacheBytes && ensure_read_cache()) {
+      uint32_t fetch_len = std::min<uint32_t>(kReadCacheBytes, disk_bytes - request_offset);
+      if (fetch_len >= read_len) {
+        int got = disk_read(slot_, request_offset, read_cache_, fetch_len);
+        bool ok = got == (int)fetch_len;
+        log_io("READ", request_offset, fetch_len, ok, got);
+        if (ok) {
+          read_cache_offset_ = request_offset;
+          read_cache_len_ = fetch_len;
+          memcpy(target, read_cache_, read_len);
+          if (read_len < request_len)
+            memset(target + read_len, 0, request_len - read_len);
+          return true;
+        }
+      }
+    }
+
+    int got = disk_read(slot_, request_offset, target, read_len);
+    bool ok = got == (int)read_len;
+    if (ok && read_len < request_len)
+      memset(target + read_len, 0, request_len - read_len);
+    log_io(read_len < request_len ? "READ-PAD" : "READ",
+           request_offset, request_len, ok, got);
     return ok;
   }
 
   bool write(const off_t offset, const size_t n, const uint8_t *const from,
              const size_t) override {
     if (!from || !disk_is_mounted(slot_)) return false;
+    refresh_cache_identity();
+    invalidate_read_cache();
     int wrote = disk_write(slot_, (uint32_t)offset, from, (uint32_t)n);
     bool ok = wrote == (int)n;
     log_io("WRITE", offset, n, ok, wrote);
@@ -81,6 +166,39 @@ public:
   }
 
 private:
+  static constexpr uint32_t kReadCacheBytes = 32768;
+
+  bool ensure_read_cache() {
+    if (read_cache_) return true;
+    read_cache_ = (uint8_t*)ps_malloc(kReadCacheBytes);
+    if (!read_cache_) read_cache_ = (uint8_t*)malloc(kReadCacheBytes);
+    if (!read_cache_) {
+      LOGE("kek %s host read cache allocation failed (%u bytes)",
+           device_name_, (unsigned)kReadCacheBytes);
+      return false;
+    }
+    invalidate_read_cache();
+    return true;
+  }
+
+  void invalidate_read_cache() {
+    read_cache_offset_ = 0;
+    read_cache_len_ = 0;
+  }
+
+  void refresh_cache_identity() {
+    const char* path = disk_path(slot_);
+    const uint32_t disk_bytes = disk_size_bytes(slot_);
+    if (strncmp(cache_path_, path ? path : "", sizeof(cache_path_)) == 0 &&
+        cache_disk_bytes_ == disk_bytes) {
+      return;
+    }
+    strncpy(cache_path_, path ? path : "", sizeof(cache_path_) - 1);
+    cache_path_[sizeof(cache_path_) - 1] = 0;
+    cache_disk_bytes_ = disk_bytes;
+    invalidate_read_cache();
+  }
+
   void log_io(const char* op, off_t offset, size_t n, bool ok, int actual) {
     bool is_rl = strcmp(device_name_, "RL02") == 0;
     if (is_rl && g_rl_host_trace_left > 0) {
@@ -99,6 +217,11 @@ private:
 
   int slot_;
   const char* device_name_;
+  uint8_t* read_cache_ = nullptr;
+  uint32_t read_cache_offset_ = 0;
+  uint32_t read_cache_len_ = 0;
+  uint32_t cache_disk_bytes_ = 0;
+  char cache_path_[64] = {0};
 };
 
 static void write_physical_bytes(uint32_t address, const char* text) {
@@ -160,9 +283,10 @@ static bool ensure_rl02_attached() {
 static void install_boot_stub() {
   if (!g_bus || !g_cpu) return;
 
-  bool boot_rk = (g_boot_kind == 1) && ensure_rk05_attached();
-  bool boot_rl = (g_boot_kind == 0) && ensure_rl02_attached() &&
-                 disk_is_mounted(DRIVE_A);
+  const bool rk_attached = ensure_rk05_attached();
+  const bool rl_attached = ensure_rl02_attached();
+  bool boot_rk = (g_boot_kind == 1) && rk_attached;
+  bool boot_rl = (g_boot_kind == 0) && rl_attached && disk_is_mounted(DRIVE_A);
 
   if (boot_rk) {
     const uint32_t rk_words = sizeof(bootrom_rk0) / sizeof(uint16_t);
@@ -212,36 +336,522 @@ static void install_boot_stub() {
       (boot_rk || boot_rl) ? "" : " (boot device not attached)");
 }
 
-static void trace_next_instruction() {
-  if (!g_bus || !g_cpu) return;
+static void clear_trace_ring() {
+  if (!g_trace_ring) {
+    g_trace_ring_next = 0;
+    g_trace_ring_wrapped = false;
+    g_panic_trace_dumped = false;
+    g_trace_frozen = false;
+    return;
+  }
+  for (uint32_t i = 0; i < kTraceRingSize; i++) {
+    g_trace_ring[i].valid = false;
+  }
+  g_trace_ring_next = 0;
+  g_trace_ring_wrapped = false;
+  g_panic_trace_dumped = false;
+  g_trace_frozen = false;
+}
 
-  uint16_t address = g_cpu->getPC();
-  uint16_t opcode = 0;
-  auto value = g_bus->peek_word(g_cpu->getPSW_runmode(), address);
-  if (value.has_value()) opcode = value.value();
+static bool ensure_trace_ring() {
+  if (g_trace_ring) return true;
 
-  char disasm[96];
-  if (!disassemble_next(disasm, sizeof(disasm))) {
-    disasm[0] = 0;
+  g_trace_ring = (TraceEntry*)ps_malloc(sizeof(TraceEntry) * kTraceRingSize);
+  if (!g_trace_ring) {
+    g_trace_ring = (TraceEntry*)malloc(sizeof(TraceEntry) * kTraceRingSize);
+  }
+  if (!g_trace_ring) {
+    LOGE("kek panic trace allocation failed (%u bytes)",
+         (unsigned)(sizeof(TraceEntry) * kTraceRingSize));
+    return false;
+  }
+  clear_trace_ring();
+  return true;
+}
+
+static bool disassemble_at(uint16_t address, char* buffer, size_t size) {
+  if (!buffer || !size) return false;
+  buffer[0] = 0;
+  if (!g_cpu) return false;
+  if (address & 1) {
+    snprintf(buffer, size, "ODD-PC");
+    return true;
   }
 
-  LOG("kek trace: PC=%06o ins=%06o PS=%06o R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s",
-      (unsigned)address,
-      (unsigned)opcode,
-      (unsigned)g_cpu->getPSW(),
-      (unsigned)g_cpu->get_register(0),
-      (unsigned)g_cpu->get_register(1),
-      (unsigned)g_cpu->get_register(2),
-      (unsigned)g_cpu->get_register(3),
-      (unsigned)g_cpu->get_register(4),
-      (unsigned)g_cpu->get_register(5),
-      (unsigned)g_cpu->get_register(6),
-      disasm);
+  auto info = g_cpu->disassemble(address);
+  auto it = info.find("instruction-text");
+  if (it == info.end() || it->second.empty()) return false;
+
+  const std::string& text = it->second.front();
+  size_t i = 0;
+  while (i + 1 < size && i < text.size()) {
+    buffer[i] = text[i];
+    i++;
+  }
+  buffer[i] = 0;
+  return true;
+}
+
+static const char* trace_reg_name(uint8_t reg) {
+  switch (reg & 7) {
+    case 0: return "R0";
+    case 1: return "R1";
+    case 2: return "R2";
+    case 3: return "R3";
+    case 4: return "R4";
+    case 5: return "R5";
+    case 6: return "SP";
+    default: return "PC";
+  }
+}
+
+struct TraceDecodeContext {
+  uint16_t pc;
+  uint32_t phys_pc;
+  uint16_t next_offset;
+};
+
+static uint16_t trace_fetch_ext_word(TraceDecodeContext* ctx) {
+  if (!ctx || !g_bus) return 0;
+  uint16_t value = g_bus->read_physical(ctx->phys_pc + ctx->next_offset);
+  ctx->next_offset += 2;
+  return value;
+}
+
+static uint16_t trace_pc_relative_target(const TraceDecodeContext& ctx, uint16_t disp) {
+  return (uint16_t)(ctx.pc + ctx.next_offset + (int16_t)disp);
+}
+
+static void trace_operand_spec(uint8_t spec, char* buffer, size_t size,
+                               TraceDecodeContext* ctx = nullptr) {
+  if (!buffer || !size) return;
+  const uint8_t mode = (spec >> 3) & 7;
+  const uint8_t reg = spec & 7;
+  const char* r = trace_reg_name(reg);
+
+  switch (mode) {
+    case 0:
+      snprintf(buffer, size, "%s", r);
+      break;
+    case 1:
+      snprintf(buffer, size, "(%s)", r);
+      break;
+    case 2:
+      if (reg == 7 && ctx) {
+        uint16_t word = trace_fetch_ext_word(ctx);
+        snprintf(buffer, size, "#%06o", (unsigned)word);
+      } else {
+        snprintf(buffer, size, reg == 7 ? "#<word>" : "(%s)+", r);
+      }
+      break;
+    case 3:
+      if (reg == 7 && ctx) {
+        uint16_t word = trace_fetch_ext_word(ctx);
+        snprintf(buffer, size, "@#%06o", (unsigned)word);
+      } else {
+        snprintf(buffer, size, reg == 7 ? "@#<word>" : "@(%s)+", r);
+      }
+      break;
+    case 4:
+      snprintf(buffer, size, "-(%s)", r);
+      break;
+    case 5:
+      snprintf(buffer, size, "@-(%s)", r);
+      break;
+    case 6:
+      if (ctx) {
+        uint16_t disp = trace_fetch_ext_word(ctx);
+        if (reg == 7) {
+          snprintf(buffer, size, "%06o", (unsigned)trace_pc_relative_target(*ctx, disp));
+        } else {
+          snprintf(buffer, size, "%06o(%s)", (unsigned)disp, r);
+        }
+      } else {
+        snprintf(buffer, size, reg == 7 ? "<disp>(PC)" : "<disp>(%s)", r);
+      }
+      break;
+    case 7:
+      if (ctx) {
+        uint16_t disp = trace_fetch_ext_word(ctx);
+        if (reg == 7) {
+          snprintf(buffer, size, "@%06o", (unsigned)trace_pc_relative_target(*ctx, disp));
+        } else {
+          snprintf(buffer, size, "@%06o(%s)", (unsigned)disp, r);
+        }
+      } else {
+        snprintf(buffer, size, reg == 7 ? "@<disp>(PC)" : "@<disp>(%s)", r);
+      }
+      break;
+  }
+}
+
+static void describe_actual_opcode_at(uint16_t pc, uint32_t phys_pc,
+                                      uint16_t opcode, char* buffer, size_t size) {
+  if (!buffer || !size) return;
+  buffer[0] = 0;
+  TraceDecodeContext ctx { pc, phys_pc, 2 };
+
+  switch (opcode) {
+    case 0000000: snprintf(buffer, size, "HALT"); return;
+    case 0000001: snprintf(buffer, size, "WAIT"); return;
+    case 0000002: snprintf(buffer, size, "RTI"); return;
+    case 0000003: snprintf(buffer, size, "BPT"); return;
+    case 0000004: snprintf(buffer, size, "IOT"); return;
+    case 0000005: snprintf(buffer, size, "RESET"); return;
+    case 0000006: snprintf(buffer, size, "RTT"); return;
+    case 0000007: snprintf(buffer, size, "MFPT"); return;
+  }
+
+  if ((opcode & 0177770) == 0000200) {
+    snprintf(buffer, size, "RTS R%u", (unsigned)(opcode & 7));
+    return;
+  }
+
+  const uint16_t branch = opcode & 0177400;
+  const char* bname = nullptr;
+  switch (branch) {
+    case 0000400: bname = "BR"; break;
+    case 0001000: bname = "BNE"; break;
+    case 0001400: bname = "BEQ"; break;
+    case 0002000: bname = "BGE"; break;
+    case 0002400: bname = "BLT"; break;
+    case 0003000: bname = "BGT"; break;
+    case 0003400: bname = "BLE"; break;
+    case 0100000: bname = "BPL"; break;
+    case 0100400: bname = "BMI"; break;
+    case 0101000: bname = "BHI"; break;
+    case 0101400: bname = "BLOS"; break;
+    case 0102000: bname = "BVC"; break;
+    case 0102400: bname = "BVS"; break;
+    case 0103000: bname = "BCC/BHIS"; break;
+    case 0103400: bname = "BCS/BLO"; break;
+  }
+  if (bname) {
+    int8_t off = (int8_t)(opcode & 0377);
+    snprintf(buffer, size, "%s %+d words", bname, (int)off);
+    return;
+  }
+
+  if ((opcode & 0177000) == 0004000) {
+    char dst[32];
+    trace_operand_spec(opcode & 077, dst, sizeof(dst), &ctx);
+    snprintf(buffer, size, "JSR R%u,%s", (unsigned)((opcode >> 6) & 7), dst);
+    return;
+  }
+
+  if ((opcode & 0177000) == 0070000 || (opcode & 0177000) == 0071000 ||
+      (opcode & 0177000) == 0072000 || (opcode & 0177000) == 0073000 ||
+      (opcode & 0177000) == 0074000 || (opcode & 0177000) == 0075000 ||
+      (opcode & 0177000) == 0076000 || (opcode & 0177000) == 0077000) {
+    const uint8_t op = (opcode >> 9) & 7;
+    const uint8_t reg = (opcode >> 6) & 7;
+    const uint8_t dst_spec = opcode & 077;
+    const char* opname = nullptr;
+    switch (op) {
+      case 0: opname = "MUL"; break;
+      case 1: opname = "DIV"; break;
+      case 2: opname = "ASH"; break;
+      case 3: opname = "ASHC"; break;
+      case 4: opname = "XOR"; break;
+      case 7:
+        snprintf(buffer, size, "SOB R%u,%u", (unsigned)reg, (unsigned)dst_spec);
+        return;
+    }
+    if (opname) {
+      char dst[32];
+      trace_operand_spec(dst_spec, dst, sizeof(dst), &ctx);
+      snprintf(buffer, size, "%s R%u,%s", opname, (unsigned)reg, dst);
+    }
+    else {
+      snprintf(buffer, size, "EIS/RESERVED %06o", (unsigned)opcode);
+    }
+    return;
+  }
+
+  if ((opcode & 0007700) == 0005000 || (opcode & 0007700) == 0005100 ||
+      (opcode & 0007700) == 0005200 || (opcode & 0007700) == 0005300 ||
+      (opcode & 0007700) == 0005400 || (opcode & 0007700) == 0005500 ||
+      (opcode & 0007700) == 0005600 || (opcode & 0007700) == 0005700 ||
+      (opcode & 0007700) == 0006000 || (opcode & 0007700) == 0006100 ||
+      (opcode & 0007700) == 0006200 || (opcode & 0007700) == 0006300 ||
+      (opcode & 0007700) == 0006500 || (opcode & 0007700) == 0006600 ||
+      (opcode & 0007700) == 0006700 ||
+      (opcode & 0107700) == 0105000 || (opcode & 0107700) == 0105100 ||
+      (opcode & 0107700) == 0105200 || (opcode & 0107700) == 0105300 ||
+      (opcode & 0107700) == 0105400 || (opcode & 0107700) == 0105500 ||
+      (opcode & 0107700) == 0105600 || (opcode & 0107700) == 0105700 ||
+      (opcode & 0107700) == 0106000 || (opcode & 0107700) == 0106100 ||
+      (opcode & 0107700) == 0106200 || (opcode & 0107700) == 0106300 ||
+      (opcode & 0107700) == 0106500 || (opcode & 0107700) == 0106600 ||
+      (opcode & 0107700) == 0106700) {
+    const bool byte_mode = opcode & 0100000;
+    const uint16_t base = opcode & 0007700;
+    const char* opname = nullptr;
+    switch (base) {
+      case 0005000: opname = "CLR"; break;
+      case 0005100: opname = "COM"; break;
+      case 0005200: opname = "INC"; break;
+      case 0005300: opname = "DEC"; break;
+      case 0005400: opname = "NEG"; break;
+      case 0005500: opname = "ADC"; break;
+      case 0005600: opname = "SBC"; break;
+      case 0005700: opname = "TST"; break;
+      case 0006000: opname = "ROR"; break;
+      case 0006100: opname = "ROL"; break;
+      case 0006200: opname = "ASR"; break;
+      case 0006300: opname = "ASL"; break;
+      case 0006500: opname = byte_mode ? "MFPD" : "MFPI"; break;
+      case 0006600: opname = byte_mode ? "MTPD" : "MTPI"; break;
+      case 0006700: opname = byte_mode ? "MFPS" : "SXT"; break;
+    }
+    if (opname) {
+      char dst[32];
+      trace_operand_spec(opcode & 077, dst, sizeof(dst), &ctx);
+      snprintf(buffer, size, "%s%s %s", opname, byte_mode && base < 0006500 ? "B" : "", dst);
+      return;
+    }
+  }
+
+  const char* name = nullptr;
+  switch ((opcode >> 12) & 017) {
+    case 001: name = "MOV"; break;
+    case 002: name = "CMP"; break;
+    case 003: name = "BIT"; break;
+    case 004: name = "BIC"; break;
+    case 005: name = "BIS"; break;
+    case 006: name = "ADD"; break;
+    case 011: name = "MOVB"; break;
+    case 012: name = "CMPB"; break;
+    case 013: name = "BITB"; break;
+    case 014: name = "BICB"; break;
+    case 015: name = "BISB"; break;
+    case 016: name = "SUB"; break;
+  }
+  if (name) {
+    char src[32];
+    char dst[32];
+    trace_operand_spec((opcode >> 6) & 077, src, sizeof(src), &ctx);
+    trace_operand_spec(opcode & 077, dst, sizeof(dst), &ctx);
+    snprintf(buffer, size, "%s %s,%s", name, src, dst);
+    return;
+  }
+
+  if ((opcode & 0170000) == 0170000) {
+    const char* fp = nullptr;
+    switch ((opcode >> 8) & 017) {
+      case 000: fp = "FP11 status/misc"; break;
+      case 001: fp = "CLRF/TSTF/ABSF/NEGF"; break;
+      case 002: fp = "MULF"; break;
+      case 003: fp = "MODF"; break;
+      case 004: fp = "ADDF"; break;
+      case 005: fp = "LDF"; break;
+      case 006: fp = "SUBF"; break;
+      case 007: fp = "CMPF"; break;
+      case 010: fp = "STF"; break;
+      case 011: fp = "DIVF"; break;
+      case 012: fp = "STEXP"; break;
+      case 013: fp = "STCFI"; break;
+      case 014: fp = "STCFD"; break;
+      case 015: fp = "LDEXP"; break;
+      case 016: fp = "LDCIF"; break;
+      case 017: fp = "LDCDF"; break;
+    }
+    snprintf(buffer, size, "%s F%u,<mode %u R%u>",
+             fp ? fp : "FP11",
+             (unsigned)((opcode >> 6) & 3),
+             (unsigned)((opcode >> 3) & 7),
+             (unsigned)(opcode & 7));
+    return;
+  }
+
+  snprintf(buffer, size, "actual opcode %06o", (unsigned)opcode);
+}
+
+static bool capture_trace_entry(TraceEntry* entry) {
+  if (!entry || !g_bus || !g_cpu) return false;
+
+  entry->valid = true;
+  entry->pc = g_cpu->getPC();
+  entry->opcode = 0;
+  entry->phys_pc = 0;
+  entry->psw = g_cpu->getPSW();
+  for (int i = 0; i < 7; i++) {
+    entry->regs[i] = g_cpu->get_register(i);
+  }
+
+  if (entry->pc & 1) {
+    snprintf(entry->disasm, sizeof(entry->disasm), "ODD-PC");
+    return true;
+  }
+
+  auto meta = g_bus->getMMU()->calculate_physical_address(g_cpu->getPSW_runmode(), entry->pc);
+  entry->phys_pc = meta.physical_instruction;
+
+  auto value = g_bus->peek_word(g_cpu->getPSW_runmode(), entry->pc);
+  if (value.has_value()) entry->opcode = value.value();
+
+  if (value.has_value()) {
+    describe_actual_opcode_at(entry->pc, entry->phys_pc, entry->opcode,
+                              entry->disasm, sizeof(entry->disasm));
+  } else if (!disassemble_at(entry->pc, entry->disasm, sizeof(entry->disasm))) {
+    entry->disasm[0] = 0;
+  }
+  return true;
+}
+
+static bool capture_last_instruction_trace_entry(TraceEntry* entry) {
+  if (!entry || !g_bus || !g_cpu) return false;
+
+  uint16_t actual_pc = 0;
+  uint16_t actual_opcode = 0;
+  if (!g_cpu->get_last_instruction(&actual_pc, &actual_opcode))
+    return false;
+
+  entry->valid = true;
+  entry->pc = actual_pc;
+  entry->opcode = actual_opcode;
+  entry->phys_pc = 0;
+  g_cpu->get_last_instruction_physical(&entry->phys_pc);
+  entry->psw = g_cpu->getPSW();
+  for (int i = 0; i < 7; i++) {
+    entry->regs[i] = g_cpu->get_register(i);
+  }
+
+  if (entry->pc & 1) {
+    snprintf(entry->disasm, sizeof(entry->disasm), "ODD-PC");
+    return true;
+  }
+
+  describe_actual_opcode_at(entry->pc, entry->phys_pc, actual_opcode,
+                            entry->disasm, sizeof(entry->disasm));
+
+  return true;
+}
+
+static void print_trace_entry(const char* prefix, const TraceEntry& entry) {
+  if (!entry.valid) return;
+  LOG("%s PC=%06o P=%08o ins=%06o PS=%06o R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s",
+      prefix ? prefix : "kek trace:",
+      (unsigned)entry.pc,
+      (unsigned)entry.phys_pc,
+      (unsigned)entry.opcode,
+      (unsigned)entry.psw,
+      (unsigned)entry.regs[0],
+      (unsigned)entry.regs[1],
+      (unsigned)entry.regs[2],
+      (unsigned)entry.regs[3],
+      (unsigned)entry.regs[4],
+      (unsigned)entry.regs[5],
+      (unsigned)entry.regs[6],
+      entry.disasm);
+}
+
+static void record_trace_entry() {
+  if (!g_trace_enabled || !g_trace_ring || g_trace_frozen) return;
+  if (capture_last_instruction_trace_entry(&g_trace_ring[g_trace_ring_next])) {
+    g_trace_ring_next++;
+    if (g_trace_ring_next >= kTraceRingSize) {
+      g_trace_ring_next = 0;
+      g_trace_ring_wrapped = true;
+    }
+  }
+}
+
+static void trace_next_instruction() {
+  TraceEntry entry {};
+  if (capture_last_instruction_trace_entry(&entry)) {
+    print_trace_entry("kek trace:", entry);
+  }
+}
+
+static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
+  if (!g_trace_enabled) {
+    if (honor_panic_latch) {
+      TraceEntry current {};
+      capture_trace_entry(&current);
+      LOGE("kek PDP-11/70 stopped: %s PC=%06o ins=%06o PS=%06o %s",
+           reason ? reason : "unknown",
+           current.valid ? (unsigned)current.pc : 0,
+           current.valid ? (unsigned)current.opcode : 0,
+           current.valid ? (unsigned)current.psw : 0,
+           current.valid ? current.disasm : "");
+      return;
+    }
+    LOG("kek trace history requested but trace is disabled");
+    return;
+  }
+  if (honor_panic_latch && g_panic_trace_dumped) return;
+  if (honor_panic_latch) {
+    g_panic_trace_dumped = true;
+    g_trace_frozen = true;
+  }
+
+  TraceEntry current {};
+  capture_trace_entry(&current);
+  if (honor_panic_latch) {
+    LOGE("kek PDP-11/70 stopped: %s PC=%06o PS=%06o",
+         reason ? reason : "unknown",
+         current.valid ? (unsigned)current.pc : 0,
+         current.valid ? (unsigned)current.psw : 0);
+  } else {
+    LOG("kek trace history: %s PC=%06o PS=%06o",
+        reason ? reason : "manual dump",
+        current.valid ? (unsigned)current.pc : 0,
+        current.valid ? (unsigned)current.psw : 0);
+  }
+
+  uint32_t count = g_trace_ring ? (g_trace_ring_wrapped ? kTraceRingSize : g_trace_ring_next) : 0;
+  Serial.printf("[vpdp1170]   --- last %u kek instructions %s ---\r\n",
+                (unsigned)count,
+                honor_panic_latch ? "before stop" : "in history");
+  uint32_t start = g_trace_ring_wrapped ? g_trace_ring_next : 0;
+  for (uint32_t i = 0; i < count; i++) {
+    const TraceEntry& entry = g_trace_ring[(start + i) % kTraceRingSize];
+    if (!entry.valid) continue;
+    Serial.printf("[vpdp1170]   PC=%06o P=%08o ins=%06o PS=%06o "
+                  "R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s\r\n",
+                  (unsigned)entry.pc,
+                  (unsigned)entry.phys_pc,
+                  (unsigned)entry.opcode,
+                  (unsigned)entry.psw,
+                  (unsigned)entry.regs[0],
+                  (unsigned)entry.regs[1],
+                  (unsigned)entry.regs[2],
+                  (unsigned)entry.regs[3],
+                  (unsigned)entry.regs[4],
+                  (unsigned)entry.regs[5],
+                  (unsigned)entry.regs[6],
+                  entry.disasm);
+  }
+  if (current.valid) {
+    Serial.printf("[vpdp1170]   --- current kek state %s ---\r\n",
+                  honor_panic_latch ? "after stop" : "at history dump");
+    Serial.printf("[vpdp1170]   PC=%06o P=%08o ins=%06o PS=%06o "
+                  "R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s\r\n",
+                  (unsigned)current.pc,
+                  (unsigned)current.phys_pc,
+                  (unsigned)current.opcode,
+                  (unsigned)current.psw,
+                  (unsigned)current.regs[0],
+                  (unsigned)current.regs[1],
+                  (unsigned)current.regs[2],
+                  (unsigned)current.regs[3],
+                  (unsigned)current.regs[4],
+                  (unsigned)current.regs[5],
+                  (unsigned)current.regs[6],
+                  current.disasm);
+  }
+  Serial.printf("[vpdp1170]   --- end kek %s trace ---\r\n",
+                honor_panic_latch ? "panic" : "history");
+}
+
+static void dump_panic_trace(const char* reason) {
+  dump_trace_ring(reason, true);
 }
 
 static void service_line_clock() {
   if (!g_bus || !g_cpu || !g_bus->getKW11_L()) return;
-  if (g_tty) g_tty->notify_rx();
+  if (g_tty) g_tty->service_deferred();
 
   kek_kwp::tick();
   if (kek_kwp::take_interrupt())
@@ -283,7 +893,10 @@ bool init() {
   g_bus = new bus();
   if (!g_bus) return false;
 
-  g_bus->set_memory_size((int)kFullMemoryPages);
+  const uint32_t target_kw = std::min<uint32_t>(2048, std::max<uint32_t>(32, g_target_memory_kw));
+  const uint32_t ram_kw = target_kw > kIoPageKW ? target_kw - kIoPageKW : target_kw;
+  const uint32_t pages = std::min<uint32_t>(kFullMemoryPages, std::max<uint32_t>(1, (ram_kw + 3) / 4));
+  g_bus->set_memory_size((int)pages);
   kek_kwp::reset();
 
   g_cpu = new cpu(g_bus, &g_event);
@@ -300,33 +913,73 @@ bool init() {
     LOG("kek KW11-L line clock task started at 60 Hz");
   }
 
+  clear_trace_ring();
   return g_bus->getRAM() && g_bus->getMMU();
+}
+
+void set_target_memory_kw(uint32_t kw) {
+  if (kw < 32) kw = 32;
+  if (kw > 2048) kw = 2048;
+  g_target_memory_kw = kw;
+}
+
+uint32_t target_memory_bytes() {
+  const uint32_t target_kw = std::min<uint32_t>(2048, std::max<uint32_t>(32, g_target_memory_kw));
+  return target_kw * 2048u;
 }
 
 void reset() {
   if (!g_cpu) return;
+  store_event(EVENT_NONE);
   g_cpu->reset();
   g_last_clock_us = 0;
   kek_kwp::reset();
+  clear_trace_ring();
   install_boot_stub();
 }
 
 void cold_boot() {
   if (!g_bus || !g_cpu) return;
+  store_event(EVENT_NONE);
   g_bus->reset(true);
   g_cpu->reset();
   g_last_clock_us = 0;
   kek_kwp::reset();
+  clear_trace_ring();
   install_boot_stub();
+}
+
+static void service_deferred_devices() {
+  if (g_rl02) g_rl02->service_deferred();
+  if (g_tty) g_tty->service_deferred();
 }
 
 uint32_t run(uint32_t max_cycles) {
   if (!g_cpu || g_paused) return 0;
   uint32_t ran = 0;
   while (ran < max_cycles) {
+    if (g_cpu->getPC() & 1) {
+      record_trace_entry();
+      dump_panic_trace("odd PC before instruction fetch");
+      g_paused = true;
+      break;
+    }
+    if (!g_cpu->step()) {
+      record_trace_entry();
+      dump_panic_trace("cpu step returned false");
+      g_paused = true;
+      break;
+    }
+    record_trace_entry();
     if (g_trace_remaining) trace_next_instruction();
-    if (!g_cpu->step()) break;
+    service_deferred_devices();
     ran++;
+    if (load_event() == EVENT_HALT) {
+      dump_panic_trace("guest HALT instruction");
+      g_paused = true;
+      store_event(EVENT_NONE);
+      break;
+    }
     if (g_trace_remaining) g_trace_remaining--;
   }
   return ran;
@@ -375,6 +1028,18 @@ uint16_t psw() {
   return g_cpu ? g_cpu->getPSW() : 0;
 }
 
+bool set_reg16(int idx, uint16_t value) {
+  if (!g_cpu || idx < 0 || idx > 7) return false;
+  g_cpu->set_register(idx, value);
+  return true;
+}
+
+bool set_psw(uint16_t value) {
+  if (!g_cpu) return false;
+  g_cpu->setPSW(value, false);
+  return true;
+}
+
 uint32_t instruction_count() {
   return g_cpu ? (uint32_t)g_cpu->get_instructions_executed_count() : 0;
 }
@@ -382,6 +1047,7 @@ uint32_t instruction_count() {
 bool next_instruction(uint16_t* address, uint16_t* opcode) {
   if (!g_bus || !g_cpu || !address || !opcode) return false;
   *address = g_cpu->getPC();
+  if (*address & 1) return false;
   auto value = g_bus->peek_word(g_cpu->getPSW_runmode(), *address);
   if (!value.has_value()) return false;
   *opcode = value.value();
@@ -389,27 +1055,72 @@ bool next_instruction(uint16_t* address, uint16_t* opcode) {
 }
 
 bool disassemble_next(char* buffer, size_t size) {
-  if (!buffer || !size) return false;
-  buffer[0] = 0;
   if (!g_cpu) return false;
-
-  auto info = g_cpu->disassemble(g_cpu->getPC());
-  auto it = info.find("instruction-text");
-  if (it == info.end() || it->second.empty()) return false;
-
-  const std::string& text = it->second.front();
-  size_t i = 0;
-  while (i + 1 < size && i < text.size()) {
-    buffer[i] = text[i];
-    i++;
-  }
-  buffer[i] = 0;
-  return true;
+  return disassemble_at(g_cpu->getPC(), buffer, size);
 }
 
 bool read_physical_word(uint32_t address, uint16_t* value) {
   if (!g_bus || !value || (address & 1)) return false;
   *value = g_bus->read_physical(address);
+  return true;
+}
+
+bool read_mmu_word(uint16_t address, uint16_t* value) {
+  if (!g_bus || !g_cpu || !value || (address & 1)) return false;
+  auto result = g_bus->peek_word(g_cpu->getPSW_runmode(), address);
+  if (!result.has_value()) return false;
+  *value = result.value();
+  return true;
+}
+
+bool get_mmu_summary(uint16_t* mmr0, uint16_t* mmr1, uint16_t* mmr2,
+                     uint16_t* mmr3, uint16_t* cpuerr, uint16_t* pir,
+                     uint32_t* io_base) {
+  if (!g_bus || !g_bus->getMMU() || !mmr0 || !mmr1 || !mmr2 || !mmr3 ||
+      !cpuerr || !pir || !io_base) return false;
+  mmu* m = g_bus->getMMU();
+  *mmr0 = m->getMMR0();
+  *mmr1 = m->getMMR1();
+  *mmr2 = m->getMMR2();
+  *mmr3 = m->getMMR3();
+  *cpuerr = m->getCPUERR();
+  *pir = m->getPIR();
+  *io_base = m->get_io_base();
+  return true;
+}
+
+bool get_mmu_page(int run_mode, bool data_space, int page, uint16_t* par,
+                  uint16_t* pdr, uint32_t* physical_base) {
+  if (!g_bus || !g_bus->getMMU() || run_mode < 0 || run_mode > 3 ||
+      page < 0 || page > 7 || !par || !pdr || !physical_base) return false;
+  mmu* m = g_bus->getMMU();
+  int index = m->calc_par_pdr_index(run_mode, data_space ? d_space : i_space,
+                                    page);
+  *par = m->getPAR(index);
+  *pdr = m->getPDR(index);
+  *physical_base = m->get_physical_memory_offset(index);
+  return true;
+}
+
+bool get_unibus_map_entry(int entry, uint32_t* base) {
+  if (!g_bus || !base || entry < 0 || entry >= UNIBUS_MAP_ENTRIES) return false;
+  *base = g_bus->get_unibus_map_entry(entry);
+  return true;
+}
+
+bool get_interrupt_summary(uint16_t* psw, bool* any_pending,
+                           uint8_t counts[8], uint16_t first_vectors[8]) {
+  if (!g_cpu || !psw || !any_pending || !counts || !first_vectors)
+    return false;
+
+  *psw = g_cpu->getPSW();
+  *any_pending = g_cpu->check_if_interrupts_pending();
+  auto queued = g_cpu->get_queued_interrupts();
+  for (int level = 0; level < 8; level++) {
+    size_t count = queued[level].size();
+    counts[level] = count > 255 ? 255 : (uint8_t)count;
+    first_vectors[level] = queued[level].empty() ? 0 : *queued[level].begin();
+  }
   return true;
 }
 
@@ -423,17 +1134,68 @@ void set_boot_kind(int kind) {
   g_boot_kind = kind;
 }
 
-void set_trace(bool) {}
-void monitor_pause() { g_paused = true; }
-void monitor_continue() { g_paused = false; }
+void set_trace(bool enabled) {
+  if (enabled) {
+    if (!ensure_trace_ring()) {
+      g_trace_enabled = false;
+      return;
+    }
+    g_trace_enabled = true;
+    clear_trace_ring();
+    LOG("kek panic trace enabled (%u instruction ring)",
+        (unsigned)kTraceRingSize);
+  } else {
+    g_trace_enabled = false;
+  }
+}
+
+void set_dl_trace(uint32_t count) {
+  uint32_t limited = count > 1000000 ? 1000000 : count;
+  g_rl_host_trace_left = (int)limited;
+  rl02_set_trace((int)limited);
+  if (limited > 0) {
+    LOG("kek DL trace=%u", (unsigned)limited);
+  }
+}
+
+uint32_t dl_trace_remaining() {
+  int controller = rl02_trace_remaining();
+  int host = g_rl_host_trace_left;
+  int remaining = controller > host ? controller : host;
+  return remaining < 0 ? 0 : (uint32_t)remaining;
+}
+
+void monitor_pause() {
+  g_paused = true;
+  dump_panic_trace("monitor pause");
+}
+void monitor_continue() {
+  g_trace_frozen = false;
+  g_paused = false;
+}
 bool monitor_paused() { return g_paused; }
 
 uint32_t monitor_step() {
   if (!g_cpu) return 0;
   bool was_paused = g_paused;
   g_paused = true;
-  trace_next_instruction();
+  g_trace_frozen = false;
+  if (g_cpu->getPC() & 1) {
+    record_trace_entry();
+    dump_panic_trace("monitor step blocked by odd PC");
+    g_paused = true;
+    return 0;
+  }
+  store_event(EVENT_NONE);
   uint32_t ran = g_cpu->step() ? 1 : 0;
+  record_trace_entry();
+  trace_next_instruction();
+  if (ran) service_deferred_devices();
+  if (!ran) dump_panic_trace("monitor step returned false");
+  else if (load_event() == EVENT_HALT) {
+    dump_panic_trace("guest HALT instruction");
+    store_event(EVENT_NONE);
+  }
   g_paused = was_paused ? true : g_paused;
   return ran;
 }
@@ -444,6 +1206,10 @@ void monitor_trace_next(uint32_t count) {
 
 uint32_t monitor_trace_remaining() {
   return g_trace_remaining;
+}
+
+void monitor_dump_history() {
+  dump_trace_ring("monitor history", false);
 }
 
 }  // namespace pdp_core_kek

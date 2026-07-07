@@ -187,7 +187,7 @@ dl3  =
 rk0  = /unixv6.dsk
 rp0  =
 rp0_type = rp06
-boot = rk0                    ; or dl0, dl1, dl2, dl3
+boot = rk0                    ; or dl0/rl0, dl1/rl1, dl2/rl2, dl3/rl3
 ```
 
 ### RL and RK disk selection
@@ -197,6 +197,7 @@ The emulator can boot from either controller:
 - `boot = dl0` through `boot = dl3` selects the RL11 bootstrap and treats
   the four disk slots as RL drives `DL0` through `DL3`. RL mounts require
   exact RL01 images of 5,242,880 bytes or exact RL02 images of 10,485,760 bytes.
+  `boot = rl0` through `boot = rl3` are accepted as aliases for the same drives.
 - `boot = rk0` selects the RK11 bootstrap. The `rk0` image is mounted in a
   dedicated RK0 host slot, separate from `dl0` through `dl3`. RK05 images are
   approximately 2.5 MB; some distributions use paired or combined images of

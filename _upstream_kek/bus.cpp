@@ -2,6 +2,7 @@
 // Released under MIT license
 
 #include "gen.h"
+#include <algorithm>
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -21,7 +22,6 @@
 #include "utils.h"
 
 #if defined(ESP32)
-#include <esp_debug_helpers.h>
 #include "../kek_kwp.h"
 #endif
 
@@ -141,6 +141,69 @@ FLASHMEM void bus::show_state(console *const cnsl) const
 	cnsl->put_string_lf(format("Console LEDs: %06o", console_leds));
 }
 
+void bus::reset_unibus_map()
+{
+	for(int i=0; i<UNIBUS_MAP_ENTRIES; i++)
+		unibus_map[i] = uint32_t(i) * UNIBUS_MAP_PAGE_SIZE;
+}
+
+uint16_t bus::read_unibus_map_register(const uint16_t a, const word_mode_t word_mode) const
+{
+	const uint16_t offset = a - ADDR_UNIBUS_MAP_START;
+	const int entry = offset / 4;
+	const int word = (offset / 2) & 1;
+	uint32_t value = entry >= 0 && entry < UNIBUS_MAP_ENTRIES ? unibus_map[entry] : 0;
+	uint16_t result = word ? uint16_t((value >> 16) & 077) : uint16_t(value & 0177776);
+
+	if (word_mode == wm_byte)
+		result = (a & 1) ? (result >> 8) & 0xff : result & 0xff;
+
+	DOLOG(log_ss::LS_BUS_IO, "READ-I/O unibus map[%02d].%d (%06o): %06o", entry, word, a, result);
+	return result;
+}
+
+void bus::write_unibus_map_register(const uint16_t a, const word_mode_t word_mode, const uint16_t value)
+{
+	const uint16_t offset = a - ADDR_UNIBUS_MAP_START;
+	const int entry = offset / 4;
+	const int word = (offset / 2) & 1;
+	if (entry < 0 || entry >= UNIBUS_MAP_ENTRIES)
+		return;
+
+	uint16_t reg_word = word ? uint16_t((unibus_map[entry] >> 16) & 077) : uint16_t(unibus_map[entry] & 0177776);
+	if (word_mode == wm_byte)
+		update_word(&reg_word, a & 1, value);
+	else
+		reg_word = value;
+
+	if (word)
+		unibus_map[entry] = (unibus_map[entry] & 0x0000ffffu) | ((uint32_t(reg_word) & 0177777) << 16);
+	else
+		unibus_map[entry] = (unibus_map[entry] & 0xffff0000u) | uint32_t(reg_word & 0177777);
+	unibus_map[entry] &= 017777776;
+
+	DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O unibus map[%02d].%d (%06o): %06o -> base %08o",
+			entry, word, a, value, unibus_map[entry]);
+}
+
+uint32_t bus::translate_unibus_address(const uint32_t a) const
+{
+	const uint32_t unibus_address = a & 0777777;
+	const uint32_t entry = unibus_address / UNIBUS_MAP_PAGE_SIZE;
+	const uint32_t offset = unibus_address & UNIBUS_MAP_PAGE_MASK;
+
+	if (entry >= UNIBUS_MAP_ENTRIES)
+		return unibus_address;
+
+	if (entry == UNIBUS_MAP_ENTRIES - 1)
+		return 017760000 + offset;
+
+	if (!mmu_ || (mmu_->getMMR3() & 040) == 0)
+		return unibus_address;
+
+	return (unibus_map[entry] + offset) & 017777777;
+}
+
 FLASHMEM void bus::set_memory_size(const int n_pages)
 {
 	uint32_t n_bytes = n_pages * 8192l;
@@ -164,6 +227,8 @@ void bus::init()
 
 void bus::reset(const bool hard)
 {
+	reset_unibus_map();
+
 	if (mmu_)
 		mmu_->reset(hard);
 #if !defined(TEENSY4_1)
@@ -389,11 +454,8 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 		return 0;
 	}
 
-	if (a >= 0170200 && a <= 0170377) { // unibus map
-		DOLOG(log_ss::LS_BUS_IO, "READ-I/O unibus map (%06o): %o", a, 0);
-		// TODO
-		return 0;
-	}
+	if (a >= ADDR_UNIBUS_MAP_START && a <= ADDR_UNIBUS_MAP_END)
+		return read_unibus_map_register(a, word_mode);
 
 	if (a >= 0172100 && a <= 0172137) {  // MM11-LP parity
 		DOLOG(log_ss::LS_BUS_IO, "READ-I/O MM11-LP parity (%06o): %o", a, 1);
@@ -521,7 +583,7 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 	if (deqna_ && a >= DEQNA_BASE && a < DEQNA_END)
 		return word_mode == wm_byte ? deqna_->read_byte(a) : deqna_->read_word(a);
 
-	// LO size register field must be all 1s, so subtract 1
+	// LO size register field must be all 1s, so subtract 1.
 	uint32_t system_size = m->get_memory_size() / 64 - 1;
 	if (system_size == 0177777)
 		system_size = 0167777;
@@ -538,9 +600,10 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 		return temp;
 	}
 
-	DOLOG(log_ss::LS_BUS_IO, "READ-I/O UNHANDLED read %06o (%c), (base: %o)", a + mmu_->get_io_base(), word_mode == wm_byte ? 'B' : ' ', mmu_->get_io_base());
+	const uint32_t physical_io_addr = mmu_->get_io_base() + ((uint32_t)a - 0160000);
+	DOLOG(log_ss::LS_BUS_IO, "READ-I/O UNHANDLED read %08o/%06o (%c), (base: %o)", physical_io_addr, a, word_mode == wm_byte ? 'B' : ' ', mmu_->get_io_base());
 
-	c->trap(004);  // no such i/o
+	c->trap(004, -1, true);  // no-such-I/O probes must resume after the faulting instruction
 	throw 1;
 
 	return 0;
@@ -568,8 +631,8 @@ void bus::verify_pointer_bounds(const uint32_t m_offset, const int page_index)
 			mmu_->setMMR0_as_is(temp);
 		}
 
-		DOLOG(log_ss::LS_BUS, "TRAP 250 for access valid");
-		c->trap(0250);
+		DOLOG(log_ss::LS_BUS, "TRAP 004 for non-existent physical memory");
+		c->trap(004, -1, true);
 
 		throw 6;
 	}
@@ -824,9 +887,8 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 		return false;
 	}
 
-	if (a >= 0170200 && a <= 0170377) { // unibus map
-		DOLOG(log_ss::LS_BUS_IO, "writing %06o to unibus map (%06o)", value, a);
-		// TODO
+	if (a >= ADDR_UNIBUS_MAP_START && a <= ADDR_UNIBUS_MAP_END) {
+		write_unibus_map_register(a, word_mode, value);
 		return false;
 	}
 
@@ -843,7 +905,8 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 
 	///////////
 
-	DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O UNHANDLED %08o(%c): %06o (base: %o)", a + mmu_->get_io_base(), word_mode == wm_byte ? 'B' : 'W', value, mmu_->get_io_base());
+	const uint32_t physical_io_addr = mmu_->get_io_base() + ((uint32_t)a - 0160000);
+	DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O UNHANDLED %08o/%06o(%c): %06o (base: %o)", physical_io_addr, a, word_mode == wm_byte ? 'B' : 'W', value, mmu_->get_io_base());
 
 	if (word_mode == wm_word && (a & 1)) [[unlikely]] {
 		DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O to %08o (value: %06o) - odd address!", a + mmu_->get_io_base(), value);
@@ -853,7 +916,7 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 		throw 8;
 	}
 
-	c->trap(004);  // no such i/o
+	c->trap(004, -1, true);  // no-such-I/O probes must resume after the faulting instruction
 
 	throw 9;
 }
@@ -862,7 +925,7 @@ bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, const uint1
 {
 	const uint8_t apf        = addr_in >> 13; // active page field
 	auto          space      = mmu_->get_use_data_space(run_mode) ? space_in : i_space;
-	const auto [ m_offset, page_index ] = mmu_->calculate_physical_address(run_mode, addr_in, false, space);
+	const auto [ m_offset, page_index ] = mmu_->calculate_physical_address(run_mode, addr_in, true, space);
 
 	uint32_t      io_base    = mmu_->get_io_base();
 	bool          is_io      = m_offset >= io_base;
@@ -895,9 +958,10 @@ bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, const uint1
 
 void bus::write_unibus_word(const uint32_t a, const uint16_t v)
 {
-	DOLOG(log_ss::LS_BUS, "write_unibus_word[%08o]=%06o (%04x)", a, v, v);
-	if (a < m->get_memory_size())
-		m->write_word(a, v);
+	const uint32_t pa = translate_unibus_address(a);
+	DOLOG(log_ss::LS_BUS, "write_unibus_word[%08o->%08o]=%06o (%04x)", a, pa, v, v);
+	if (pa < m->get_memory_size())
+		m->write_word(pa, v);
 }
 
 void bus::write_physical(const uint32_t a, const uint16_t value)
@@ -940,6 +1004,14 @@ uint16_t bus::read_physical_byte(const uint32_t a)
 	return value;
 }
 
+bool bus::clear_physical_block(const uint32_t a, const uint32_t n)
+{
+	if (a > m->get_memory_size() || n > m->get_memory_size() - a)
+		return false;
+
+	return m->clear_block(a, n);
+}
+
 uint16_t bus::read_word(const uint16_t a, const d_i_space_t s)
 {
 	return read(a, wm_word, c->getPSW_runmode(), s);
@@ -967,25 +1039,66 @@ void bus::write_word(const uint16_t a, const uint16_t value, const d_i_space_t s
 // TODO check for odd address
 uint16_t bus::read_unibus_word(const uint32_t a) const
 {
+	const uint32_t pa = translate_unibus_address(a);
 	uint16_t v = 0;
-	if (a < m->get_memory_size())
-		v = m->read_word(a);
-	DOLOG(log_ss::LS_BUS, "read_unibus_word[%08o]=%06o (0x%04x)", a, v, v);
+	if (pa < m->get_memory_size())
+		v = m->read_word(pa);
+	DOLOG(log_ss::LS_BUS, "read_unibus_word[%08o->%08o]=%06o (0x%04x)", a, pa, v, v);
 	return v;
 }
 
 uint8_t bus::read_unibus_byte(const uint32_t a) const
 {
+	const uint32_t pa = translate_unibus_address(a);
 	uint8_t v = 0;
-	if (a < m->get_memory_size())
-		v = m->read_byte(a);
-	DOLOG(log_ss::LS_BUS, "read_unibus_byte[%08o]=%03o (0x%02x)", a, v, v);
+	if (pa < m->get_memory_size())
+		v = m->read_byte(pa);
+	DOLOG(log_ss::LS_BUS, "read_unibus_byte[%08o->%08o]=%03o (0x%02x)", a, pa, v, v);
 	return v;
+}
+
+uint32_t bus::read_unibus_block(uint32_t a, uint8_t *target, uint32_t n) const
+{
+	uint32_t done = 0;
+	while (done < n) {
+		const uint32_t page_left = UNIBUS_MAP_PAGE_SIZE - (a & UNIBUS_MAP_PAGE_MASK);
+		uint32_t cur = std::min(page_left, n - done);
+		const uint32_t pa = translate_unibus_address(a);
+		if (pa >= m->get_memory_size())
+			break;
+		cur = std::min(cur, m->get_memory_size() - pa);
+		if (!m->read_block(pa, target + done, cur))
+			break;
+		DOLOG(log_ss::LS_BUS, "read_unibus_block[%08o->%08o]=%u", a, pa, cur);
+		done += cur;
+		a += cur;
+	}
+	return done;
 }
 
 void bus::write_unibus_byte(const uint32_t a, const uint8_t v)
 {
-	DOLOG(log_ss::LS_BUS, "write_unibus_byte[%08o]=%03o (0x%02x)", a, v, v);
-	if (a < m->get_memory_size())
-		m->write_byte(a, v);
+	const uint32_t pa = translate_unibus_address(a);
+	DOLOG(log_ss::LS_BUS, "write_unibus_byte[%08o->%08o]=%03o (0x%02x)", a, pa, v, v);
+	if (pa < m->get_memory_size())
+		m->write_byte(pa, v);
+}
+
+uint32_t bus::write_unibus_block(uint32_t a, const uint8_t *source, uint32_t n)
+{
+	uint32_t done = 0;
+	while (done < n) {
+		const uint32_t page_left = UNIBUS_MAP_PAGE_SIZE - (a & UNIBUS_MAP_PAGE_MASK);
+		uint32_t cur = std::min(page_left, n - done);
+		const uint32_t pa = translate_unibus_address(a);
+		if (pa >= m->get_memory_size())
+			break;
+		cur = std::min(cur, m->get_memory_size() - pa);
+		if (!m->write_block(pa, source + done, cur))
+			break;
+		DOLOG(log_ss::LS_BUS, "write_unibus_block[%08o->%08o]=%u", a, pa, cur);
+		done += cur;
+		a += cur;
+	}
+	return done;
 }

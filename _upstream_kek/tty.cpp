@@ -4,6 +4,9 @@
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
+#if defined(ESP32)
+#include <Arduino.h>
+#endif
 
 #include "tty.h"
 #include "cpu.h"
@@ -20,6 +23,19 @@ const char * const regnames[] = {
 	"puncher buffer"
 	};
 
+static constexpr uint16_t TTY_DONE = 0200;
+static constexpr uint16_t TTY_IE   = 0100;
+static constexpr uint32_t TTY_TX_DELAY_US = 100;
+
+static uint32_t tty_now_us()
+{
+#if defined(ESP32)
+	return micros();
+#else
+	return 0;
+#endif
+}
+
 tty::tty(console *const c, bus *const b) :
 	c(c),
 	b(b)
@@ -34,8 +50,71 @@ tty::~tty()
 
 void tty::reset(const bool hard)
 {
-	if (hard)
+	if (hard) {
 		memset(registers, 0x00, sizeof registers);
+		registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] = TTY_DONE;
+	}
+	rx_irq_asserted = false;
+	tx_irq_asserted = false;
+	tx_ready_reported = true;
+	tx_busy = false;
+	tx_ready_at_us = 0;
+}
+
+void tty::update_rx_interrupt()
+{
+	const uint16_t tks = registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2];
+	const bool should_assert = (tks & (TTY_DONE | TTY_IE)) == (TTY_DONE | TTY_IE);
+	if (should_assert && !rx_irq_asserted) {
+		rx_irq_asserted = true;
+		b->getCpu()->queue_interrupt(4, 060);
+	}
+	else if (!should_assert && rx_irq_asserted) {
+		rx_irq_asserted = false;
+		b->getCpu()->unqueue_interrupt(4, 060);
+	}
+}
+
+void tty::update_tx_interrupt()
+{
+	const uint16_t tps = registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2];
+	const bool should_assert = (tps & (TTY_DONE | TTY_IE)) == (TTY_DONE | TTY_IE);
+	bool cpu_has_irq = false;
+
+	if (b && b->getCpu()) {
+		cpu_has_irq = b->getCpu()->has_queued_interrupt(4, 064);
+	}
+
+	if (should_assert && !cpu_has_irq && b && b->getCpu()) {
+		tx_irq_asserted = true;
+		tx_ready_reported = true;
+		b->getCpu()->queue_interrupt(4, 064);
+	}
+	else if (!should_assert && b && b->getCpu()) {
+		tx_irq_asserted = false;
+		b->getCpu()->unqueue_interrupt(4, 064);
+	}
+	else if (!should_assert) {
+		tx_irq_asserted = false;
+	}
+}
+
+void tty::service_deferred()
+{
+	if (!tx_busy) {
+		registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] |= TTY_DONE;
+		update_tx_interrupt();
+		return;
+	}
+
+#if defined(ESP32)
+	if ((int32_t)(tty_now_us() - tx_ready_at_us) < 0)
+		return;
+#endif
+
+	tx_busy = false;
+	registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] |= TTY_DONE;
+	update_tx_interrupt();
 }
 
 uint8_t tty::read_byte(const uint16_t addr)
@@ -48,36 +127,41 @@ uint8_t tty::read_byte(const uint16_t addr)
 
 void tty::notify_rx()
 {
-	registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2] |= 128;
-
-	if (registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2] & 64)
-		b->getCpu()->queue_interrupt(4, 060);
+	registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2] |= TTY_DONE;
+	update_rx_interrupt();
 }
 
 uint16_t tty::read_word(const uint16_t addr)
 {
 	const int reg    = (addr - PDP11TTY_BASE) / 2;
+	service_deferred();
 	uint16_t  vtemp  = registers[reg];
 	bool      notify = false;
 
 	if (addr == PDP11TTY_TKS) {
 		bool have_char = c->poll_char();
 
-		vtemp &= ~128;
-		vtemp |= have_char ? 128 : 0;
+		vtemp &= ~TTY_DONE;
+		vtemp |= have_char ? TTY_DONE : 0;
 	}
 	else if (addr == PDP11TTY_TKB) {
 		auto ch = c->wait_char(1);
-		if (ch.has_value() == false)
+		if (ch.has_value() == false) {
 			vtemp = 0;
+			registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2] &= ~TTY_DONE;
+		}
 		else {
 			vtemp = ch.value() | (parity(ch.value()) << 7);
-			if (c->poll_char())
+			if (c->poll_char()) {
+				registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2] |= TTY_DONE;
 				notify = true;
+			}
+			else
+				registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2] &= ~TTY_DONE;
 		}
 	}
 	else if (addr == PDP11TTY_TPS) {
-		vtemp |= 128;
+		vtemp = registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2];
 	}
 
 	DOLOG(log_ss::LS_COMM, "PDP11TTY read addr %o (%s): %d, 7bit: %d", addr, regnames[reg], vtemp, vtemp & 127);
@@ -86,6 +170,8 @@ uint16_t tty::read_word(const uint16_t addr)
 
 	if (notify)
 		notify_rx();
+	else if (addr == PDP11TTY_TKS || addr == PDP11TTY_TKB)
+		update_rx_interrupt();
 
 	return vtemp;
 }
@@ -112,15 +198,33 @@ void tty::write_word(const uint16_t addr, uint16_t v)
 
 	DOLOG(log_ss::LS_COMM, "PDP11TTY write %o (%s): %o", addr, regnames[reg], v);
 
+	if (addr == PDP11TTY_TKS) {
+		registers[reg] = v & TTY_IE;
+		if (c->poll_char())
+			registers[reg] |= TTY_DONE;
+		update_rx_interrupt();
+		return;
+	}
+
+	if (addr == PDP11TTY_TPS) {
+		const bool old_ie = (registers[reg] & TTY_IE) != 0;
+		registers[reg] = (registers[reg] & TTY_DONE) | (v & TTY_IE);
+		if (!old_ie && (registers[reg] & (TTY_DONE | TTY_IE)) == (TTY_DONE | TTY_IE))
+			tx_ready_reported = false;
+		update_tx_interrupt();
+		return;
+	}
+
 	if (addr == PDP11TTY_TPB) {
 		char ch = v & 127;
+		tx_busy = true;
+		tx_ready_reported = false;
+		tx_ready_at_us = tty_now_us() + TTY_TX_DELAY_US;
+		registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] &= ~TTY_DONE;
+		update_tx_interrupt();
+
 		DOLOG(log_ss::LS_COMM, "PDP11TTY print '%c'", ch);
 		c->put_char(ch);
-
-		registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] |= 128;
-
-		if (registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] & 64)
-			b->getCpu()->queue_interrupt(4, 064);
 	}
 
 	DOLOG(log_ss::LS_COMM, "set register %o to %o", addr, v);

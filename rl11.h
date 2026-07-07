@@ -10,6 +10,7 @@
 // come up as "not attached" so RL11 reports an error if accessed.
 
 #include "pdp1140.h"
+#include "disk.h"
 
 #ifndef H_RL11
 #define H_RL11
@@ -18,8 +19,8 @@ namespace rl11 {
 
 extern bool attached[4];
 
-static constexpr uint32_t RL01_IMAGE_BYTES = 5242880u;
-static constexpr uint32_t RL02_IMAGE_BYTES = 10485760u;
+static constexpr uint32_t RL01_IMAGE_BYTES = DISK_RL01_IMAGE_BYTES;
+static constexpr uint32_t RL02_IMAGE_BYTES = DISK_RL02_IMAGE_BYTES;
 
 void     reset();
 void     tick();

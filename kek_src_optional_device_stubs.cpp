@@ -6,6 +6,7 @@
 // are not part of the first ESP32 bring-up slice. Replace these with real
 // kek_src_<device>.cpp wrappers one device at a time as each device is ported.
 
+#include <stdio.h>
 #include <string.h>
 
 #include "_upstream_kek/dc11.h"
@@ -22,6 +23,127 @@
 #include "platform.h"
 #include "telnet.h"
 
+static constexpr uint16_t TTY_DONE = 0200;
+static constexpr uint16_t TTY_IE = 0100;
+static constexpr uint32_t TTY_TX_DELAY_US = 100;
+static constexpr uint32_t TTY_SERIAL_WRITE_WAIT_US = 20000;
+
+static uint32_t g_tty_trace_count = 0;
+static uint32_t g_tty_tx_chars = 0;
+static uint32_t g_tty_tx_ready_events = 0;
+static uint32_t g_tty_tx_irq_queues = 0;
+static uint32_t g_tty_tx_irq_unqueues = 0;
+static uint32_t g_tty_rx_chars = 0;
+static uint32_t g_tty_rx_irq_queues = 0;
+static uint32_t g_tty_rx_irq_unqueues = 0;
+static uint32_t g_tty_last_tx_ms = 0;
+static uint32_t g_tty_last_tx_ready_ms = 0;
+static uint8_t g_tty_last_tx = 0;
+static uint16_t g_tty_tks_snapshot = 0;
+static uint16_t g_tty_tkb_snapshot = 0;
+static uint16_t g_tty_tps_snapshot = TTY_DONE;
+static uint16_t g_tty_tpb_snapshot = 0;
+static uint8_t g_tty_tx_busy_snapshot = 0;
+
+#define TTY_SAVE_SNAPSHOT() \
+  do { \
+    g_tty_tks_snapshot = registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2]; \
+    g_tty_tkb_snapshot = registers[(PDP11TTY_TKB - PDP11TTY_BASE) / 2]; \
+    g_tty_tps_snapshot = registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2]; \
+    g_tty_tpb_snapshot = registers[(PDP11TTY_TPB - PDP11TTY_BASE) / 2]; \
+    g_tty_tx_busy_snapshot = tx_busy ? 1 : 0; \
+  } while (0)
+
+extern "C" void kek_tty_set_trace(uint32_t count) {
+  g_tty_trace_count = count;
+}
+
+extern "C" uint32_t kek_tty_trace_remaining() {
+  return g_tty_trace_count;
+}
+
+extern "C" void kek_tty_get_stats(uint32_t* tx_chars, uint32_t* tx_ready_events,
+                                  uint32_t* tx_irq_queues,
+                                  uint32_t* tx_irq_unqueues,
+                                  uint32_t* rx_chars,
+                                  uint32_t* rx_irq_queues,
+                                  uint32_t* rx_irq_unqueues,
+                                  uint8_t* last_tx,
+                                  uint32_t* last_tx_ms,
+                                  uint32_t* last_tx_ready_ms,
+                                  uint32_t* trace_remaining,
+                                  uint16_t* tks, uint16_t* tkb,
+                                  uint16_t* tps, uint16_t* tpb,
+                                  uint8_t* tx_busy) {
+  if (tx_chars) *tx_chars = g_tty_tx_chars;
+  if (tx_ready_events) *tx_ready_events = g_tty_tx_ready_events;
+  if (tx_irq_queues) *tx_irq_queues = g_tty_tx_irq_queues;
+  if (tx_irq_unqueues) *tx_irq_unqueues = g_tty_tx_irq_unqueues;
+  if (rx_chars) *rx_chars = g_tty_rx_chars;
+  if (rx_irq_queues) *rx_irq_queues = g_tty_rx_irq_queues;
+  if (rx_irq_unqueues) *rx_irq_unqueues = g_tty_rx_irq_unqueues;
+  if (last_tx) *last_tx = g_tty_last_tx;
+  if (last_tx_ms) *last_tx_ms = g_tty_last_tx_ms;
+  if (last_tx_ready_ms) *last_tx_ready_ms = g_tty_last_tx_ready_ms;
+  if (trace_remaining) *trace_remaining = g_tty_trace_count;
+
+  if (tks) *tks = g_tty_tks_snapshot;
+  if (tkb) *tkb = g_tty_tkb_snapshot;
+  if (tps) *tps = g_tty_tps_snapshot;
+  if (tpb) *tpb = g_tty_tpb_snapshot;
+  if (tx_busy) *tx_busy = g_tty_tx_busy_snapshot;
+}
+
+static const char* tty_reg_name(uint16_t addr) {
+  switch (addr & ~1u) {
+    case PDP11TTY_TKS: return "TKS";
+    case PDP11TTY_TKB: return "TKB";
+    case PDP11TTY_TPS: return "TPS";
+    case PDP11TTY_TPB: return "TPB";
+    default: return "???";
+  }
+}
+
+static void tty_trace(const char* action, uint16_t addr, uint16_t value,
+                      const char* detail = nullptr) {
+  if (g_tty_trace_count == 0) return;
+  g_tty_trace_count--;
+  if (detail && *detail) {
+    LOG("kek TTY %-8s %-3s @ %06o val=%06o %s remaining=%u",
+        action, tty_reg_name(addr), addr, value, detail,
+        (unsigned)g_tty_trace_count);
+  } else {
+    LOG("kek TTY %-8s %-3s @ %06o val=%06o remaining=%u",
+        action, tty_reg_name(addr), addr, value,
+        (unsigned)g_tty_trace_count);
+  }
+  if (g_tty_trace_count == 0) {
+    LOG("kek TTY trace ended: tx=%u txready=%u irq64 q/u=%u/%u "
+        "rx=%u irq60 q/u=%u/%u TKS=%06o TKB=%06o TPS=%06o TPB=%06o "
+        "busy=%u last_tx=%03o last_tx_ms=%u last_ready_ms=%u",
+        (unsigned)g_tty_tx_chars, (unsigned)g_tty_tx_ready_events,
+        (unsigned)g_tty_tx_irq_queues, (unsigned)g_tty_tx_irq_unqueues,
+        (unsigned)g_tty_rx_chars, (unsigned)g_tty_rx_irq_queues,
+        (unsigned)g_tty_rx_irq_unqueues, (unsigned)g_tty_tks_snapshot,
+        (unsigned)g_tty_tkb_snapshot, (unsigned)g_tty_tps_snapshot,
+        (unsigned)g_tty_tpb_snapshot, (unsigned)g_tty_tx_busy_snapshot,
+        (unsigned)g_tty_last_tx, (unsigned)g_tty_last_tx_ms,
+        (unsigned)g_tty_last_tx_ready_ms);
+  }
+}
+
+static void write_guest_serial_byte(uint8_t out) {
+  if (g_serial_silenced) return;
+
+  uint32_t start = micros();
+  while (Serial.availableForWrite() <= 0) {
+    if ((uint32_t)(micros() - start) >= TTY_SERIAL_WRITE_WAIT_US)
+      return;
+    delayMicroseconds(50);
+  }
+  Serial.write(out);
+}
+
 static bool pop_kek_console_input(uint8_t* out) {
   static bool prefer_telnet = false;
   bool got = false;
@@ -36,50 +158,156 @@ static bool pop_kek_console_input(uint8_t* out) {
 
 tty::tty(console *const c, bus *const b) : c(c), b(b) {}
 tty::~tty() {}
+
+void tty::update_rx_interrupt() {
+  int tks = (PDP11TTY_TKS - PDP11TTY_BASE) / 2;
+  bool should_assert = (registers[tks] & (TTY_DONE | TTY_IE)) == (TTY_DONE | TTY_IE);
+  if (should_assert && !rx_irq_asserted) {
+    rx_irq_asserted = true;
+    g_tty_rx_irq_queues++;
+    tty_trace("IRQ", PDP11TTY_TKS, registers[tks], "queue vec=060");
+    if (b && b->getCpu()) b->getCpu()->queue_interrupt(4, 060);
+  }
+  else if (!should_assert && rx_irq_asserted) {
+    rx_irq_asserted = false;
+    g_tty_rx_irq_unqueues++;
+    tty_trace("IRQ", PDP11TTY_TKS, registers[tks], "unqueue vec=060");
+    if (b && b->getCpu()) b->getCpu()->unqueue_interrupt(4, 060);
+  }
+  TTY_SAVE_SNAPSHOT();
+}
+
+void tty::update_tx_interrupt() {
+  int tps = (PDP11TTY_TPS - PDP11TTY_BASE) / 2;
+  bool should_assert = (registers[tps] & (TTY_DONE | TTY_IE)) == (TTY_DONE | TTY_IE);
+  bool cpu_has_irq = false;
+  if (b && b->getCpu()) {
+    cpu_has_irq = b->getCpu()->has_queued_interrupt(4, 064);
+  }
+  if (should_assert && !cpu_has_irq &&
+      (!tx_irq_asserted || !tx_ready_reported)) {
+    tx_irq_asserted = true;
+    tx_ready_reported = true;
+    g_tty_tx_irq_queues++;
+    tty_trace("IRQ", PDP11TTY_TPS, registers[tps], "queue vec=064");
+    if (b && b->getCpu()) b->getCpu()->queue_interrupt(4, 064);
+  }
+  else if (should_assert && tx_irq_asserted && !cpu_has_irq) {
+    // kek consumes queued vectors when delivered. The DL/KL transmitter ready
+    // condition is level-like from the guest's point of view: if DONE+IE is
+    // still true after the CPU accepted the previous vector, keep presenting
+    // vec 064 until the guest clears IE or writes TPB.
+    g_tty_tx_irq_queues++;
+    tty_trace("IRQ", PDP11TTY_TPS, registers[tps], "requeue vec=064");
+    if (b && b->getCpu()) b->getCpu()->queue_interrupt(4, 064);
+  }
+  else if (!should_assert && tx_irq_asserted) {
+    tx_irq_asserted = false;
+    g_tty_tx_irq_unqueues++;
+    tty_trace("IRQ", PDP11TTY_TPS, registers[tps], "unqueue vec=064");
+    if (b && b->getCpu()) b->getCpu()->unqueue_interrupt(4, 064);
+  }
+  else if (!should_assert) {
+    // Keep the device's local state and kek's set-based interrupt queue in
+    // sync even if the CPU accepted the previous vector before we observed the
+    // guest clearing IE or DONE.
+    tx_irq_asserted = false;
+    if (b && b->getCpu()) b->getCpu()->unqueue_interrupt(4, 064);
+  }
+  TTY_SAVE_SNAPSHOT();
+}
+
+void tty::service_deferred() {
+  if (!tx_busy) {
+    registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] |= TTY_DONE;
+    TTY_SAVE_SNAPSHOT();
+    update_tx_interrupt();
+    return;
+  }
+  if ((int32_t)(micros() - tx_ready_at_us) < 0) return;
+
+  tx_busy = false;
+  registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] |= TTY_DONE;
+  g_tty_tx_ready_events++;
+  g_tty_last_tx_ready_ms = millis();
+  tty_trace("TXREADY", PDP11TTY_TPS,
+            registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2]);
+  TTY_SAVE_SNAPSHOT();
+  update_tx_interrupt();
+}
+
 void tty::notify_rx() {
   int tks = (PDP11TTY_TKS - PDP11TTY_BASE) / 2;
   int tkb = (PDP11TTY_TKB - PDP11TTY_BASE) / 2;
-  if ((registers[tks] & 0200) == 0) {
+  if ((registers[tks] & TTY_DONE) == 0) {
     uint8_t ch = 0;
     if (!pop_kek_console_input(&ch)) return;
     registers[tkb] = ch & 0177;
-    registers[tks] |= 0200;
+    registers[tks] |= TTY_DONE;
+    g_tty_rx_chars++;
+    tty_trace("RXREADY", PDP11TTY_TKB, registers[tkb]);
   }
-  if (b && b->getCpu() &&
-      (registers[tks] & 0100)) {
-    b->getCpu()->queue_interrupt(4, 060);
-  }
+  TTY_SAVE_SNAPSHOT();
+  update_rx_interrupt();
 }
 void tty::reset(const bool hard) {
   if (hard) {
     memset(registers, 0, sizeof(registers));
   }
-  registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] = 0200;
+  registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] = TTY_DONE;
+  rx_irq_asserted = false;
+  tx_irq_asserted = false;
+  tx_ready_reported = true;
+  tx_busy = false;
+  tx_ready_at_us = 0;
+  g_tty_tx_chars = 0;
+  g_tty_tx_ready_events = 0;
+  g_tty_tx_irq_queues = 0;
+  g_tty_tx_irq_unqueues = 0;
+  g_tty_rx_chars = 0;
+  g_tty_rx_irq_queues = 0;
+  g_tty_rx_irq_unqueues = 0;
+  g_tty_last_tx_ms = 0;
+  g_tty_last_tx_ready_ms = 0;
+  g_tty_last_tx = 0;
+  TTY_SAVE_SNAPSHOT();
 }
 uint8_t tty::read_byte(const uint16_t addr) {
   uint16_t v = read_word(addr & ~1);
   return (addr & 1) ? (uint8_t)(v >> 8) : (uint8_t)v;
 }
 uint16_t tty::read_word(const uint16_t addr) {
+  service_deferred();
   int reg = (addr - PDP11TTY_BASE) / 2;
   if (reg < 0 || reg >= 4) return 0;
 
   if (addr == PDP11TTY_TKS) {
     notify_rx();
+    tty_trace("READ", addr, registers[reg]);
     return registers[reg];
   }
 
   if (addr == PDP11TTY_TKB) {
     uint16_t value = registers[reg] & 0177;
-    registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2] &= ~0200;
+    registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2] &= ~TTY_DONE;
+    update_rx_interrupt();
     notify_rx();
+    tty_trace("READ", addr, value);
+    TTY_SAVE_SNAPSHOT();
     return value;
   }
 
   if (addr == PDP11TTY_TPS) {
-    registers[reg] |= 0200;
+    if (!tx_busy) {
+      registers[reg] |= TTY_DONE;
+      TTY_SAVE_SNAPSHOT();
+      update_tx_interrupt();
+    }
+    tty_trace("READ", addr, registers[reg]);
+    return registers[reg];
   }
 
+  tty_trace("READ", addr, registers[reg]);
   return registers[reg];
 }
 void tty::write_byte(const uint16_t addr, const uint8_t v) {
@@ -96,34 +324,49 @@ void tty::write_word(const uint16_t addr, uint16_t v) {
   if (reg < 0 || reg >= 4) return;
 
   if (addr == PDP11TTY_TKS) {
-    registers[reg] = (registers[reg] & 0200) | (v & 0100);
+    registers[reg] = (registers[reg] & TTY_DONE) | (v & TTY_IE);
+    tty_trace("WRITE", addr, registers[reg]);
     notify_rx();
+    TTY_SAVE_SNAPSHOT();
     return;
   }
 
   if (addr == PDP11TTY_TPS) {
-    registers[reg] = (registers[reg] & 0200) | (v & 0100);
-    if (b && b->getCpu() && (registers[reg] & 0200) && (registers[reg] & 0100)) {
-      b->getCpu()->queue_interrupt(4, 064);
+    bool old_ie = (registers[reg] & TTY_IE) != 0;
+    if (!tx_busy) {
+      registers[reg] |= TTY_DONE;
     }
+    registers[reg] = (registers[reg] & TTY_DONE) | (v & TTY_IE);
+    if (!old_ie && (registers[reg] & (TTY_DONE | TTY_IE)) == (TTY_DONE | TTY_IE)) {
+      tx_ready_reported = false;
+    }
+    tty_trace("WRITE", addr, registers[reg]);
+    update_tx_interrupt();
+    TTY_SAVE_SNAPSHOT();
     return;
   }
 
   if (addr == PDP11TTY_TPB) {
     uint8_t out = v & 0177;
+    tx_busy = true;
+    tx_ready_reported = false;
+    tx_ready_at_us = micros() + TTY_TX_DELAY_US;
+    registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] &= ~TTY_DONE;
+    update_tx_interrupt();
+
     console_feed(out);
     telnet_write(out);
-    if (!g_serial_silenced) {
-      Serial.write(out);
-    }
-    registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] |= 0200;
-    if (b && b->getCpu() &&
-        (registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] & 0100)) {
-      b->getCpu()->queue_interrupt(4, 064);
-    }
+    write_guest_serial_byte(out);
+    g_tty_tx_chars++;
+    g_tty_last_tx = out;
+    g_tty_last_tx_ms = millis();
+    char detail[24];
+    snprintf(detail, sizeof(detail), "ch=%03o", (unsigned)out);
+    tty_trace("WRITE", addr, out, detail);
   }
 
   registers[reg] = v;
+  TTY_SAVE_SNAPSHOT();
 }
 void tty::operator()() {}
 

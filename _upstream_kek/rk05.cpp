@@ -12,6 +12,9 @@
 #include "rk05.h"
 #include "utils.h"
 
+static constexpr uint16_t rk05_cylinders = 203;
+static constexpr uint8_t rk05_surfaces = 2;
+static constexpr uint8_t rk05_sectors_per_track = 12;
 
 constexpr const char * const regnames[] = {
 	"RK05_DS drivestatus",
@@ -140,6 +143,8 @@ void rk05::write_word(const uint16_t addr, const uint16_t v)
 			int      track    = (temp >> 4) & 511;
 			uint16_t cylinder = (temp >> 5) & 255;
 			uint16_t device   = temp >> 13;
+			bool outside_geometry = cylinder >= rk05_cylinders ||
+				surface >= rk05_surfaces || sector >= rk05_sectors_per_track;
 
 			const uint32_t diskoff  = track * 12 + sector;
 
@@ -159,6 +164,10 @@ void rk05::write_word(const uint16_t addr, const uint16_t v)
 
 				if (device >= fhs.size()) {
 					registers[(RK05_ERROR - RK05_BASE) / 2] |= 128;  // non existing disk
+					registers[(RK05_CS - RK05_BASE) / 2] |= 3 << 14;  // an error occured
+				}
+				else if (outside_geometry) {
+					registers[(RK05_ERROR - RK05_BASE) / 2] |= 32;  // non existing sector
 					registers[(RK05_CS - RK05_BASE) / 2] |= 3 << 14;  // an error occured
 				}
 				else {
@@ -218,7 +227,10 @@ void rk05::write_word(const uint16_t addr, const uint16_t v)
 					while(temp_reclen > 0) {
 						uint32_t cur = std::min(uint32_t(sizeof xfer_buffer), temp_reclen);
 
-						if (!fhs.at(device)->read(temp_diskoffb, cur, xfer_buffer, 512)) {
+						if (outside_geometry) {
+							memset(xfer_buffer, 0, cur);
+						}
+						else if (!fhs.at(device)->read(temp_diskoffb, cur, xfer_buffer, 512)) {
 							DOLOG(log_ss::LS_DISK, "RK05 read error %s from %u len %u", strerror(errno), temp_diskoffb, cur);
 							registers[(RK05_ERROR - RK05_BASE) / 2] |= 32;  // non existing sector
 							registers[(RK05_CS - RK05_BASE) / 2] |= 3 << 14;  // an error occured
@@ -244,8 +256,15 @@ void rk05::write_word(const uint16_t addr, const uint16_t v)
 								cylinder++;
 							}
 						}
+						if (cylinder >= rk05_cylinders)
+							outside_geometry = true;
 					}
 
+					if (cylinder >= rk05_cylinders) {
+						cylinder = rk05_cylinders - 1;
+						surface = rk05_surfaces - 1;
+						sector = rk05_sectors_per_track - 1;
+					}
 					registers[(RK05_DA - RK05_BASE) / 2] = sector | (surface << 4) | (cylinder << 5);
 				}
 			}

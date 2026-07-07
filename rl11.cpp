@@ -88,13 +88,13 @@ static void trace_irq(const char *event, uint16_t value)
 
 bool valid_image_size(uint32_t bytes)
 {
-    return bytes == RL01_IMAGE_BYTES || bytes == RL02_IMAGE_BYTES;
+    return disk_size_is_rl(bytes);
 }
 
 const char* image_type_name(uint32_t bytes)
 {
-    if (bytes == RL01_IMAGE_BYTES) return "RL01";
-    if (bytes == RL02_IMAGE_BYTES) return "RL02";
+    if (disk_size_is_rl01(bytes)) return "RL01";
+    if (disk_size_is_rl02(bytes)) return "RL02";
     return "invalid";
 }
 
@@ -115,10 +115,10 @@ static void refresh_media_type(int unit)
     if (!disk_is_mounted(unit)) return;
 
     uint32_t bytes = disk_size_bytes(unit);
-    if (bytes == RL01_IMAGE_BYTES) {
+    if (disk_size_is_rl01(bytes)) {
         media_cylinders[unit] = RL01_CYLINDERS;
         attached[unit] = true;
-    } else if (bytes == RL02_IMAGE_BYTES) {
+    } else if (disk_size_is_rl02(bytes)) {
         media_cylinders[unit] = RL02_CYLINDERS;
         media_is_rl02[unit] = true;
         attached[unit] = true;
@@ -147,8 +147,8 @@ void reset()
     RLBAE = 0;
     rl_cur_cyl  = 0;
     rl_cur_surf = 0;
-    // Map each RL drive to the corresponding disk slot (0..3). Only exact
-    // RL01/RL02 image sizes are considered attached RL media.
+    // Map each RL drive to the corresponding disk slot (0..3). RL01/RL02
+    // media are accepted within the disk-layer size tolerance.
     for (int i = 0; i < 4; i++) refresh_media_type(i);
 }
 
@@ -173,6 +173,13 @@ static uint32_t da_to_offset(uint16_t da)
     uint32_t surf = (da >> 6) & 1;
     uint32_t sec  = da & 0x3F;           // 6 bits
     return ((cyl * SURFACES + surf) * SECS_PER_TRACK + sec) * BYTES_PER_SEC;
+}
+
+static bool da_in_geometry(uint16_t da, int drive)
+{
+    uint32_t cyl = (da >> 7) & 0x1FF;
+    uint32_t sec = da & 0x3F;
+    return sec < SECS_PER_TRACK && cyl < media_cylinders[drive];
 }
 
 // 18-bit bus address: low 16 in RLBA, high 2 in RLCS bits 5:4.
@@ -298,9 +305,13 @@ static void execute()
         bool writing = (func == 5);
         uint32_t cyl = (RLDA >> 7) & 0x1FF;
         uint32_t sec = RLDA & 0x3F;
+        bool zero_read = false;
         if (sec >= SECS_PER_TRACK || cyl >= media_cylinders[drv]) {
-            RLCS |= 0x8400;
-            break;
+            if (!writing) zero_read = true;
+            else {
+                RLCS |= 0x8400;
+                break;
+            }
         }
         uint32_t off = da_to_offset(RLDA);
         uint32_t ba  = bus_addr();
@@ -328,9 +339,24 @@ static void execute()
                     break;
                 }
             } else {
-                if (disk_read(drv, off, scratch, chunk_bytes) < 0) {
-                    RLCS |= 0x8400;
-                    break;
+                uint32_t nominal_bytes = (uint32_t)media_cylinders[drv] *
+                                         SURFACES * SECS_PER_TRACK * BYTES_PER_SEC;
+                if (zero_read || !da_in_geometry(RLDA, drv) || off >= nominal_bytes) {
+                    memset(scratch, 0, chunk_bytes);
+                    zero_read = true;
+                } else {
+                    uint32_t read_bytes = chunk_bytes;
+                    if (off + read_bytes > nominal_bytes) {
+                        read_bytes = nominal_bytes - off;
+                    }
+                    if (disk_read(drv, off, scratch, read_bytes) < 0) {
+                        RLCS |= 0x8400;
+                        break;
+                    }
+                    if (read_bytes < chunk_bytes) {
+                        memset(scratch + read_bytes, 0, chunk_bytes - read_bytes);
+                        zero_read = true;
+                    }
                 }
                 for (uint32_t i = 0; i < chunk_words; i++) {
                     uint16_t v = (uint16_t)scratch[i * 2]
@@ -357,6 +383,12 @@ static void execute()
                 sec -= SECS_PER_TRACK;
                 surf ^= 1;
                 if (surf == 0) cyl++;
+            }
+            uint32_t max_cyl = media_cylinders[drv] ? media_cylinders[drv] - 1 : 0;
+            if (cyl > max_cyl) {
+                cyl = max_cyl;
+                surf = 1;
+                sec = SECS_PER_TRACK - 1;
             }
             RLDA = (uint16_t)((cyl << 7) | (surf << 6) | sec);
             rl_cur_cyl  = (uint16_t)cyl;

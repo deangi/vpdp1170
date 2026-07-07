@@ -161,6 +161,15 @@ void disasm(uint32_t a)
 {
     uint16_t ins = dd11::read16(a);
 
+    if ((ins & 0170000) == 0170000)
+    {
+        Serial.print(F("FP11/UNIMPL "));
+        disasmaddr((ins >> 6) & 077, a);
+        Serial.print(',');
+        disasmaddr(ins & 077, a);
+        return;
+    }
+
     D l;
     uint8_t i;
     for (i = 0; disamtable[i].inst; i++)
@@ -306,6 +315,21 @@ bool disasm_format(uint32_t address, uint16_t virtual_address,
     buffer[0] = 0;
 
     uint16_t instruction = dd11::read16(address);
+    if ((instruction & 0170000) == 0170000) {
+        uint16_t source = (instruction >> 6) & 077;
+        uint16_t destination = instruction & 077;
+        uint32_t physical_cursor = address + 2;
+        uint16_t virtual_cursor = virtual_address + 2;
+
+        disasm_append(buffer, size, "FP11/UNIMPL ");
+        disasm_format_operand(source, physical_cursor, virtual_cursor,
+                              buffer, size);
+        disasm_append(buffer, size, ",");
+        disasm_format_operand(destination, physical_cursor, virtual_cursor,
+                              buffer, size);
+        return true;
+    }
+
     D decoded = {};
     for (uint8_t i = 0; disamtable[i].inst; i++) {
         if ((instruction & disamtable[i].inst) == disamtable[i].arg) {

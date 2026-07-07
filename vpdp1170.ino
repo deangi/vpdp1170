@@ -65,6 +65,11 @@ static Freenove_ESP32_WS2812 strip(LED_COUNT, LED_PIN, LED_CHANNEL, TYPE_GRB);
 AppConfig cfg;             // non-static so ui.cpp (System Info screen,
                            // title display) can read it via the extern in
                            // appconfig.h. Only vpdp1170.ino writes it.
+
+#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
+extern "C" void kek_tty_set_trace(uint32_t count);
+#endif
+
 static bool sd_ok = false;
 static bool cpu_running = false;   // true once the PDP-11 is booting in loop()
 
@@ -227,6 +232,12 @@ static void sd_and_config_init() {
                                      ? 0 : cfg.diag_clock_trace));
   kl11::set_console_trace((uint32_t)(cfg.diag_console_trace < 0
                                       ? 0 : cfg.diag_console_trace));
+#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
+  kek_tty_set_trace((uint32_t)(cfg.diag_console_trace < 0
+                                ? 0 : cfg.diag_console_trace));
+#endif
+  pdp_core::set_dl_trace((uint32_t)(cfg.diag_dl_trace < 0
+                                      ? 0 : cfg.diag_dl_trace));
   kwp::enabled             = cfg.kwp_enabled;
   pdp_core::set_trace(cfg.diag_trace);
   kl11::serial_in_delay_ms = (uint32_t)(cfg.diag_serialdelay_ms < 0 ? 0
@@ -363,7 +374,12 @@ static void draw_status_bar() {
   // MIPS gets right-aligned to the screen edge via TR_DATUM so it's
   // always at the rightmost column regardless of how many digits.
   char mips_str[16];
-  snprintf(mips_str, sizeof(mips_str), "%.2f MIPS", mips);
+  if (pdp_core::monitor_paused())
+    snprintf(mips_str, sizeof(mips_str), "PAUSED");
+  else if (mips > 0.0f && mips < 0.01f)
+    snprintf(mips_str, sizeof(mips_str), "%.1f KIPS", mips * 1000.0f);
+  else
+    snprintf(mips_str, sizeof(mips_str), "%.2f MIPS", mips);
   tft.setTextDatum(TR_DATUM);
   tft.drawString(mips_str, TFT_W - 4, sy + 22, 1);
   tft.setTextDatum(TL_DATUM);   // restore for the title row below
@@ -483,9 +499,6 @@ void setup() {
   LOG("%s v%s build %s", APP_TITLE, APP_VERSION, APP_BUILD_DATE);
   LOG("PDP core selected: %s (VPDP1170_USE_KEK_CORE=%d, VPDP1170_BUILD_KEK_ADAPTER=%d)",
       pdp_core::engine_name(), VPDP1170_USE_KEK_CORE, VPDP1170_BUILD_KEK_ADAPTER);
-  LOG("PDP core memory: active=%u bytes, target=%u bytes",
-      (unsigned)pdp_core::memory_size(),
-      (unsigned)pdp_core::target_memory_bytes());
   if (!pdp_core::is_kek_engine())
     LOG("kek core disabled; running inherited 11/40 scaffold");
 
@@ -517,13 +530,22 @@ void setup() {
              pdp_core::is_kek_engine() ? TFT_YELLOW : TFT_GREEN);
   tft_status(ROW_CPU,  "CPU:   ", "(pending)", TFT_DARKGREY);
 
-  // Allocate the selected PDP core's guest memory before WiFi/SD take their share.
+  sd_and_config_init();
+  tft_banner_title();        // refresh banner with cfg.title from pdpconfig.ini
+  pdp_core::set_target_memory_kw((uint32_t)cfg.mem_size_kw);
+  LOG("PDP core memory: configured=%d KW target=%u bytes active=%u bytes",
+      cfg.mem_size_kw,
+      (unsigned)pdp_core::target_memory_bytes(),
+      (unsigned)pdp_core::memory_size());
+
+  // Allocate the selected PDP core's guest memory after /pdpconfig.ini has
+  // provided [system] mem_size_kw.
   tft_status(ROW_CPU, "CPU:   ", "init...", TFT_YELLOW);
   bool cpu_ok = pdp_core::init();
-  LOG("PDP core initialized: %s (active memory=%u bytes, target memory=%u bytes)",
+  LOG("PDP core initialized: %s (active memory=%u KW, target memory=%u KW)",
       pdp_core::engine_name(),
-      (unsigned)pdp_core::memory_size(),
-      (unsigned)pdp_core::target_memory_bytes());
+      (unsigned)(pdp_core::memory_size() / 2048),
+      (unsigned)(pdp_core::target_memory_bytes() / 2048));
   if (!cpu_ok && pdp_core::is_kek_engine())
     LOGE("PDP core selected but not wired yet: %s", pdp_core::engine_name());
 
@@ -539,9 +561,6 @@ void setup() {
                selftest_ok ? "selftest PASS" : "selftest FAIL",
                selftest_ok ? TFT_GREEN : TFT_RED);
   }
-
-  sd_and_config_init();
-  tft_banner_title();        // refresh banner with cfg.title from pdpconfig.ini
 
   wifi_connect();
 
@@ -634,6 +653,43 @@ static void poll_touch_once() {
   }
 }
 
+static void poll_pcping() {
+  // Periodic snapshot of guest CPU state - useful while bringing up
+  // disk/OS bootstrap. If PC stays put, the guest is stuck in a tight
+  // loop; if PC moves through a small window, it's a finite poll loop.
+  // Rate is [diag] pcping in pdpconfig.ini (seconds). 0 disables it.
+  static uint32_t s_state_ms = 0;
+  if (cfg.diag_pcping_sec <= 0) return;
+
+  const uint32_t interval_ms = (uint32_t)cfg.diag_pcping_sec * 1000U;
+  uint32_t s_now = millis();
+  if (s_now - s_state_ms < interval_ms) return;
+
+  s_state_ms = s_now;
+  uint16_t next_pc = 0;
+  uint16_t next_opcode = 0;
+  char next_disasm[96] = {0};
+  bool has_next = pdp_core::next_instruction(&next_pc, &next_opcode);
+  if (!pdp_core::disassemble_next(next_disasm, sizeof(next_disasm))) {
+    next_disasm[0] = 0;
+  }
+
+  LOG("state: PC=0%o ins=0%o %s R0=0%o R1=0%o R2=0%o R3=0%o R4=0%o R5=0%o SP=0%o PS=0%o inst=%u",
+      (unsigned)pdp_core::pc(),
+      has_next ? (unsigned)next_opcode : 0,
+      next_disasm,
+      (unsigned)pdp_core::reg16(0), (unsigned)pdp_core::reg16(1),
+      (unsigned)pdp_core::reg16(2), (unsigned)pdp_core::reg16(3),
+      (unsigned)pdp_core::reg16(4), (unsigned)pdp_core::reg16(5),
+      (unsigned)pdp_core::reg16(6),
+      (unsigned)pdp_core::psw(),
+      (unsigned)pdp_core::instruction_count());
+  // cpu_dump_trace() is available if you need it for stuck-in-loop
+  // diagnosis - the cpu_pdp11.h function dumps the last N entries of
+  // the trace ring. We leave it off by default so the serial console
+  // stays usable for the guest OS.
+}
+
 void loop() {
   if (!cpu_running) { delay(100); return; }
 
@@ -716,11 +772,13 @@ void loop() {
     ftp_poll();                  // accept + FTP commands/data against SD root
     emu_control::poll();
     telnet_shell_poll();
-    pdp_core::run(8000);
+    poll_pcping();
+    pdp_core::run(1000);
     console_drain_tft();         // TFT-out FIFO -> ANSI parser -> cell grid
     if (!pdp_core::is_kek_engine()) {
       kl11::drain_serial_out();  // Serial-out FIFO -> Serial.write
     }
+    poll_pcping();
   }
   ftp_poll();
   emu_control::poll();
@@ -730,29 +788,7 @@ void loop() {
     kl11::drain_serial_out();
   }
 
-
-  // Periodic snapshot of guest CPU state - useful while bringing up
-  // disk/OS bootstrap. If PC stays put, the guest is stuck in a tight
-  // loop; if PC moves through a small window, it's a finite poll loop.
-  // Rate is [diag] pcping in pdpconfig.ini (seconds). 0 disables it.
-  static uint32_t s_state_ms = 0;
-  uint32_t s_now = millis();
-  if (cfg.diag_pcping_sec > 0 &&
-      s_now - s_state_ms >= (uint32_t)cfg.diag_pcping_sec * 1000U) {
-    s_state_ms = s_now;
-    LOG("state: PC=0%o R0=0%o R1=0%o R2=0%o R3=0%o R4=0%o R5=0%o SP=0%o PS=0%o inst=%u",
-        (unsigned)pdp_core::pc(),
-        (unsigned)pdp_core::reg16(0), (unsigned)pdp_core::reg16(1),
-        (unsigned)pdp_core::reg16(2), (unsigned)pdp_core::reg16(3),
-        (unsigned)pdp_core::reg16(4), (unsigned)pdp_core::reg16(5),
-        (unsigned)pdp_core::reg16(6),
-        (unsigned)pdp_core::psw(),
-        (unsigned)pdp_core::instruction_count());
-    // cpu_dump_trace() is available if you need it for stuck-in-loop
-    // diagnosis - the cpu_pdp11.h function dumps the last N entries of
-    // the trace ring. We leave it off by default so the serial console
-    // stays usable for the guest OS.
-  }
+  poll_pcping();
 
   // Status LED: blue while booting, green once the PDP-11 has gone quiet at a prompt.
   if (!boot_done && console_feed_count() > 0 &&

@@ -29,6 +29,12 @@ static bool truthy(const String& s) {
          s.equalsIgnoreCase("on");
 }
 
+static int clamp_mem_size_kw(long value) {
+  if (value < AppConfig::MEM_SIZE_KW_MIN) return AppConfig::MEM_SIZE_KW_MIN;
+  if (value > AppConfig::MEM_SIZE_KW_MAX) return AppConfig::MEM_SIZE_KW_MAX;
+  return (int)value;
+}
+
 static int hex_value(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -181,6 +187,7 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.title         = APP_TITLE;
   cfg.version       = APP_VERSION;
   cfg.build         = APP_BUILD_DATE;
+  cfg.mem_size_kw   = AppConfig::MEM_SIZE_KW_MAX;
 
   cfg.wifi_ssid     = WIFI_SSID;
   cfg.wifi_password = WIFI_PASS;
@@ -202,6 +209,7 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.diag_io_trace   = 0;
   cfg.diag_clock_trace = 0;
   cfg.diag_console_trace = 0;
+  cfg.diag_dl_trace = 0;
   cfg.diag_trace      = false;
   cfg.v4b_quirks      = true;
   cfg.kwp_enabled     = false;
@@ -241,6 +249,7 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
 
   if (section == "system") {
     if (key == "title") cfg.title = val;
+    else if (key == "mem_size_kw") cfg.mem_size_kw = clamp_mem_size_kw(val.toInt());
   } else if (section == "wifi") {
     if      (key == "ssid")     cfg.wifi_ssid     = val;
     else if (key == "password") cfg.wifi_password = val;
@@ -278,6 +287,11 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
       cfg.diag_console_trace = count < 0 ? 0
                              : count > 1000000 ? 1000000 : (int)count;
     }
+    else if (key == "dl_trace") {
+      long count = val.toInt();
+      cfg.diag_dl_trace = count < 0 ? 0
+                        : count > 1000000 ? 1000000 : (int)count;
+    }
     else if (key == "trace")      cfg.diag_trace = truthy(val);
     else if (key == "v4b_quirks") cfg.v4b_quirks = (val.equalsIgnoreCase("true") ||
                                                    val == "1" ||
@@ -301,10 +315,10 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
     else if (key == "boot") {
       String v = to_lower(val);
       cfg.boot_kind = AppConfig::BK_RL;
-      if      (v == "dl0" || v == "0")  cfg.boot_drive = 'a';
-      else if (v == "dl1" || v == "1")  cfg.boot_drive = 'b';
-      else if (v == "dl2" || v == "2") cfg.boot_drive = 'c';
-      else if (v == "dl3" || v == "3") cfg.boot_drive = 'd';
+      if      (v == "dl0" || v == "rl0" || v == "0") cfg.boot_drive = 'a';
+      else if (v == "dl1" || v == "rl1" || v == "1") cfg.boot_drive = 'b';
+      else if (v == "dl2" || v == "rl2" || v == "2") cfg.boot_drive = 'c';
+      else if (v == "dl3" || v == "rl3" || v == "3") cfg.boot_drive = 'd';
       // rk0 (DEC) / dk0 (Bell Labs Unix V6 device name) both mean the RK05.
       else if (v == "rk0" || v == "dk0") {
         cfg.boot_drive = 'a';
@@ -448,6 +462,9 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println();
   f.println("[system]");
   f.printf("title   = %s\r\n", cfg.title.c_str());
+  f.println("; mem_size_kw is PDP memory size in 1024-word units.");
+  f.println("; Range: 32..2048 KW. 2048 KW is the full 4 MB PDP-11/70 address space.");
+  f.printf("mem_size_kw = %d\r\n", cfg.mem_size_kw);
   f.println();
   f.println("[console]");
   f.println("; boot_input is injected into the KL11 input queue after each");
@@ -493,11 +510,14 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println(";               interrupt events, then stop. 0 disables.");
   f.println("; console_trace = log the next N characters read from or written");
   f.println(";                 to the KL11 console, then stop. 0 disables.");
+  f.println("; dl_trace   = log the next N kek RL/DL controller and host");
+  f.println(";              disk events, then stop. 0 disables.");
   f.printf("pcping      = %d\r\n", cfg.diag_pcping_sec);
   f.printf("serialdelay = %d\r\n", cfg.diag_serialdelay_ms);
   f.printf("io_trace    = %d\r\n", cfg.diag_io_trace);
   f.printf("clock_trace = %d\r\n", cfg.diag_clock_trace);
   f.printf("console_trace = %d\r\n", cfg.diag_console_trace);
+  f.printf("dl_trace    = %d\r\n", cfg.diag_dl_trace);
   f.printf("trace       = %s\r\n", cfg.diag_trace ? "true" : "false");
   f.printf("v4b_quirks  = %s\r\n", cfg.v4b_quirks ? "true" : "false");
   f.printf("kwp_enabled = %s\r\n", cfg.kwp_enabled ? "true" : "false");
@@ -515,7 +535,7 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.printf("rk0  = %s\r\n", cfg.disk_rk0.c_str());
   f.printf("rp0  = %s\r\n", cfg.disk_rp0.c_str());
   f.printf("rp0_type = %s\r\n", cfg.disk_rp0_type.c_str());
-  // Friendly boot value: dl0/dl1/dl2/dl3/rk0
+  // Friendly boot value: dl0/dl1/dl2/dl3/rk0. rl0..rl3 are accepted aliases.
   const char* boot_name;
   if (cfg.boot_kind == AppConfig::BK_RK) boot_name = "rk0";
   else boot_name = (cfg.boot_drive == 'a') ? "dl0"
@@ -643,8 +663,9 @@ int config_list_variants(const char* prefix, char names[][44], int max) {
 
 void config_print(const AppConfig& cfg) {
   LOG("---- /wificonfig.ini + /pdpconfig.ini effective values ----");
-  LOG("[system]  title=\"%s\"  version=\"%s\"  build=\"%s\"",
-      cfg.title.c_str(), cfg.version.c_str(), cfg.build.c_str());
+  LOG("[system]  title=\"%s\"  version=\"%s\"  build=\"%s\"  mem_size_kw=%d",
+      cfg.title.c_str(), cfg.version.c_str(), cfg.build.c_str(),
+      cfg.mem_size_kw);
   LOG("[wifi]    ssid=\"%s\"  hostname=\"%s\"  (password=%d chars)",
       cfg.wifi_ssid.c_str(), cfg.wifi_hostname.c_str(),
       (int)cfg.wifi_password.length());
@@ -658,12 +679,13 @@ void config_print(const AppConfig& cfg) {
   LOG("[ftp]     enabled=%s  port=%d  user=\"%s\" (password=%d chars)",
       cfg.ftp_enabled ? "true" : "false", cfg.ftp_port,
       cfg.ftp_user.c_str(), (int)cfg.ftp_password.length());
-  LOG("[diag]    pcping=%d sec%s  serialdelay=%d ms  io_trace=%d  clock_trace=%d  console_trace=%d  trace=%s  v4b_quirks=%s  kwp_enabled=%s",
+  LOG("[diag]    pcping=%d sec%s  serialdelay=%d ms  io_trace=%d  clock_trace=%d  console_trace=%d  dl_trace=%d  trace=%s  v4b_quirks=%s  kwp_enabled=%s",
       cfg.diag_pcping_sec, cfg.diag_pcping_sec <= 0 ? " (disabled)" : "",
       cfg.diag_serialdelay_ms,
       cfg.diag_io_trace,
       cfg.diag_clock_trace,
       cfg.diag_console_trace,
+      cfg.diag_dl_trace,
       cfg.diag_trace ? "true" : "false",
       cfg.v4b_quirks  ? "true" : "false",
       cfg.kwp_enabled ? "true (V7 mode)" : "false (V4B-safe)");

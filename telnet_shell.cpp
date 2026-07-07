@@ -23,6 +23,25 @@
 #include <stdio.h>
 #include <string.h>
 
+#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
+extern "C" void kek_tty_set_trace(uint32_t count);
+extern "C" uint32_t kek_tty_trace_remaining();
+extern "C" void kek_tty_get_stats(uint32_t* tx_chars,
+                                  uint32_t* tx_ready_events,
+                                  uint32_t* tx_irq_queues,
+                                  uint32_t* tx_irq_unqueues,
+                                  uint32_t* rx_chars,
+                                  uint32_t* rx_irq_queues,
+                                  uint32_t* rx_irq_unqueues,
+                                  uint8_t* last_tx,
+                                  uint32_t* last_tx_ms,
+                                  uint32_t* last_tx_ready_ms,
+                                  uint32_t* trace_remaining,
+                                  uint16_t* tks, uint16_t* tkb,
+                                  uint16_t* tps, uint16_t* tpb,
+                                  uint8_t* tx_busy);
+#endif
+
 static constexpr size_t SHELL_LINE_MAX = 255;
 static constexpr size_t SHELL_QUEUE_DEPTH = 4;
 static constexpr size_t SHELL_OUTPUT_BYTES = 8192;
@@ -293,12 +312,76 @@ static void show_runtime_settings() {
                 (unsigned)kw11::clock_trace_remaining());
   output_printf("console_trace=%u\r\n",
                 (unsigned)kl11::console_trace_remaining());
+#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
+  output_printf("kek_console_trace=%u\r\n",
+                (unsigned)kek_tty_trace_remaining());
+#endif
+  output_printf("dl_trace=%u\r\n",
+                (unsigned)pdp_core::dl_trace_remaining());
   output_printf("trace=%s\r\n", cfg.diag_trace ? "true" : "false");
   output_printf("title=\"%s\"\r\n", cfg.title.c_str());
   output_printf("boot_input=\"%s\"\r\n",
                 config_escape_bytes(cfg.boot_input,
                                     cfg.boot_input_len).c_str());
 }
+
+#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
+static void command_tty_stats() {
+  uint32_t tx_chars = 0;
+  uint32_t tx_ready = 0;
+  uint32_t tx_irq_q = 0;
+  uint32_t tx_irq_u = 0;
+  uint32_t rx_chars = 0;
+  uint32_t rx_irq_q = 0;
+  uint32_t rx_irq_u = 0;
+  uint32_t last_tx_ms = 0;
+  uint32_t last_tx_ready_ms = 0;
+  uint32_t trace_remaining = 0;
+  uint8_t last_tx = 0;
+  uint8_t tx_busy = 0;
+  uint16_t tks = 0;
+  uint16_t tkb = 0;
+  uint16_t tps = 0;
+  uint16_t tpb = 0;
+
+  kek_tty_get_stats(&tx_chars, &tx_ready, &tx_irq_q, &tx_irq_u,
+                    &rx_chars, &rx_irq_q, &rx_irq_u, &last_tx,
+                    &last_tx_ms, &last_tx_ready_ms, &trace_remaining,
+                    &tks, &tkb, &tps, &tpb, &tx_busy);
+  output_printf("TTY: tx=%lu txready=%lu irq64 q/u=%lu/%lu\r\n",
+                (unsigned long)tx_chars, (unsigned long)tx_ready,
+                (unsigned long)tx_irq_q, (unsigned long)tx_irq_u);
+  output_printf("     rx=%lu irq60 q/u=%lu/%lu trace_remaining=%lu\r\n",
+                (unsigned long)rx_chars, (unsigned long)rx_irq_q,
+                (unsigned long)rx_irq_u, (unsigned long)trace_remaining);
+  output_printf("     TKS=%06o TKB=%06o TPS=%06o TPB=%06o busy=%u "
+                "last_tx=%03o last_tx_ms=%lu last_ready_ms=%lu\r\n",
+                (unsigned)tks, (unsigned)tkb, (unsigned)tps, (unsigned)tpb,
+                (unsigned)tx_busy, (unsigned)last_tx,
+                (unsigned long)last_tx_ms,
+                (unsigned long)last_tx_ready_ms);
+
+  uint16_t psw = 0;
+  bool any_pending = false;
+  uint8_t counts[8] = {};
+  uint16_t vectors[8] = {};
+  if (pdp_core::get_interrupt_summary(&psw, &any_pending, counts, vectors)) {
+    output_printf("     CPU PS=%06o SPL=%u any_irq=%u queued:",
+                  (unsigned)psw, (unsigned)((psw >> 5) & 7),
+                  any_pending ? 1 : 0);
+    bool printed = false;
+    for (int level = 0; level < 8; level++) {
+      if (!counts[level]) continue;
+      output_printf(" BR%d=%06o", level, (unsigned)vectors[level]);
+      if (counts[level] > 1)
+        output_printf("(+%u)", (unsigned)(counts[level] - 1));
+      printed = true;
+    }
+    if (!printed) output_text(" none");
+    output_text("\r\n");
+  }
+}
+#endif
 
 static void command_set(char* arguments) {
   char* assignment = trim_in_place(arguments);
@@ -366,7 +449,21 @@ static void command_set(char* arguments) {
     }
     cfg.diag_console_trace = parsed;
     kl11::set_console_trace((uint32_t)parsed);
+#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
+    kek_tty_set_trace((uint32_t)parsed);
+#endif
     output_printf("console_trace=%d (runtime only)\r\n", parsed);
+    return;
+  }
+  if (!strcasecmp(name, "dl_trace")) {
+    int parsed;
+    if (!parse_int_value(value, 0, 1000000, &parsed)) {
+      output_text("error: dl_trace must be 0..1000000 events\r\n");
+      return;
+    }
+    cfg.diag_dl_trace = parsed;
+    pdp_core::set_dl_trace((uint32_t)parsed);
+    output_printf("dl_trace=%d (runtime only)\r\n", parsed);
     return;
   }
   if (!strcasecmp(name, "trace")) {
@@ -414,6 +511,7 @@ static void command_help() {
       "  dismount <unit>             dismount a drive\r\n"
       "  create <rk|rl01|rl02> <path> create an empty disk image\r\n"
       "  set [name=value]            show/change runtime settings\r\n"
+      "  tty                         show console TTY counters\r\n"
       "  monitor                     enter PDP-11 front-panel monitor\r\n"
       "  reboot                      cold reboot the PDP-11\r\n"
       "  exit                        reconnect Telnet to the PDP console\r\n");
@@ -427,8 +525,13 @@ static void monitor_help() {
       "  C                  continue execution\r\n"
       "  D00100             dump 16 words starting at 00100\r\n"
       "  D00100:00200       dump an inclusive address range\r\n"
+      "  M00100             dump 16 MMU/logical words starting at 00100\r\n"
+      "  M00100:00200       dump an inclusive MMU/logical range\r\n"
+      "  U                  dump MMU registers and Unibus map\r\n"
+      "  H                  dump trace history to USB serial\r\n"
       "  T 1000             trace the next 1000 instructions to USB serial\r\n"
       "  W000100=012345     deposit one word in physical RAM\r\n"
+      "  R0=012345          set R0-R5, SP, PC, or PS\r\n"
       "  >                  return to the management shell\r\n"
       "  ?                  show this help\r\n");
 }
@@ -466,9 +569,11 @@ static bool parse_monitor_octal(const char* text, uint32_t maximum,
   return true;
 }
 
-static void monitor_dump(const char* argument) {
+static void monitor_dump(const char* argument, bool logical) {
   static constexpr uint32_t LAST_RAM_WORD = 0757776u;
+  static constexpr uint32_t LAST_LOGICAL_WORD = 0177776u;
   static constexpr uint32_t MAX_DUMP_WORDS = 512;
+  const uint32_t max_address = logical ? LAST_LOGICAL_WORD : LAST_RAM_WORD;
 
   char range[64];
   strncpy(range, argument ? argument : "", sizeof(range) - 1);
@@ -478,20 +583,21 @@ static void monitor_dump(const char* argument) {
 
   uint32_t first = 0;
   uint32_t last = 0;
-  if (!parse_monitor_octal(trim_in_place(range), LAST_RAM_WORD, &first) ||
+  if (!parse_monitor_octal(trim_in_place(range), max_address, &first) ||
       (first & 1)) {
-    output_text("error: invalid even physical RAM address\r\n");
+    output_printf("error: invalid even %s address\r\n",
+                  logical ? "MMU/logical" : "physical RAM");
     return;
   }
   if (separator) {
-    if (!parse_monitor_octal(trim_in_place(separator), LAST_RAM_WORD, &last) ||
+    if (!parse_monitor_octal(trim_in_place(separator), max_address, &last) ||
         (last & 1) || last < first) {
       output_text("error: invalid dump range\r\n");
       return;
     }
   } else {
     last = first + 30;
-    if (last > LAST_RAM_WORD) last = LAST_RAM_WORD;
+    if (last > max_address) last = max_address;
   }
 
   uint32_t words = ((last - first) / 2) + 1;
@@ -506,8 +612,13 @@ static void monitor_dump(const char* argument) {
     unsigned count = 0;
     uint32_t line_address = address;
     while (count < 8 && address <= last) {
-      if (!pdp_core::read_physical_word(address, &values[count])) {
-        output_text("error: memory examine failed\r\n");
+      bool ok = logical
+          ? pdp_core::read_mmu_word((uint16_t)address, &values[count])
+          : pdp_core::read_physical_word(address, &values[count]);
+      if (!ok) {
+        output_printf("error: %s memory examine failed at %06o\r\n",
+                      logical ? "MMU/logical" : "physical",
+                      (unsigned)address);
         return;
       }
       count++;
@@ -531,6 +642,77 @@ static void monitor_dump(const char* argument) {
     for (unsigned i = count; i < 8; i++) output_text("  ");
     output_text("\r\n");
   }
+}
+
+static const char* monitor_run_mode_name(int run_mode) {
+  switch (run_mode) {
+    case 0: return "Kernel";
+    case 1: return "Supervisor";
+    case 3: return "User";
+    default: return "Unknown";
+  }
+}
+
+static void monitor_dump_mmu_unibus() {
+  uint16_t mmr0 = 0;
+  uint16_t mmr1 = 0;
+  uint16_t mmr2 = 0;
+  uint16_t mmr3 = 0;
+  uint16_t cpuerr = 0;
+  uint16_t pir = 0;
+  uint32_t io_base = 0;
+
+  if (!pdp_core::get_mmu_summary(&mmr0, &mmr1, &mmr2, &mmr3,
+                                 &cpuerr, &pir, &io_base)) {
+    output_text("error: MMU state unavailable for this CPU core\r\n");
+    return;
+  }
+
+  output_printf("MMU: MMR0=%06o MMR1=%06o MMR2=%06o MMR3=%06o\r\n",
+                (unsigned)mmr0, (unsigned)mmr1, (unsigned)mmr2,
+                (unsigned)mmr3);
+  output_printf("     CPUERR=%06o PIR=%06o IOBASE=%08lo\r\n",
+                (unsigned)cpuerr, (unsigned)pir, (unsigned long)io_base);
+
+  static const int kRunModes[] = { 0, 1, 3 };
+  for (unsigned i = 0; i < sizeof(kRunModes) / sizeof(kRunModes[0]); i++) {
+    int mode = kRunModes[i];
+    output_printf("%s PAR/PDR:\r\n", monitor_run_mode_name(mode));
+    output_text("  pg  I-PAR  I-PDR  I-phys    D-PAR  D-PDR  D-phys\r\n");
+    for (int page = 0; page < 8; page++) {
+      uint16_t i_par = 0;
+      uint16_t i_pdr = 0;
+      uint16_t d_par = 0;
+      uint16_t d_pdr = 0;
+      uint32_t i_phys = 0;
+      uint32_t d_phys = 0;
+      bool i_ok = pdp_core::get_mmu_page(mode, false, page, &i_par, &i_pdr,
+                                         &i_phys);
+      bool d_ok = pdp_core::get_mmu_page(mode, true, page, &d_par, &d_pdr,
+                                         &d_phys);
+      if (!i_ok || !d_ok) {
+        output_printf("  %d  <unavailable>\r\n", page);
+        continue;
+      }
+      output_printf("  %d  %06o %06o %08lo  %06o %06o %08lo\r\n",
+                    page, (unsigned)i_par, (unsigned)i_pdr,
+                    (unsigned long)i_phys, (unsigned)d_par,
+                    (unsigned)d_pdr, (unsigned long)d_phys);
+    }
+  }
+
+  output_text("Unibus map physical bases:\r\n");
+  for (int entry = 0; entry < 32; entry++) {
+    uint32_t base = 0;
+    if (!pdp_core::get_unibus_map_entry(entry, &base)) {
+      output_printf("  %02o:<unavailable>\r\n", entry);
+      return;
+    }
+    output_printf("  %02o:%08lo", entry, (unsigned long)base);
+    if ((entry & 3) == 3) output_text("\r\n");
+  }
+  output_text("DMA translation: phys=(map[unibus/020000] & 017760000) | "
+              "(unibus & 017777)\r\n");
 }
 
 static void monitor_write(const char* argument) {
@@ -557,6 +739,54 @@ static void monitor_write(const char* argument) {
     return;
   }
   output_printf("%06o=%06o\r\n", (unsigned)address, (unsigned)value);
+}
+
+static void monitor_write_register(const char* command) {
+  char assignment[64];
+  strncpy(assignment, command ? command : "", sizeof(assignment) - 1);
+  assignment[sizeof(assignment) - 1] = 0;
+  char* equals = strchr(assignment, '=');
+  if (!equals) {
+    output_text("usage: R0=012345, SP=012345, PC=012345, or PS=012345\r\n");
+    return;
+  }
+  *equals++ = 0;
+
+  char* name = trim_in_place(assignment);
+  char* value_text = trim_in_place(equals);
+  uint32_t value = 0;
+  if (!parse_monitor_octal(value_text, 0177777u, &value)) {
+    output_text("error: invalid octal register value\r\n");
+    return;
+  }
+
+  int reg = -1;
+  if ((name[0] == 'R' || name[0] == 'r') && name[1] >= '0' &&
+      name[1] <= '5' && name[2] == 0) {
+    reg = name[1] - '0';
+  } else if (!strcasecmp(name, "SP")) {
+    reg = 6;
+  } else if (!strcasecmp(name, "PC")) {
+    reg = 7;
+  } else if (!strcasecmp(name, "PS") || !strcasecmp(name, "PSW")) {
+    if (!pdp_core::set_psw((uint16_t)value)) {
+      output_text("error: PS write not supported by this CPU core\r\n");
+      return;
+    }
+    output_printf("PS=%06o\r\n", (unsigned)value);
+    return;
+  } else {
+    output_text("error: register must be R0-R5, SP, PC, or PS\r\n");
+    return;
+  }
+
+  if (!pdp_core::set_reg16(reg, (uint16_t)value)) {
+    output_text("error: register write not supported by this CPU core\r\n");
+    return;
+  }
+
+  static const char* kNames[] = { "R0", "R1", "R2", "R3", "R4", "R5", "SP", "PC" };
+  output_printf("%s=%06o\r\n", kNames[reg], (unsigned)value);
 }
 
 static void monitor_trace(const char* argument) {
@@ -600,12 +830,24 @@ static void execute_monitor_command(char* line) {
   } else if (!strcasecmp(command, "C")) {
     pdp_core::monitor_continue();
     output_text("CPU running\r\n");
+  } else if (!strcasecmp(command, "H")) {
+    pdp_core::monitor_dump_history();
+    output_text("trace history requested; output goes to USB serial\r\n");
   } else if (command[0] == 'D' || command[0] == 'd') {
-    monitor_dump(command + 1);
+    monitor_dump(command + 1, false);
+  } else if (command[0] == 'M' || command[0] == 'm') {
+    monitor_dump(command + 1, true);
+  } else if (!strcasecmp(command, "U")) {
+    monitor_dump_mmu_unibus();
   } else if (command[0] == 'T' || command[0] == 't') {
     monitor_trace(command + 1);
   } else if (command[0] == 'W' || command[0] == 'w') {
     monitor_write(command + 1);
+  } else if ((command[0] == 'R' || command[0] == 'r') ||
+             !strncasecmp(command, "SP", 2) ||
+             !strncasecmp(command, "PC", 2) ||
+             !strncasecmp(command, "PS", 2)) {
+    monitor_write_register(command);
   } else {
     output_text("unknown monitor command (type ?)\r\n");
   }
@@ -1056,6 +1298,10 @@ static void execute_command(char* line) {
   else if (!strcasecmp(words[0], "create"))
     command_create(count > 1 ? words[1] : nullptr,
                    count > 2 ? words[2] : nullptr);
+#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
+  else if (!strcasecmp(words[0], "tty"))
+    command_tty_stats();
+#endif
   else if (!strcasecmp(words[0], "monitor")) {
     g_monitor_mode = true;
     output_printf("PDP-11 monitor; CPU is currently %s.\r\n",

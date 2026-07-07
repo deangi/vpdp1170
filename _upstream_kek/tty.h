@@ -34,6 +34,14 @@ private:
 	bus     *const b      { nullptr };
 
 	uint16_t registers[4] { 0 };
+	bool rx_irq_asserted { false };
+	bool tx_irq_asserted { false };
+	bool tx_ready_reported { false };
+	bool tx_busy { false };
+	uint32_t tx_ready_at_us { 0 };
+
+	void update_rx_interrupt();
+	void update_tx_interrupt();
 
 public:
 	tty(console *const c, bus *const b);
@@ -47,6 +55,7 @@ public:
 #endif
 
 	void reset(const bool hard);
+	void service_deferred();
 
 	uint8_t read_byte(const uint16_t addr);
 	uint16_t read_word(const uint16_t addr);

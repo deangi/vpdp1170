@@ -49,11 +49,20 @@ private:
 	uint16_t pc                 { 0     };
 	uint16_t psw                { 0     };
 	uint16_t fpsr               { 0     };
+	uint16_t fp_fec             { 0     };
+	uint16_t fp_fea             { 0     };
+	uint16_t fp_ac[6][4]        {       };
 	uint16_t stack_limit_register { 0400 };
 	int      processing_trap_depth { 0  };
 	std::optional<int> delayed_trap {   };  // invoked after completion of the instruction
 	int      kw11l_counter      { 0     };
 	bool     wait_stuck         { false };
+	bool     instruction_active { false };
+	uint16_t instruction_pc     { 0     };
+	bool     last_instruction_valid { false };
+	uint16_t last_instruction_pc    { 0     };
+	uint16_t last_instruction_word  { 0     };
+	uint32_t last_instruction_phys  { 0     };
 	uint64_t trap_counter       { 0     };
 	std::unordered_map<uint16_t, uint32_t> trap_counts;
 	uint64_t instructions_executed { 0  };
@@ -65,7 +74,7 @@ private:
 	SemaphoreHandle_t       qi_lock { xSemaphoreCreateBinary() };
 	QueueHandle_t           qi_q    { xQueueCreate(16, 1)      };
 #else
-	std::mutex              qi_lock;
+	mutable std::mutex       qi_lock;
 	std::condition_variable qi_cv;
 #endif
 
@@ -89,13 +98,22 @@ private:
 	gam_rc_t getGAM(const uint8_t mode, const uint8_t reg, const word_mode_t word_mode, const bool read_value = true);
 	gam_rc_t getGAMAddress(const uint8_t mode, const int reg, const word_mode_t word_mode);
 	bool     putGAM(const gam_rc_t & g, const uint16_t value); // returns false when flag registers should not be updated
+	int      fp_word_count() const;
+	void     fp_set_fpsr_nz(const int ac);
+	bool     fp_get_operand_address(const uint8_t mode, const uint8_t reg, const int words, uint16_t *addr);
+	bool     fp_read_operand(const uint8_t mode, const uint8_t reg, uint16_t *words, const int count);
+	bool     fp_write_operand(const uint8_t mode, const uint8_t reg, const uint16_t *words, const int count);
+	double   fp_to_double(const uint16_t *words) const;
+	void     double_to_fp(double value, uint16_t *words) const;
 
 	std::optional<bool> conditional_branch_instructions_evaluate(const uint16_t instr) const;
 	bool double_operand_instructions(const uint16_t instr);
 	bool additional_double_operand_instructions(const uint16_t instr);
 	bool single_operand_instructions(const uint16_t instr);
+	bool floating_point_instructions(const uint16_t instr);
 	bool conditional_branch_instructions(const uint16_t instr);
 	bool condition_code_operations(const uint16_t instr);
+	bool jsr_instruction(const uint16_t instr);
 	bool misc_operations(const uint16_t instr);
 
 	struct operand_parameters {
@@ -133,6 +151,8 @@ public:
 
 	void     reset();
 	bool     step ();
+	bool     get_last_instruction(uint16_t *address, uint16_t *opcode) const;
+	bool     get_last_instruction_physical(uint32_t *address) const;
 
 	uint64_t get_instructions_executed_count() const { return instructions_executed; }
 	uint32_t calc_instruction_duration(const uint16_t pc) const;  // nanoseconds
@@ -145,7 +165,8 @@ public:
 	void init_interrupt_queue();
 	void queue_interrupt(const uint8_t level, const uint16_t vector);
 	void unqueue_interrupt(const uint8_t level, const uint16_t vector);
-	std::array<std::set<uint16_t>, 8> get_queued_interrupts() const { return queued_interrupts; }
+	bool has_queued_interrupt(const uint8_t level, const uint16_t vector);
+	std::array<std::set<uint16_t>, 8> get_queued_interrupts() const;
 	bool check_if_interrupts_pending() const { return any_queued_interrupts; }
 
 	void trap(uint16_t vector, const int new_ipl = -1, const bool is_interrupt = false);

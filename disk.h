@@ -13,6 +13,17 @@ enum {
   DRIVE_COUNT = 6
 };
 
+static constexpr uint32_t DISK_SIZE_TOLERANCE_PERCENT = 20;
+static constexpr uint32_t DISK_RK05_IMAGE_BYTES = 2494464u;
+static constexpr uint32_t DISK_RL01_IMAGE_BYTES = 5242880u;
+static constexpr uint32_t DISK_RL02_IMAGE_BYTES = 10485760u;
+
+bool disk_size_within_tolerance(uint32_t bytes, uint32_t nominal);
+bool disk_size_is_rk(uint32_t bytes);
+bool disk_size_is_rl01(uint32_t bytes);
+bool disk_size_is_rl02(uint32_t bytes);
+bool disk_size_is_rl(uint32_t bytes);
+
 // Mount an image file (path on the SD card) into a drive slot.
 // Basic size validation is performed here; the selected PDP-11 controller
 // remains responsible for enforcing its media geometry.
