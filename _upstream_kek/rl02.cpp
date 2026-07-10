@@ -45,7 +45,10 @@ static int rl02_trace_left = 0;
 static constexpr uint32_t rl01_image_bytes = 5242880u;
 static constexpr uint32_t rl02_image_bytes = 10485760u;
 static constexpr int rl01_track_count = 256;
-static constexpr int rl02_deferred_completion_instructions = 100;
+// Keep this short: long busy windows let RSX issue GETSTAT and rewrite DAR
+// while a deferred READ is in flight (seen as disk_off=2816 + NOIRQ).
+// vpdp1140 completes data in the CSR write and only delays the IRQ 2 ticks.
+static constexpr int rl02_deferred_completion_instructions = 2;
 static constexpr int rl02_register_count = 5;
 
 void rl02_set_trace(const int count)
@@ -171,6 +174,11 @@ void rl02::reset(const bool hard)
 	deferred_data_active = false;
 	deferred_execute = false;
 	deferred_csr = 0;
+	deferred_bar = 0;
+	deferred_dar = 0;
+	deferred_mpr = 0;
+	deferred_bae = 0;
+	deferred_bae_active = false;
 	deferred_command = 0;
 	deferred_device = 0;
 	deferred_poll_count = 0;
@@ -273,8 +281,8 @@ uint16_t rl02::read_word(const uint16_t addr)
 			if (deferred_poll_count == 1 || deferred_service_delay <= 0 || (deferred_poll_count % 64) == 0) {
 				rl02_trace("DEFER-BUSY unit=%d cmd=%u(%s) poll=%d delay=%d CSR=%06o BAR=%06o DAR=%06o MPR=%06o",
 						deferred_device, deferred_command, commands[deferred_command],
-						deferred_poll_count, deferred_service_delay, value, registers[1], registers[2],
-						registers[(RL02_MPR - RL02_BASE) / 2]);
+						deferred_poll_count, deferred_service_delay, value,
+						deferred_bar, deferred_dar, deferred_mpr);
 			}
 
 			return value;
@@ -380,17 +388,23 @@ void rl02::defer_data_command(const uint16_t csr, const uint8_t command, const i
 {
 	deferred_data_active = true;
 	deferred_csr = csr;
+	deferred_bar = registers[(RL02_BAR - RL02_BASE) / 2];
+	deferred_dar = registers[(RL02_DAR - RL02_BASE) / 2];
+	deferred_mpr = registers[(RL02_MPR - RL02_BASE) / 2];
+	deferred_bae = registers[(RL02_BAE - RL02_BASE) / 2];
+	deferred_bae_active = bae_active;
 	deferred_command = command;
 	deferred_device = device;
 	deferred_poll_count = 0;
-	deferred_service_delay = -1;
+	// Start the busy timer immediately so IE+WAIT (no CSR poll) still completes.
+	deferred_service_delay = rl02_deferred_completion_instructions;
 
 	setBit(registers[(RL02_CSR - RL02_BASE) / 2], 0, true);   // drive ready
 	setBit(registers[(RL02_CSR - RL02_BASE) / 2], 7, false);  // controller busy
 
 	rl02_trace("DEFER-DATA unit=%d cmd=%u(%s) CSR=%06o BAR=%06o DAR=%06o MPR=%06o",
-			device, command, commands[command], registers[0], registers[1],
-			registers[2], registers[(RL02_MPR - RL02_BASE) / 2]);
+			device, command, commands[command], registers[0], deferred_bar,
+			deferred_dar, deferred_mpr);
 }
 
 void rl02::complete_deferred_data_command()
@@ -402,24 +416,33 @@ void rl02::complete_deferred_data_command()
 	const uint8_t command = deferred_command;
 	const int device = deferred_device;
 
+	// Restore transfer parameters in case software poked DAR/BAR during busy
+	// (RSX GETSTAT uses DAR=13 and was observed corrupting in-flight READs).
+	registers[(RL02_BAR - RL02_BASE) / 2] = deferred_bar;
+	registers[(RL02_DAR - RL02_BASE) / 2] = deferred_dar;
+	registers[(RL02_MPR - RL02_BASE) / 2] = deferred_mpr;
+	registers[(RL02_BAE - RL02_BASE) / 2] = deferred_bae;
+	bae_active = deferred_bae_active;
+	mpr[0] = deferred_mpr;
+
 	deferred_data_active = false;
 	deferred_execute = true;
 	rl02_trace("DEFER-COMPLETE unit=%d cmd=%u(%s) CSR=%06o BAR=%06o DAR=%06o MPR=%06o",
-			device, command, commands[command], registers[0], registers[1],
-			registers[2], registers[(RL02_MPR - RL02_BASE) / 2]);
+			device, command, commands[command], csr, deferred_bar,
+			deferred_dar, deferred_mpr);
 	write_word(RL02_CSR, csr);
 	deferred_execute = false;
 }
 
 void rl02::service_deferred()
 {
-	if (deferred_data_active && deferred_poll_count > 0) {
-		if (deferred_service_delay > 0) {
+	if (deferred_data_active) {
+		if (deferred_service_delay < 0)
+			deferred_service_delay = rl02_deferred_completion_instructions;
+		if (deferred_service_delay > 0)
 			deferred_service_delay--;
-		}
-		else {
+		else
 			complete_deferred_data_command();
-		}
 	}
 
 #if defined(ESP32)
@@ -442,6 +465,17 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 	const int reg = (addr - RL02_BASE) / 2;
 
 	DOLOG(log_ss::LS_DISK, "RL02: write \"%s\"/%06o: %06o", regnames[reg], addr, v);
+
+	// While a data xfer is in progress, keep BAR/DAR/MPR/CSR stable. RSX was
+	// observed issuing GETSTAT (DAR=13) during the deferred window, which
+	// made the eventual READ land at disk_off=2816 and drop IE/IRQ.
+	if (deferred_data_active && !deferred_execute) {
+		rl02_trace("WRITE-BUSY-IGNORE @ %06o val=%06o pending CSR=%06o BAR=%06o DAR=%06o MPR=%06o",
+				addr, v, deferred_csr, deferred_bar, deferred_dar, deferred_mpr);
+		setBit(registers[(RL02_CSR - RL02_BASE) / 2], 0, true);
+		setBit(registers[(RL02_CSR - RL02_BASE) / 2], 7, false);
+		return;
+	}
 
 	if (addr == RL02_BAE) {
 		registers[reg] = v & 077;

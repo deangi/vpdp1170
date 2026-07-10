@@ -48,6 +48,11 @@ private:
 	bool            deferred_data_active { false };
 	bool            deferred_execute     { false };
 	uint16_t        deferred_csr         { 0 };
+	uint16_t        deferred_bar         { 0 };
+	uint16_t        deferred_dar         { 0 };
+	uint16_t        deferred_mpr         { 0 };
+	uint16_t        deferred_bae         { 0 };
+	bool            deferred_bae_active  { false };
 	uint8_t         deferred_command     { 0 };
 	int             deferred_device      { 0 };
 	int             deferred_poll_count  { 0 };

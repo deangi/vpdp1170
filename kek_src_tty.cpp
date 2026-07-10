@@ -201,7 +201,11 @@ void tty::update_tx_interrupt() {
 void tty::notify_rx() {
   const int tks = (PDP11TTY_TKS - PDP11TTY_BASE) / 2;
   const int tkb = (PDP11TTY_TKB - PDP11TTY_BASE) / 2;
+  // Match vpdp1140 kl11::poll guards: never overwrite an unread byte, and
+  // never present the next byte while vec 060 is still queued (guest has
+  // not taken the prior RX interrupt yet).
   if (registers[tks] & TTY_DONE) return;
+  if (b && b->getCpu() && b->getCpu()->has_queued_interrupt(4, 060)) return;
 
   uint8_t ch = 0;
   if (!pop_host_input(&ch)) return;
@@ -210,12 +214,16 @@ void tty::notify_rx() {
   registers[tks] = (registers[tks] & TTY_IE) | TTY_DONE;
   g_tty_rx_chars++;
   tty_trace("RXREADY", PDP11TTY_TKB, registers[tkb]);
+  // DONE 0→1 must present a new sticky request even if a prior vec 060 was
+  // already accepted while DONE was still set (SIMH SET_INT on rising DONE).
+  rx_irq_asserted = false;
   update_rx_interrupt();
   tty_save_snapshot(registers, tx_busy);
 }
 
 void tty::service_deferred() {
   const int tps = (PDP11TTY_TPS - PDP11TTY_BASE) / 2;
+  const int tks = (PDP11TTY_TKS - PDP11TTY_BASE) / 2;
 
   if (tx_busy) {
     if (++s_tx_poll >= TTY_TX_POLL_DIV) {
@@ -236,7 +244,13 @@ void tty::service_deferred() {
     update_tx_interrupt();
   }
 
-  if (++s_rx_poll_div >= TTY_RX_POLL_DIV) {
+  // Unix V6 waits in sleep/WAIT with RX IE set and never polls TKS — load
+  // host input every instruction while IE is on. Polled guests keep the
+  // divider to avoid host FIFO work on every step.
+  if (registers[tks] & TTY_IE) {
+    if (!(registers[tks] & TTY_DONE))
+      notify_rx();
+  } else if (++s_rx_poll_div >= TTY_RX_POLL_DIV) {
     s_rx_poll_div = 0;
     notify_rx();
   }
@@ -296,6 +310,11 @@ uint16_t tty::read_word(const uint16_t addr) {
     uint16_t value = registers[reg] & 0177;
     registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2] &= (uint16_t)~TTY_DONE;
     update_rx_interrupt();
+    // Pace from guest consumption, not host load. At low KIPS the old
+    // "delay since addchar" expires while the RX ISR is still running, so
+    // the next FIFO byte was injected mid-handler (DIR -> DR).
+    s_last_rx_ms = millis();
+    s_rx_fifo_drained = false;
     tty_trace("READ", addr, value);
     tty_save_snapshot(registers, tx_busy);
     return value;
@@ -328,7 +347,12 @@ void tty::write_word(const uint16_t addr, uint16_t v) {
     // SIMH: IE only in RW mask; RDR ENB (bit 0) clears DONE (DEC).
     const bool rdr_enb = (v & TTY_RDR_ENB) != 0;
     uint16_t csr = registers[reg];
-    if (rdr_enb) csr &= (uint16_t)~TTY_DONE;
+    if (rdr_enb) {
+      csr &= (uint16_t)~TTY_DONE;
+      // Same consumption pacing as TKB read: RDR ENB discards/re-arms DONE.
+      s_last_rx_ms = millis();
+      s_rx_fifo_drained = false;
+    }
     // IE write: clearing IE drops request; enabling IE while DONE set raises.
     if ((v & TTY_IE) == 0) {
       csr &= (uint16_t)~TTY_IE;
