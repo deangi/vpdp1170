@@ -205,6 +205,16 @@ void drain_serial_out()
     }
 }
 
+void queue_serial_out(uint8_t out)
+{
+    if (g_serial_silenced) return;
+    if (!g_serial_out_inited) {
+        g_serial_out.init(serial_out_storage, VPDP_KL11_FIFO_BYTES);
+        g_serial_out_inited = true;
+    }
+    g_serial_out.push(out);
+}
+
 static void addchar(char c)
 {
 #if CR_TO_LF && !LF_TO_CR

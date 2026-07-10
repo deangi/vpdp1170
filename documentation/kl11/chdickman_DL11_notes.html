@@ -1,0 +1,1562 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+
+
+  
+  <link rel="stylesheet" type="text/css" href="../../chd_style.css">
+
+  
+  <title>Notes: DEC DL11</title>
+</head>
+
+
+<body>
+
+
+<center>
+<table border="0" cellspacing="0" width="100%">
+
+
+<!-- main header --> <tbody>
+
+
+    <tr>
+
+
+      <td class="header"> Notes: DEC DL11 </td>
+
+
+      <td align="right"> <img style="width: 133px; height: 40px;" alt="Digital Equipment Logo" src="../../images/DEClogo.gif"> </td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td colspan="2" valign="top"> <img src="/images/black2x1.gif" height="2" width="100%">
+      </td>
+
+
+    </tr>
+
+
+  
+  </tbody>
+</table>
+
+
+</center>
+
+
+<!-- body -->
+<p> The DL11 is the basic serial line interface for the Unibus
+PDP-11.
+When addressed at 777560 it is the console. The typical Unibus
+implementation is the M7800 quad height SPC module. The module supports
+several DL11 versions, -A through -E. The differences were in the
+cables and the crystal supplied. The module can supply asynchronous
+serial signals in 3 different types: TTL, EIA (now generally called
+RS-232), and 20mA. The cable determines the signal type used. Four
+different crystals were available resulting in four Speed Groups. For
+modern usage, Groups 3 and 4 are the most useful. </p>
+
+
+Two rotary switches and the installed crystal determine the baud rate.
+The transmit and receive rates can be different and are determined by
+the setting two 8 position switches. The switches are marked as R and T
+on the board for obvious reasons.<br>
+
+
+<br>
+
+
+The M7800 I have as a spare has the 4.608Mhz crystal.<br>
+
+
+<br>
+
+
+<table style="text-align: left; margin-left: auto; margin-right: auto;" border="1">
+
+
+  <tbody>
+
+
+    <tr align="center">
+
+
+      <td style="font-weight: bold;"> Speed Group </td>
+
+
+      <td style="font-weight: bold;"> 1 </td>
+
+
+      <td style="font-weight: bold;"> 2 </td>
+
+
+      <td style="font-weight: bold;"> 3 </td>
+
+
+      <td style="font-weight: bold;"> 4 </td>
+
+
+    </tr>
+
+
+    <tr align="center">
+
+
+      <td style="font-weight: bold;"> Crystal Freq. (Hz) </td>
+
+
+      <td style="font-weight: bold;"> 844.8k </td>
+
+
+      <td style="font-weight: bold;"> 1.03296M </td>
+
+
+      <td style="font-weight: bold;"> 1.152M </td>
+
+
+      <td style="font-weight: bold;"> 4.608M </td>
+
+
+    </tr>
+
+
+    <tr align="center">
+
+
+      <td style="font-weight: bold;"> S1, S2 POS. (T, R) </td>
+
+
+      <td style="font-weight: bold;" colspan="4">Baud
+Rate </td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">1</td>
+
+
+      <td style="text-align: center;">36.7</td>
+
+
+      <td style="text-align: center;">44.8</td>
+
+
+      <td style="text-align: center;">50</td>
+
+
+      <td style="text-align: center;">200</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">2</td>
+
+
+      <td style="text-align: center;">55</td>
+
+
+      <td style="text-align: center;">67.3</td>
+
+
+      <td style="text-align: center;">75</td>
+
+
+      <td style="text-align: center;">300</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">3</td>
+
+
+      <td style="text-align: center;">110</td>
+
+
+      <td style="text-align: center;">134.5</td>
+
+
+      <td style="text-align: center;">150</td>
+
+
+      <td style="text-align: center;">600</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">4</td>
+
+
+      <td style="text-align: center;">220</td>
+
+
+      <td style="text-align: center;">269</td>
+
+
+      <td style="text-align: center;">300</td>
+
+
+      <td style="text-align: center;">1200</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">5</td>
+
+
+      <td style="text-align: center;">440</td>
+
+
+      <td style="text-align: center;">538</td>
+
+
+      <td style="text-align: center;">600</td>
+
+
+      <td style="text-align: center;">2400</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">6</td>
+
+
+      <td style="text-align: center;">880</td>
+
+
+      <td style="text-align: center;">1076</td>
+
+
+      <td style="text-align: center;">1200</td>
+
+
+      <td style="text-align: center;">4800</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">7</td>
+
+
+      <td style="text-align: center;">1320</td>
+
+
+      <td style="text-align: center;">1614</td>
+
+
+      <td style="text-align: center;">1800</td>
+
+
+      <td style="text-align: center;">7200</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">8</td>
+
+
+      <td style="text-align: center;">1760</td>
+
+
+      <td style="text-align: center;">2152</td>
+
+
+      <td style="text-align: center;">2400</td>
+
+
+      <td style="text-align: center;">9600</td>
+
+
+    </tr>
+
+
+  
+  </tbody>
+</table>
+
+
+<div style="text-align: left;">
+<div style="text-align: center;"> Baud rate table.<br>
+
+
+</div>
+
+
+<br>
+
+
+<br>
+
+
+</div>
+
+
+<br>
+
+
+<table style="text-align: left; margin-left: auto; margin-right: auto;" border="1" cellpadding="2" cellspacing="2">
+
+
+  <tbody>
+
+
+    <tr>
+
+
+      <td style="text-align: center; font-weight: bold;">Berg</td>
+
+
+      <td style="text-align: center; font-weight: bold;">Pin</td>
+
+
+      <td style="font-weight: bold;">Description</td>
+
+
+      <td style="text-align: center; font-weight: bold;">Direction</td>
+
+
+      <td style="text-align: center; font-weight: bold;">Type</td>
+
+
+      <td style="font-weight: bold; text-align: center;">Active/<br>
+
+
+Passive</td>
+
+
+      <td><span style="font-weight: bold;">Description</span></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">A</td>
+
+
+      <td style="text-align: center;">40</td>
+
+
+      <td>Ground</td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">passive</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">B</td>
+
+
+      <td style="text-align: center;">39</td>
+
+
+      <td>Ground</td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">passive</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">C</td>
+
+
+      <td style="text-align: center;">38</td>
+
+
+      <td>Force Busy</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">EIA</td>
+
+
+      <td style="text-align: center;">configurable</td>
+
+
+      <td>Active or passive based on jumper settings. J2, J4</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">D</td>
+
+
+      <td style="text-align: center;">37</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">E</td>
+
+
+      <td style="text-align: center;">36</td>
+
+
+      <td>Serial Input</td>
+
+
+      <td style="text-align: center;">In</td>
+
+
+      <td style="text-align: center;">TTL</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>TTL serial in, must be looped in berg, H or M.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">F</td>
+
+
+      <td style="text-align: center;">35</td>
+
+
+      <td>Serial Output</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">EIA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>RS-232 output.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">H</td>
+
+
+      <td style="text-align: center;">34</td>
+
+
+      <td>20mA Interlock</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">TTL</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>Clamped version of K. Loop to E for &nbsp;20mA.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">J</td>
+
+
+      <td style="text-align: center;">33</td>
+
+
+      <td>Serial Input</td>
+
+
+      <td style="text-align: center;">In</td>
+
+
+      <td style="text-align: center;">EIA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>RS-232 input.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">K</td>
+
+
+      <td style="text-align: center;">32</td>
+
+
+      <td>Serial Input +</td>
+
+
+      <td style="text-align: center;">In</td>
+
+
+      <td style="text-align: center;">20mA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>Diode clamps to +5 and &nbsp;0.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">L</td>
+
+
+      <td style="text-align: center;">31</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">M</td>
+
+
+      <td style="text-align: center;">30</td>
+
+
+      <td>EIA Interlock</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">TTL</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>TTL version of J. Loop to E for RS-232.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">N</td>
+
+
+      <td style="text-align: center;">29</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">P</td>
+
+
+      <td style="text-align: center;">28</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">R</td>
+
+
+      <td style="text-align: center;">27</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">S</td>
+
+
+      <td style="text-align: center;">26</td>
+
+
+      <td>Serial Input -</td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">20mA</td>
+
+
+      <td style="text-align: center;">passive</td>
+
+
+      <td>Pulldown to -15.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">T</td>
+
+
+      <td style="text-align: center;">25</td>
+
+
+      <td>Clear to Send</td>
+
+
+      <td style="text-align: center;">In</td>
+
+
+      <td style="text-align: center;">EIA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">U</td>
+
+
+      <td style="text-align: center;">24</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">V</td>
+
+
+      <td style="text-align: center;">23</td>
+
+
+      <td>Request to Send</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">EIA</td>
+
+
+      <td style="text-align: center;">configurable</td>
+
+
+      <td>Active or passive based on jumper settings. J1, J4</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">W</td>
+
+
+      <td style="text-align: center;">22</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">X</td>
+
+
+      <td style="text-align: center;">21</td>
+
+
+      <td>Ring</td>
+
+
+      <td style="text-align: center;">In</td>
+
+
+      <td style="text-align: center;">EIA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">Y</td>
+
+
+      <td style="text-align: center;">20</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">Z</td>
+
+
+      <td style="text-align: center;">19</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">AA</td>
+
+
+      <td style="text-align: center;">18</td>
+
+
+      <td>Serial Output +</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">20mA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>Serial data source.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">BB</td>
+
+
+      <td style="text-align: center;">17</td>
+
+
+      <td>Carrier</td>
+
+
+      <td style="text-align: center;">In</td>
+
+
+      <td style="text-align: center;">EIA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">CC</td>
+
+
+      <td style="text-align: center;">16</td>
+
+
+      <td>Clock Input</td>
+
+
+      <td style="text-align: center;">In</td>
+
+
+      <td style="text-align: center;">TTL</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>Selected by HH.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">DD</td>
+
+
+      <td style="text-align: center;">15</td>
+
+
+      <td>Data Terminal Ready</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">EIA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">EE</td>
+
+
+      <td style="text-align: center;">14</td>
+
+
+      <td>Reader Run -</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">20mA</td>
+
+
+      <td style="text-align: center;">passive</td>
+
+
+      <td>Reader relay sink, 68ohms to &nbsp;-15.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">FF</td>
+
+
+      <td style="text-align: center;">13</td>
+
+
+      <td>Secondary Xmit</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">EIA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>Uncommitted control signal.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">HH</td>
+
+
+      <td style="text-align: center;">12</td>
+
+
+      <td>Clock Enable</td>
+
+
+      <td style="text-align: center;">In</td>
+
+
+      <td style="text-align: center;">TTL</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>Low selects external clock from CC</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">JJ</td>
+
+
+      <td style="text-align: center;">11</td>
+
+
+      <td>Secondary Receive</td>
+
+
+      <td style="text-align: center;">In</td>
+
+
+      <td style="text-align: center;">EIA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>Uncommitted control signal.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">KK</td>
+
+
+      <td style="text-align: center;">10</td>
+
+
+      <td>Serial Output -</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">20mA</td>
+
+
+      <td style="text-align: center;">passive</td>
+
+
+      <td>Serial data sink to -15.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">LL</td>
+
+
+      <td style="text-align: center;">9</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">MM</td>
+
+
+      <td style="text-align: center;">8</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">NN</td>
+
+
+      <td style="text-align: center;">7</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">PP</td>
+
+
+      <td style="text-align: center;">6</td>
+
+
+      <td>Reader Run +</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">20mA</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>Reader relay source.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">RR</td>
+
+
+      <td style="text-align: center;">5</td>
+
+
+      <td></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">n/c</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">SS</td>
+
+
+      <td style="text-align: center;">4</td>
+
+
+      <td>Serial Output</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;">TTL</td>
+
+
+      <td style="text-align: center;">active</td>
+
+
+      <td>Raw TTL gate output.</td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">TT</td>
+
+
+      <td style="text-align: center;">3</td>
+
+
+      <td>+5V</td>
+
+
+      <td style="text-align: center;">Out</td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">passive</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">UU</td>
+
+
+      <td style="text-align: center;">2</td>
+
+
+      <td>Ground</td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">passive</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+    <tr>
+
+
+      <td style="text-align: center;">VV</td>
+
+
+      <td style="text-align: center;">1</td>
+
+
+      <td>Ground</td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;"></td>
+
+
+      <td style="text-align: center;">passive</td>
+
+
+      <td></td>
+
+
+    </tr>
+
+
+  
+  </tbody>
+</table>
+
+
+<div style="text-align: center;">Berg connector table.<br>
+
+
+</div>
+
+
+<div style="text-align: left;"> <br>
+
+
+The console cable I have is a BC05-C from cursory examination. <br>
+
+<h2>KL11</h2>
+
+There is also a KL11 that was used as the console. It was 20mA only and
+consisted of 3 modules: M780, M105, and M7821. I have a hacked version
+of this, probably to adapt it for RS-232.<br>
+
+<br>
+
+The M780 should be in rows C and D, the M105 in row E, and the M7821 in row F. <br>
+<br>
+I have since rebuilt the KL11 to original and used it with an ASR33 as
+the console. The bit rate generators are analog clocks controlled by
+pots. The output clock can be adjusted by putting the processor in a
+loop outputing characters. The input clock can be adjusted by
+disconnecting the input cable. This sets the input to a start bit and
+the receiver will clock continuously.<br>
+
+<h3>M105 Jumpers</h3>
+
+The console terminal is at 17 777 560. The M105 provides jumpers for bits 12 thru 3. &nbsp;The 18
+bit console address in binary is 111 111 111 101 110 000. So the
+jumpers on the board should be OOO&nbsp;OJO OOJ. <br>
+
+
+<br>
+<h3>KL11 as a PC11</h3>
+The KL11 (and DL11) have the same basic CSR layout as the PC11. For the
+purposes of the bootstrap, they are the same. I have moved my KL11 to
+17 777 550 and use it as PR in the bootstrap.<br>
+<br>
+<h2>Console</h2>
+The console DL11 was configured for 8-N-1. This was OK until I started
+using some diagnostics that set bit 7. This was not compatible with the
+decserver I was using for my serial interface. I changed the DL11
+settings to 7-E-1.<br>
+<br>
+<table style="text-align: left;" border="1" cellpadding="2" cellspacing="2">
+  <tbody>
+    <tr>
+      <td style="font-weight: bold; text-align: center;">Name</td>
+      <td style="font-weight: bold; text-align: center;">Jumper</td>
+      <td style="font-weight: bold; text-align: center;">State</td>
+      <td style="font-weight: bold;">Description</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">No Parity</td>
+      <td style="text-align: center;">NP</td>
+      <td style="text-align: center;">IN</td>
+      <td>Enable parity bit transmission and reception by installing a jumper.</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">Even Parity</td>
+      <td style="text-align: center;">EPS</td>
+      <td style="text-align: center;">OUT</td>
+      <td>Remove jumper for even parity.</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">STOP Bit</td>
+      <td style="text-align: center;">2SB</td>
+      <td style="text-align: center;">OUT</td>
+      <td>Used with J9, J10, J11. 9 out, 10 in, 11 out, 2SB out -&gt; 2 stop bits.</td>
+    </tr>
+    <tr>
+      <td colspan="1" rowspan="2" style="text-align: center;">Data Bits</td>
+      <td style="text-align: center;">NB1</td>
+      <td style="text-align: center;">IN</td>
+      <td colspan="1" rowspan="2">7 data bits.</td>
+    </tr>
+    <tr>
+      <td style="text-align: center;">NB2</td>
+      <td style="text-align: center;">OUT</td>
+    </tr>
+  </tbody>
+</table>
+<br>
+<br>
+
+
+</div>
+
+
+<!-- footer -->
+<div class="footer">
+<center>Revised: 13 September 2005 <br>
+
+
+&copy; MMV <a href="/cdn-cgi/l/email-protection#92f1faf6d2f1faf6fbf1f9fff3fcbcf1fdff"> CHD</a>
+</center>
+
+
+</div>
+
+
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"c9622e66c37f4bb989f00c568fdbbb59","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>

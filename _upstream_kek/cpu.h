@@ -59,6 +59,7 @@ private:
 	bool     wait_stuck         { false };
 	bool     instruction_active { false };
 	uint16_t instruction_pc     { 0     };
+	std::optional<uint16_t> trap_pc_override { };
 	bool     last_instruction_valid { false };
 	uint16_t last_instruction_pc    { 0     };
 	uint16_t last_instruction_word  { 0     };
@@ -167,9 +168,10 @@ public:
 	void unqueue_interrupt(const uint8_t level, const uint16_t vector);
 	bool has_queued_interrupt(const uint8_t level, const uint16_t vector);
 	std::array<std::set<uint16_t>, 8> get_queued_interrupts() const;
-	bool check_if_interrupts_pending() const { return any_queued_interrupts; }
+	bool check_if_interrupts_pending() const;
 
 	void trap(uint16_t vector, const int new_ipl = -1, const bool is_interrupt = false);
+	void trap_at_current_pc(uint16_t vector);
 
 	bool getPSW_c() const;
 	bool getPSW_v() const;

@@ -864,19 +864,20 @@ static void service_line_clock() {
     return;
   }
 
-  int delivered = 0;
-  while ((uint32_t)(now - g_last_clock_us) >= kClockPeriodUs && delivered < 4) {
-    g_last_clock_us += kClockPeriodUs;
+  if ((uint32_t)(now - g_last_clock_us) >= kClockPeriodUs) {
+    // Do not replay missed ticks in a burst. During traced or otherwise slow
+    // execution, catch-up delivery can become an interrupt storm that prevents
+    // the guest from leaving the clock handler.
+    g_last_clock_us = now;
 
     kw11_l* clock = g_bus->getKW11_L();
     uint16_t csr = clock->read_word(ADDR_LFC);
     csr |= 0200;                 // monitor bit / tick happened
     clock->write_word(ADDR_LFC, csr);
 
-    if (csr & 0100) {            // interrupt enable
+    if ((csr & 0100) && !g_cpu->has_queued_interrupt(6, 0100)) {
       g_cpu->queue_interrupt(6, 0100);
     }
-    delivered++;
   }
 }
 
@@ -951,6 +952,13 @@ void cold_boot() {
 
 static void service_deferred_devices() {
   if (g_rl02) g_rl02->service_deferred();
+  if (g_rk05) g_rk05->service_deferred();
+  if (g_tty) g_tty->service_deferred();
+}
+
+static void service_instruction_deferred_devices() {
+  if (g_rl02) g_rl02->service_deferred();
+  if (g_rk05) g_rk05->service_deferred();
   if (g_tty) g_tty->service_deferred();
 }
 
@@ -959,20 +967,20 @@ uint32_t run(uint32_t max_cycles) {
   uint32_t ran = 0;
   while (ran < max_cycles) {
     if (g_cpu->getPC() & 1) {
-      record_trace_entry();
+      if (g_trace_enabled) record_trace_entry();
       dump_panic_trace("odd PC before instruction fetch");
       g_paused = true;
       break;
     }
     if (!g_cpu->step()) {
-      record_trace_entry();
+      if (g_trace_enabled) record_trace_entry();
       dump_panic_trace("cpu step returned false");
       g_paused = true;
       break;
     }
-    record_trace_entry();
+    if (g_trace_enabled) record_trace_entry();
     if (g_trace_remaining) trace_next_instruction();
-    service_deferred_devices();
+    service_instruction_deferred_devices();
     ran++;
     if (load_event() == EVENT_HALT) {
       dump_panic_trace("guest HALT instruction");
@@ -1121,6 +1129,19 @@ bool get_interrupt_summary(uint16_t* psw, bool* any_pending,
     counts[level] = count > 255 ? 255 : (uint8_t)count;
     first_vectors[level] = queued[level].empty() ? 0 : *queued[level].begin();
   }
+  return true;
+}
+
+bool get_kw11l_summary(uint16_t* csr, uint32_t* us_since_tick,
+                       bool* irq_queued) {
+  if (!g_bus || !g_cpu || !g_bus->getKW11_L() || !csr ||
+      !us_since_tick || !irq_queued) {
+    return false;
+  }
+
+  *csr = g_bus->getKW11_L()->read_word(ADDR_LFC);
+  *us_since_tick = g_last_clock_us == 0 ? 0 : (uint32_t)(micros() - g_last_clock_us);
+  *irq_queued = g_cpu->has_queued_interrupt(6, 0100);
   return true;
 }
 

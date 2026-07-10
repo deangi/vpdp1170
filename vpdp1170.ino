@@ -775,18 +775,14 @@ void loop() {
     poll_pcping();
     pdp_core::run(1000);
     console_drain_tft();         // TFT-out FIFO -> ANSI parser -> cell grid
-    if (!pdp_core::is_kek_engine()) {
-      kl11::drain_serial_out();  // Serial-out FIFO -> Serial.write
-    }
+    kl11::drain_serial_out();    // Serial-out FIFO -> Serial.write
     poll_pcping();
   }
   ftp_poll();
   emu_control::poll();
   telnet_shell_poll();
   console_drain_tft();
-  if (!pdp_core::is_kek_engine()) {
-    kl11::drain_serial_out();
-  }
+  kl11::drain_serial_out();
 
   poll_pcping();
 

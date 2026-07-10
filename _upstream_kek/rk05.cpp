@@ -125,6 +125,19 @@ void rk05::write_byte(const uint16_t addr, const uint8_t v)
 	write_word(addr, vtemp);
 }
 
+
+
+void rk05::service_deferred()
+{
+#if defined(ESP32)
+	if (irq_pending_ticks > 0 && --irq_pending_ticks == 0) {
+		if (registers[(RK05_CS - RK05_BASE) / 2] & 64) {
+			b->getCpu()->queue_interrupt(5, 0220);
+		}
+	}
+#endif
+}
+
 void rk05::write_word(const uint16_t addr, const uint16_t v)
 {
 	const int reg = (addr - RK05_BASE) / 2;
@@ -132,6 +145,11 @@ void rk05::write_word(const uint16_t addr, const uint16_t v)
 	registers[reg] = v;
 
 	if (addr == RK05_CS) {
+#if defined(ESP32)
+		irq_pending_ticks = 0;
+		if (b && b->getCpu())
+			b->getCpu()->unqueue_interrupt(5, 0220);
+#endif
 		if (v & 1) { // GO
 			const int    func   = (v >> 1) & 7; // FUNCTION
 			int16_t      wc     = registers[(RK05_WC - RK05_BASE) / 2];
@@ -290,7 +308,11 @@ void rk05::write_word(const uint16_t addr, const uint16_t v)
 				registers[(RK05_DS - RK05_BASE) / 2] &= ~(7l << 13);  // store id of the device that caused the interrupt
 				registers[(RK05_DS - RK05_BASE) / 2] |= device << 13;
 
+#if defined(ESP32)
+				irq_pending_ticks = IRQ_DELAY_TICKS;
+#else
 				b->getCpu()->queue_interrupt(5, 0220);
+#endif
 			}
 		}
 	}

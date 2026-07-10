@@ -66,6 +66,9 @@ uint32_t console_trace_remaining();
 // actual Serial.write() output at whatever pace the host can take.
 void drain_serial_out();
 
+// Non-blocking enqueue of a guest console output byte (kek TTY path).
+void queue_serial_out(uint8_t out);
+
 // Queue a framed emulator-control response into the KL11 receive stream.
 // The payload is wrapped as ESC ] VPDP ; payload ETX and is delivered before
 // interactive USB/Telnet input so response frames cannot be interleaved.

@@ -1,0 +1,696 @@
+ROtate Left Byte                  ROLB dst                        2.3 ....
+
+ROLBIL_'~IL-~O~__L--L_6~~__~3-L~L-~~ld_S_t~I__~~~
+
+15                                                 65             o
+
+Operation: as in ROlon byte operands
+
+Condition Codes: set on the byte results as ROl
+
+Description: Same as ROl
+
+Arithmetic Shift Right Byte       ASRB dst                        2.3=.
+
+ASRB 11 I 1 0 I               I6                2       dst           o
+                                                       I
+                                                                      o
+t5                                                 65
+
+Operation: as in ASR on byte operands
+
+Condition Codes: set on the byte result as ASR
+
+Description: Same as ASR
+
+. Arithmetic Shift Let! Byte      ASLB dst
+
+ASLB 11 I I 0 I               6             I3          dst
+                                                       I
+
+15                                                 65
+
+Operation: as in ASl on byte operands
+Condition. Codes: set on the byte results as ASl
+Description: Same as ASl
+
+CONDITION CODE OPERATORS-Condition code operators set and clear con·
+dition code bits. Selectable combinations of these bits may be cleared6rset
+together in one instruction.
+
+Condition Code Operators                                          1.5.lLS
+
+          o                   o                 2
+
+15                                                 5 4 32         0
+
+Condition code bits corresponding to bits in the condition code operator
+
+(bits 3·0; N, l, V, C) are modified according to the sense of bit 4, the setl
+
+clear bit of the operator. The following mnemonics are permanent symbols
+
+in the assembler:
+
+Mnemonic  Operation           Op Code       Mnemonic   Operation  Op Code
+    ClC    Clear C            000241            SEC       Set C   000261
+    ClV    Clear V            000242            SEV       Set V   000262
+    Cll    Clear l            00();244          SEl       Set l   000264
+    ClN    Clear N                              SEN       Set N   000270
+                              000250
+
+Timing for all condition code operators is the basic instruction time (1.5/Ls)
+for the operators. (The codes 000240 and 000260 are the shortest "no·opera·
+tion" instructions.)
+
+· Shift and rotate operations require an additional 0.6 I'S to access bytes at odd
+   addresses.
+
+                                            40
+= Combinations of the above set or clear operations may be ORed together to
+
+form new instruction mnemonics. For example: ClCV ClC ! ClV. The new
+instruction clears C and V bits. ("!" signifies "inclusive or" in PAl·l1.)
+
+MISCELLANEOl!S CONTROL INSTRUCTIONS
+
+RESe' ExTernal bus                RESET          20 ms
+                                                 5
+° I 0,                         °         ,0  ,0              RESET
+                                                    °
+15
+
+Condition Codes: not affected
+
+Description: Sends an INIT pulse on the Unibus. All devices on the bus are
+reset to their state at power·up.
+
+WAit for InterrupT                WAIT           \.8.11.5
+
+1~_O~I~~t__O~,__~~t_O~__~-L_O_t~-L~~O~~__~~~lvvAIT
+
+15                                               o
+
+Condition Codes: not affected
+Description: Provides a way for the processor to relinquish use of the bus
+while it waits for an external interrupt. Having been given a WAIT command,
+the processor will not compete for bus use by fetching instructions or
+operands from memory. This permits higher transfer rates between a device
+and memory, since no processor·induced latencies will be encountered by
+bus requests from the device. In WAIT, as in all instructions, the PC points
+to the next instruction following the WAIT operation.
+
+Thus whim an interrupt causes the PC and PS to be pushed onto the proces·
+sor stack, the address of the next instruction following the WAIT is saved.
+The exit from the interrupt routine (i.e. execution of an RTI instruction) will
+cause resumption of the interrupted process at the instruction following the
+WAIT.
+
+HALT                              HALT           1.8.11.5 /
+
+     "°,            10                   ,0  0,  ° HALT
+                                                     t
+  15
+
+Condition Codes: not affected
+Description: Causes the processor operation to cease. The console is given
+control of the bus. The console data lights display the contents of RO; the
+console address lights display the address of the halt instruction. Tr~nsfers
+on the Unibus are terminated immediately. The. PC points to the next in-
+struction to be executed. Pressing the continue key on the console causes
+processor operation to resume. No INIT signal is given.
+
+Processor:Traps, -Processor Traps are internally generated interrupts.
+Error conditions, completion of an instruction in trace mode (i.e. T-bit of
+status word set), 'and certain instructions cause traps. As in interrupts, the
+current PC and PS are saved on the processor stack and a new PC and PS
+are loaded from the appropriate trap (interrupt) vector. See Appendix C for
+a summary of Trap Vector Addre,sses.
+
+Trap Instructions-Trap Instructions provide for calls to emulators, I/O
+monitors, debugging packages, and user-defined interpreters.
+
+                                         41
+   EMulator Traps                   EMT xxx                       9.3 JJ.S
+
+   EMT LI..:.I....LI--.JL:.0....L_L-....LI....:4....L_LI....:°:......L_.L..-1_..L_--1'_XX_x...LI_....L...--1---l
+
+   15                               87                               °
+
+   Operation: (PS) -.l, SP
+                   (PC) -.l, SP
+                    (30) ~ PC
+                   (32) ~ PS
+
+   Condition Codes: loaded from trap vector.
+
+Description: Performs a trap sequence with a trap vector address of 30.
+All operation codes from 104000 to 104377 are EMT calls. The low·order
+byte, bits 0·7 of the EMT instructions, may be used to transmit information
+to the emulating routine (e.g., function to be performed). The trap vector
+for EMT is at address 30. The new PC is taken from the word at address 30;
+the new central processor status (PS) is .taken from the word at address 32.
+
+   TRAP                             TRAP xxx                         9.3.u.s
+
+   TRAP LI_1....LI_L-0....L_.L..-11_4-1_~1_4__1_..L_~_~~'Lxx_x~IL__L~L_~
+
+   15                               87                               °
+
+   Operation: as in EMT except the trap vector is located at 34.
+
+Condition Codes: loaded from trap vector.
+
+Description: Performs a trap sequence with a trap vector address of 34.
+Operation codes from 104400 to 104777 are TRAP instructions. TRAPs and
+EMTs are identical in operation, except that the trap vector for TRAP is at
+address 34.
+
+   110 Trap                         lOT                           9.3.u.s
+
+   lOT LI~0~_~0~,_.L..-11....:0~_..L_~ILO~I_~~'~0~,L__L_,~4~'L-~
+
+   15                                                                °
+
+   Operation: as EMT except the trap vector is located at address 20 and no
+
+   information is transmitted in the low byte.
+
+Condition Codes: loaded from trap vector.
+
+Description: Used to call the I/O executive routine lOX.
+
+   No defined mnemonic              000003                        9.3.u.s
+
+(            0,                  °            °  °                3
+
+                                                                     °
+
+Operation: Same' as lOT except that trap vector is located at address 14.
+
+Condition Codes: loaded from trap veCtor.
+
+Description: Used' to' call debugging aids. The user is cautioned against
+employing code 000003 in programs run under these debugging aids.
+
+                                         42
+ReTurn from Interrupt  RTl                        4.8J1.s
+
+                       oI               0,     o  2.       RTI
+
+15                                                    o
+
+Operation: SP l' (PC), SP l' (PS).
+
+Condition Codes: loaded from processor stack.
+
+Description: Used to exit from an interrupt or TRAP service routine. The PC
+and PS are restored (popped) from the processor stack.
+
+Reserved Instruction Traps-These are caused by attempts to execute in-
+struction codes reserved for future processor expansion (reserved instruc-
+tions) or instructions with illegal addressing modes (illegal instructions).
+Order codes not corresponding to any of the instructions described above
+are considered to be reserved instructions. Illegal instructions are JMP and
+JSR with register mode destinations. Reserved and illegal instruction traps
+occur as described under EMT, but trap through vectors at addresses 10
+and 04 respectively.
+
+Stack Overflow Trap-Stack Overflow Trap is a processor trap through the
+vector at address 4. It is caused by referencing addresses below 400. through
+the processor staclt pointer R6 (SP) in autodecrement or autodecrement de-
+ferred addressing. The instruction causing the overflow is completed before
+the trap is made.
+
+Bus Error Traps-Bus Error Traps are:
+
+1. Boundary Errors-attempts to reference word operands at odd ad-
+    dresses.
+
+2. Time-Out Errors-attempts to reference addresses on the bus that
+    made no response within 10 j.Ls. In general, these are caused by at-
+    tempts to reference nonexistent memory, and attempts to reference
+    nonexistent peripheral devices.
+
+Bus error traps cause processor traps through the trap vector address 4.
+
+Trace Trap--Trace Trap enables bit 4 of the PS word and causes processor
+traps at the end of instruction executions. The instruction that is executed
+after the instruction that set the T-bit will proceed to completion and then
+cause a processor trap through the trap vector at address 14.
+
+The following are special cases and are detailed in subsequent paragraphs;
+
+1. The traced instruction cleared the T-bit.
+2. The traced instruction set the T-bit.
+3. The traced instruction caused an instruction trap.
+4. The traced instruction caused a bus error trap.
+5. The traced instruction caused a stack overflow trap.
+6. The process was interrupted between the time the T-bit was set and
+
+    the fetching of the instruction that was to be traced.
+7. The traced instruction was a WAIT.
+8. The traced instruction was a HALT.
+
+An instruction that cleared the T-bit-Upon' fetching the traced instruction
+an internal flag, the trace flag, was set. The trap will still occur at the end
+of execution of this instruction. The stacked status word, however, will have
+a clear T-bit.
+
+                                    43
+An instruction that set the T-bit-Sinc~ the T-bit was already set, setting it
+again has no effect_
+
+An instruction that caused an Instruction Trap-The instruction trap is
+sprung and the entire routine for the service trap is executed_ If the service
+routine exists with an RTI or in any other way restores the stacked status
+word, the T-bit is set again, the instruction following the traced instruction
+is executed and, unless it is one of the special cases noted above, a trace
+trap occurs_
+
+An instruction that caused a Bus Error-This is treated as ih an Instruction
+Trap. The only difference is that the error service is not as likely to exit
+with an RTI, so that the trace trap may not occur.
+
+An instruction that caused a stack overflow-The instruction completes
+execution as usual-the Stack Overflow does not cause a trap. The Trace
+Trap Vector is loaded into the PC and PS, and the old PC and PS are pushed
+onto the stack. Stack Overflow occurs again, and this time the trap is made.
+
+An interrupt between setting of the T-bit and fetch of the traced instruction-
+The entire interrupt service routine is executed and then the T-bit is set again
+by the exiting RTI. The traced instruction is executed (if there have been no
+either interrupts) and, unless it is a special case noted above, causes a trace
+trap.
+
+Note that no interrupts are acknowledged between the time of fetching any
+trapped instruction (including one that is trapped by reason of the T-bit being
+set) and completing execution of the first instruction of the trap service.
+
+A WAIT-The trap occurred immediately. The address of the next instruction
+is saved on the stack.
+
+A HALT-The processor halts. When the' continue key on the console is
+pressed, the instruction following the HALT is fetched and executed. Unless
+it is one of the exceptions noted above, the trap occurs immediately follow-
+ing execution_
+
+Power Failure Trap-is a standard PDP-ll feature. Trap occurs whenever
+
+theAC power drops below 105 volts or outside 47 to 63 Hertz. Two milli-
+
+seconds are then allowed for power down processing. Trap vector for power
+
+failure is at locations 24 and 26.      ""
+
+Trap priorities-In case multiple processor trap conditions occur simUltane-
+ously the following order of priorities is observed (from high to low):
+
+1. Bus Errors
+2. Instruction Traps
+3. Trace Trap
+4. Stack Overflow Trap
+
+5. Power Failure Trap
+
+The details on the trace trap process have been described in the trace trap
+operational description which includes cases in which an instruction being
+traced causes a bus error, instruction trap, or a stack overflow trap:
+
+If a bus error is caused by the trap process handling instruction traps, trace
+traps, stack overflow traps, or a previous bus error, the processor is halted.
+
+If a stack overflow is. caused by the trap process in handling bus errors, in-
+struction traps, or trace traps, the process is completed and then the stac~
+overflow trap is sprung.
+
+                                    44
+                             CHAPTER 5
+
+                     ADDRESS ALLOCATION
+
+The PDP-ll provides for a very flexible addressing structure. Both 16-bit
+words and 8-bit bytes can be directly addressed_ Addresses are 16-bits long
+allowing for direct addressing of 32,768 words or 65,536 bytes.
+
+ADDRESS MAP
+
+As a result of the organization of the PDP-ll, bus addresses serve several
+functions..A map of possible PDP-ll bus address allocation is shown
+
+BUS ADDRESS  CONTENT
+
+        o                     ~
+
+             Program Counter                            Processor
+                                                        Trap Vectors
+             Processor Status wor1                      and Device
+                                                        Interrupt
+                                                        Vectors
+
+400.         Stack Pointer Overflow Limit
+             Stacks, Program and Data Storage
+
+160000.
+
+             Status Register and}                             Typical
+             Data Buffer Register                             Registers for
+                                                        { Programmed
+                                                              Transfer
+                                                              Device
+
+             Space For Device Registers                 Typical
+                                                        Additional
+                          Device Address Register       Registers
+                          Word Count Register           for a
+                          Memory Address Register       Block
+                          Control and Status Registers  Transfer
+                                                        Device
+
+177777.
+
+                              Figure 5-1
+             Simplified Address Allocation Map
+
+                                 45
+·in Figure 5-1. Three areas of addresses of particular interest to the pro-
+ grammers are: 1) Interrupt and Trap Vectors; 2) Processor Stack and General
+ Storage; and 3) Peripheral Device Registers.
+
+INTERRUPT AND TRAP VECTOR5--Addresses between location zero and
+location 400, are generally reserved for interrupt and trap vectors.
+
+PROCESSOR STACK AND GENERAL STORAGE-Addresses between 400,
+and the limit of implemented core are available for the processor stack or
+other programs and data. The highest address in this region is 157777,.
+
+PERIPHERAL DEVICE REGISTER5--Addresses above 160000, generally are
+
+reserved for peripheral device status, control, and data registers. The general
+
+registers and the processor status can be addressed from the program
+
+.console using addresses in this area.      .
+
+A more detailed address allocation map can be found in Appendix- C.
+
+CORE MEMORY
+
+The three types of core memory that can be used in a PDP-ll system are:
+1) Read-Write Core Memory; 2) Read-Only Core Memory; and 3) Wordlet
+Memory; These memories can be located anywhere in address space provided
+they do not overlap. They do not have to be in continuous address locations.
+
+MMll-E READ WRITE CORE MEMORY-The MMll-E has the following
+specifications:
+
+Capacity: 4,096 16-bit words or 8,192 8-bit bytes
+Cycle Time: 1.2 microseconds
+Access Time: 500 nanoseconds
+Configuration: Planar 3-wire, 3·D using 22 mil cores
+
+Packaging: One standard PDp·l1 System Unit
+Interface: Designed to work with PDP-ll bus, TTL-compatible
+
+MRll-A READ-ONLY CORE MEMORY (ROM)-The ROM has the following
+specifications:
+
+Capacity: 1,024 I6-bit words or 2,048 8·bit bytes
+Access Time: 500 nanoseconds
+Configuration: 2-piece core with wire braid, 256 wires, 64 cores
+Packaging: 3/4 of one standard PDP-ll System Unit
+Interface: Designed to work with PDp·ll bus, TTL-compatible
+
+MWll-A WORDLET MEMORY-The wordlet memory is used with ROM sys-
+tems and provides read-write memory capacity for temporary data and in-
+struction storage.
+Capacity: 256 16-bit words or 512 8-bit bytes
+
+Cycle Time: 2.0 microseconds
+Access Time: 1.0 microsecond
+Configuration: 3·Wire, 3D
+Packaging: I/4.standard PDP-ll single System Unit
+Interface: The word let memory will work with the ROM and interfaces
+
+               through the ROM System Unit to the PDP-ll bus.
+
+Both JMP. an~ JSR, used in Address mode 2 (autoincrement),     increment  otfheanyre  gister
+~efore ~s,"g It as an address. This is a special case. and is  not true               other
+instruction.
+
+                                        46
+                             CHAPTER 6
+
+              PROGRAMMING OF PERIPHERALS
+
+Programming of peripherals is extremely simple in the PDP-ll-a special
+class of instructibns to deal with input/output operations is unnecessary_
+The Unibus permits a unified addressing structure in which control, status,
+and data registers for peripheral devices are directly addressed as memory
+locations_ Therefore all operations on these registers, such as transferring
+information into or out of them or manpulating data within them, are per-
+formed by normal memory reference instructions_
+
+The ability to use all memory reference instructions on peripheral device
+registers greatly increases the flexibility of input/ output programming_ In-
+formation in a device register can be compared directly with a value and a
+branch made on the result.
+
+                               CMP # 101, PRS
+
+                                        SEQ SERVICE
+In this case the program looks for 101. from the paper tape reader data
+buffer, and branches if it finds it. There is no need to transfer the informa-
+tion into an intermediate register for comparison.
+
+When the character is of interest, a memory reference instruction can trans-
+fer the character into a user buffer in core or in another peripheral device.
+
+                                           MOV PRS, LOC
+This instruction transfers a character from the paper tape reader buffer into
+a user-defined location_
+
+All arithmetic operations can be performed on a peripheral device register.
+
+                                    ADD #10, DSX
+This instruction will add 10. to a display's x-deflection register.
+
+All peripheral device registers can be treated as accumulators. There is no
+need to funnel all data transfers, arithmetic operations, and comparisons
+through a single or small number of accumulator registers_
+
+DEVICE REGISTERS
+
+All peripheral devices are specified by a set of registers which are addressed
+as core memory and manipulated as flexibly as an accumulator. There are
+two types of registers associated with each device: 1) Control and Status Reg-
+isters (CSR); and 2) Data Registers.
+
+CONTROL AND STATUS REGISTERS (CSR)-Each peripheral has one or more
+control and status registers which contain all. the information necessary to
+communicate with that device. The general form of a control and status
+register is shown below.
+
+                              General Control and Status Register
+This general form does not necessarily apply to any device, but is presented
+as a format which could be used as a guideline for designing peripheral
+
+                                                  47
+devices. Many devices will require less than sixteen status bits. Other devices
+will require more than sixteen bits and therefore will require additional status
+and control registers.
+
+Device Function Bits-These three bits specify operations that a device is
+to perform. An example of one -operation for a paper tape reader is read
+one character. For a disk one operation would be read a block of words from
+memory and store them on the disk.
+
+Memory Exter1sion Bits-These two bits are reserved for future expansion.
+They will allow devices to use a full 18 bits to specify addresses on the bus.
+
+Done Enable and Error Enable Bits-These two bits are independently pro-
+grammable. _If bit 6 -is set. an interrupt will occur as a result of a function
+
+done condition. If bit 5 is set. an interrupt will occur as the result otan
+
+error condition. This occurs when one or more of the error bits is set to a
+one. To initiate an interrupt routine to read from the paper .tape reader.
+the instruction
+
+                             MOV # 101, PRS
+
+could be used. This sets bit 0 and bit 6 of the paper tape reader control and
+status register. Setting bit 0 starts the read operation and setting bit 6
+enables an interrupt to occur when the read operation is complete.
+
+Condition Bits-The CSR contains a DONE bit. a READY bit, or a DONE-
+BUSY pair of bits, depending on the device. These bits are set and cleared
+by the hardware, but may be queried by the program to determine the
+availability of the device. For example, the teleprinter status register (TPS)
+has a READY bit (7) that is cleared on request for output and then set when
+output is complete. The keyboard status register (TKS) has a DONE-BUSY
+
+= pair (Bits 7 and 11) that distinguishes between no input (DONE BUSY
+= = = 0), input under way (DONE 0, BUSY 1). and input complete (DONE
+= = 1, BUSY 0).
+
+The DONE bit could be used to control an input loop for reading from the
+
+paper tape reader as follows;
+
+LOOP: TSTB PRS                  test low byte of paper tape status register
+
+    BPL LOOP                    branch back if DONE bit (bit 7) is not set
+
+Unit Bits-Some peripheral systems have more than one device per control.
+
+For example, a disk system can have multiple surfaces per control and an
+
+analog-to-digital converter can have multiple channels. The unit bits select
+
+the proper surface or channel.            -
+
+Error Bits-Generally there is an individual bit associated with a specific
+error. When more bits are required for errors, they can be obtained by ex-
+panding the error section in the word or by using another status word.
+
+Example of Control and Status Register-The high-speed paper tape reader
+control and status register (PRS) is as follows:
+
+15              "                   7  6     o
+
+These bits may be read or set by instructions which use the appropriate
+
+effective address. Bit 0 of the PRS is the function bit for reading one char-
+
+                                48
+acter. Incrementing the PRS will set 'bit 0 and cause one character to be
+read. The instruction
+
+                                               INC PRS
+performs that function. MOV # I, PRS does the same thing but takes one
+more word.
+
+DATA BUFFER REGISTERS-Each device has at least one buffer register
+for temporarily storing data to be transfer into or out of the computer. The
+number and type of data registers is a function of the device. The paper
+tape reader and punch use single 8·bit data buffer registers. A disk would
+use 16·bit data registers and some devices may use tw!, I6·bit registers for
+data buffers.
+
+PROGRAMMING EXAMPLES
+
+PROGRAM CONTROLLED DATA TRANSFER WITH THE INTERRUPT DISABLED
+~Single character 110 devices (teletype, paper tape readerl punch) have an
+addressable register buffer through which data is transferred. For inPut, the
+data buffer register is the source operand of the instruction used to get the
+data; for output, it is the destination operand. For example assuming the
+paper tape reader interrupt is not enabled, character input could proceed
+as follows:
+
+START:  MOV R, -(SP)                   save R on the stack
+LOOP:   MOV #BUFFER, R                 pointer to input buffer into register R
+        INC PRS                        start up reader
+        BIT PRS. #100200               test DONE and ERROR bits'
+        BEQ LOOP                       branch back if none ·on yet
+        BMI ERROR                      branch to error routine if minus
+        MOVB· PRB; (R)+                move byte from device buffer reg·
+                                       ister touser's buffer and increment
+        CMP #LlMIT. R                  pointer
+        BGE START                      check for end of buffer
+        MOV (SP)+. R                   get next character
+                                       restore R
+
+Character output to the paper tape punch might be executed as .follows:
+
+        MOV RO, -(SP)·                 save RO
+        MOV RI, -(SP)                  save RI
+
+LOOP:   MOV NCHAR, RO                  number of characters into RO
+        MOV BUFFER, R1                 user buffer address into R1
+        BIT PPS, # 100200              test device ready and error bits
+        BEQ LOOP                       fall through if on
+        BMI ERROR                      branch on error
+
+        MOVB (RI)+, PPB                output character,' increment pointer
+        DEC RO                         decrement character counter (and
+                                       set condition codes)
+
+        BGT LOOP                       repeat if greater than zero
+                                       restore RO
+        MOV (SP)+. RO                  restore R1
+
+        MOV (SP)+. Rl
+
+BLOCK TRANSFER WITH THE INTERRUPT DISABLED-High·speed block
+
+transfer devices use the Unibus to make data transfers between the device
+
+and core memory. These devices are provided with addressible registers
+
+that control the flow of data.  '
+
+                                   49
+A typical set might be:
+
+       1. Control and status register
+       2. Memory address register
+       3. Word count register
+       4. Device address register
+
+Loading the device address register would in general initiate the transfer,
+which then proceeds without processor intervention. The device issues non-
+processor requests for the Unibus that, when granted, allow' direct data
+transfer between the device and memory_ These requests are interleaved
+with processor 'requests for the bus. If very fast transfer is required, the
+
+processor may execute a, WAIT instruction after starting the block transfer.
+
+The DONE or appropriate error bits are set in the CSR with completion of
+the transfer or when an error occurs. These may be enabled to cause an
+interrupt or may be tested to determine when the device needs assistance.
+
+A block transfer could be executed as follows:
+
+MOV #401, DKS,                             read block of data (function 1)
+                                           from unit 1
+MOV #BUFADR. DKMA                          buffer address to memory ad-
+                                           dress register
+MOV #BUFCNT, DKWC                          word count to word count register
+MOV # BLKNO, DKDA                          block number to device address
+                                           register, which starts the trans-
+                                           fer
+
+; when data is needed.
+
+LOOP: BIT # DKMSK, DKS                     test done bit and error bits
+            BEQ LOOP                       branch back if none on
+            BIT # DKEMSK, DKS              test for any error bits
+            BNE ERROR                      branch if any on
+
+; data is now in buffer at BUFADR
+
+INTERRUPT STRUCTURE
+
+If the appropriate interrupt enable bit is on, in the control and status register
+of a device, transition from 0 to 1 of the DONE or -READY bit causes an
+interrupt request to be issued to the processor. Also if DONE or READY is a
+1 when the interrupt enable is turned on, an interrupt request is made. If
+the device makes the request at a priority greater than that at which the
+processor is running and no other conflicts exist, the request is granted and
+the interrupt sequence takes place:
+
+       a. the current program counter and processor status are pushed onto
+           the processor stack; _
+
+       b. the new PC and PS are loaded from a pair of locations (the interrupt
+           vector) in low core unique to the interrupting device~
+
+Since each device has a unique interrupt vector which dispatches control to
+the appropriate interrupt handling routine immediately, no device polling is
+required. Furthermore, since the PS contains the processor priority, the
+priority at which an' interrupt request is serviced can be set under program
+control and is independent of the priority of the interrupt request. The
+
+                                       50
+

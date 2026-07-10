@@ -52,6 +52,10 @@ private:
 	int             deferred_device      { 0 };
 	int             deferred_poll_count  { 0 };
 	int             deferred_service_delay { -1 };
+#if defined(ESP32)
+	int             irq_pending_ticks    { 0 };
+	static constexpr int IRQ_DELAY_TICKS = 2;
+#endif
 
 	abool *const disk_read_activity  { nullptr };
 	abool *const disk_write_activity { nullptr };

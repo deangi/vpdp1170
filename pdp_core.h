@@ -99,6 +99,10 @@ inline bool get_interrupt_summary(uint16_t* psw, bool* any_pending,
   return pdp_core_kek::get_interrupt_summary(psw, any_pending, counts,
                                              first_vectors);
 }
+inline bool get_kw11l_summary(uint16_t* csr, uint32_t* us_since_tick,
+                              bool* irq_queued) {
+  return pdp_core_kek::get_kw11l_summary(csr, us_since_tick, irq_queued);
+}
 
 inline void set_boot_kind(int kind) { pdp_core_kek::set_boot_kind(kind); }
 inline void set_trace(bool enabled) { pdp_core_kek::set_trace(enabled); }
@@ -158,6 +162,7 @@ inline bool get_interrupt_summary(uint16_t*, bool*, uint8_t[8],
                                   uint16_t[8]) {
   return false;
 }
+inline bool get_kw11l_summary(uint16_t*, uint32_t*, bool*) { return false; }
 
 inline void set_boot_kind(int) {}
 inline void set_trace(bool) {}
@@ -217,6 +222,7 @@ inline bool get_interrupt_summary(uint16_t*, bool*, uint8_t[8],
                                   uint16_t[8]) {
   return false;
 }
+inline bool get_kw11l_summary(uint16_t*, uint32_t*, bool*) { return false; }
 
 inline void set_boot_kind(int kind) { cpu_set_boot_kind(kind); }
 inline void set_trace(bool enabled) { cpu_set_trace(enabled); }

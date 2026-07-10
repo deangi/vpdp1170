@@ -141,8 +141,13 @@ void kw11_l::do_interrupt()
 	set_lf_crs_b7();
 
 	if (get_lf_crs() & 64) {
-		int_triggered++;
-		b->getCpu()->queue_interrupt(6, 0100);
+		// KW11-L presents a level/request condition, not an interrupt event
+		// FIFO.  If vector 100 is already pending, another tick only leaves
+		// the request asserted.
+		if (!b->getCpu()->has_queued_interrupt(6, 0100)) {
+			int_triggered++;
+			b->getCpu()->queue_interrupt(6, 0100);
+		}
 	}
 }
 

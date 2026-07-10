@@ -1,0 +1,282 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+<meta http-equiv="Content-Style-Type" content="text/css"/>
+<meta name="Generator" content="src2html"/>
+<link rel="stylesheet" type="text/css" href="../../../.misc/src2html.css"/>
+<title>UNIX 6th Ed. - /usr/sys/dmr/kl.c</title>
+</head><body>
+<div class="ckern">
+<div id="head">
+<h1>
+UNIX 6th Ed. - <a href="../../../">/</a><a href="../../../usr">usr</a>/<a href="../../../usr/sys">sys</a>/<a href="../../../usr/sys/dmr">dmr</a>/<a href="../../../usr/sys/dmr/kl.c">kl.c</a></h1>
+</div>
+<div id="navi">
+<h5>Functions</h5>
+<pre>
+<span class="navo"><a href="#s:_klclose" title="line 67">klclose</a>           <span class="navx"><a href="#xref:s:_klclose" title="to xref">X</a></span></span>
+<span class="nave"><a href="#s:_klopen" title="line 32">klopen</a>            <span class="navx"><a href="#xref:s:_klopen" title="to xref">X</a></span></span>
+<span class="navo"><a href="#s:_klread" title="line 76">klread</a>            <span class="navx"><a href="#xref:s:_klread" title="to xref">X</a></span></span>
+<span class="nave"><a href="#s:_klrint" title="line 96">klrint</a>            <span class="navx"><a href="#xref:s:_klrint" title="to xref">X</a></span></span>
+<span class="navo"><a href="#s:_klsgtty" title="line 110">klsgtty</a>           <span class="navx"><a href="#xref:s:_klsgtty" title="to xref">X</a></span></span>
+<span class="nave"><a href="#s:_klwrite" title="line 81">klwrite</a>           <span class="navx"><a href="#xref:s:_klwrite" title="to xref">X</a></span></span>
+<span class="navo"><a href="#s:_klxint" title="line 86">klxint</a>            <span class="navx"><a href="#xref:s:_klxint" title="to xref">X</a></span></span>
+</pre>
+<h5>Variables</h5>
+<pre>
+<span class="navo"><a href="#s:_kl11" title="line 23">kl11</a>              <span class="navx"><a href="#xref:s:_kl11" title="to xref">X</a></span></span>
+</pre>
+<h5>Macros</h5>
+<pre>
+<span class="navo"><a href="#m:DLBASE" title="line 17">DLBASE</a>            <span class="navx"><a href="#xref:m:DLBASE" title="to xref">X</a></span></span>
+<span class="nave"><a href="#m:DSRDY" title="line 20">DSRDY</a>             <span class="navx"><a href="#xref:m:DSRDY" title="to xref">X</a></span></span>
+<span class="navo"><a href="#m:KLADDR" title="line 15">KLADDR</a>            <span class="navx"><a href="#xref:m:KLADDR" title="to xref">X</a></span></span>
+<span class="nave"><a href="#m:KLBASE" title="line 16">KLBASE</a>            <span class="navx"><a href="#xref:m:KLBASE" title="to xref">X</a></span></span>
+<span class="navo"><a href="#m:NDL11" title="line 19">NDL11</a>             <span class="navx"><a href="#xref:m:NDL11" title="to xref">X</a></span></span>
+<span class="nave"><a href="#m:NKL11" title="line 18">NKL11</a>             <span class="navx"><a href="#xref:m:NKL11" title="to xref">X</a></span></span>
+<span class="navo"><a href="#m:RDRENB" title="line 21">RDRENB</a>            <span class="navx"><a href="#xref:m:RDRENB" title="to xref">X</a></span></span>
+</pre>
+<h5>struct's</h5>
+<pre>
+<span class="navo"><a href="#sd:klregs" title="line 25">klregs</a>            <span class="navx"><a href="#xref:sd:klregs" title="to xref">X</a></span></span>
+</pre>
+</div>
+<div id="body">
+<div id="code">
+<pre>
+<span class="ckern"><i id="n:1">   1</i>:</span> #
+<span class="ckern"><i id="n:2">   2</i>:</span> <span class="scom">/*</span>
+<span class="ckern"><i id="n:3">   3</i>:</span> <span class="scom"> */</span>
+<span class="ckern"><i id="n:4">   4</i>:</span> 
+<span class="ckern"><i id="n:5">   5</i>:</span> <span class="scom">/*</span>
+<span class="ckern"><i id="n:6">   6</i>:</span> <span class="scom"> *   KL/DL-11 driver</span>
+<span class="ckern"><i id="n:7">   7</i>:</span> <span class="scom"> */</span>
+<span class="ckern"><i id="n:8">   8</i>:</span> #include <a href="../param.h.html" title="/usr/sys/param.h" class="sstr">"../param.h"</a>
+<span class="ckern"><i id="n:9">   9</i>:</span> #include <a href="../conf.h.html" title="/usr/sys/conf.h" class="sstr">"../conf.h"</a>
+<span class="ckern"><i id="n:10">  10</i>:</span> #include <a href="../user.h.html" title="/usr/sys/user.h" class="sstr">"../user.h"</a>
+<span class="ckern"><i id="n:11">  11</i>:</span> #include <a href="../tty.h.html" title="/usr/sys/tty.h" class="sstr">"../tty.h"</a>
+<span class="ckern"><i id="n:12">  12</i>:</span> #include <a href="../proc.h.html" title="/usr/sys/proc.h" class="sstr">"../proc.h"</a>
+<span class="ckern"><i id="n:13">  13</i>:</span> 
+<span class="ckern"><i id="n:14">  14</i>:</span> <span class="scom">/* base address */</span>
+<span class="ckern"><i id="n:15">  15</i>:</span> #define <a href="#xref:m:KLADDR" id="m:KLADDR">KLADDR</a>  <span class="snum">0177560 </span><span class="scom">/* console */</span>
+<span class="ckern"><i id="n:16">  16</i>:</span> #define <a href="#xref:m:KLBASE" id="m:KLBASE">KLBASE</a>  <span class="snum">0176500 </span><span class="scom">/* kl and dl11-a */</span>
+<span class="ckern"><i id="n:17">  17</i>:</span> #define <a href="#xref:m:DLBASE" id="m:DLBASE">DLBASE</a>  <span class="snum">0175610 </span><span class="scom">/* dl-e */</span>
+<span class="ckern"><i id="n:18">  18</i>:</span> #define <a href="#xref:m:NKL11" id="m:NKL11">NKL11</a>   <span class="snum">1</span>
+<span class="ckern"><i id="n:19">  19</i>:</span> #define <a href="#xref:m:NDL11" id="m:NDL11">NDL11</a>   <span class="snum">0</span>
+<span class="ckern"><i id="n:20">  20</i>:</span> #define <a href="#xref:m:DSRDY" id="m:DSRDY">DSRDY</a>   <span class="snum">02</span>
+<span class="ckern"><i id="n:21">  21</i>:</span> #define <a href="#xref:m:RDRENB" id="m:RDRENB">RDRENB</a>  <span class="snum">01</span>
+<span class="ckern"><i id="n:22">  22</i>:</span> 
+<span class="ckern"><i id="n:23">  23</i>:</span> <span class="skey">struct  </span><a href="../tty.h.html#sd:tty" class="styp">tty</a> <a href="#xref:s:_kl11" id="s:_kl11">kl11</a>[<a href="#m:NKL11" title="defined: 1">NKL11</a>+<a href="#m:NDL11" title="defined: 0">NDL11</a>];
+<span class="ckern"><i id="n:24">  24</i>:</span> 
+<span class="ckern"><i id="n:25">  25</i>:</span> <span class="skey">struct </span><a href="#xref:sd:klregs" id="sd:klregs" class="styp">klregs</a> <a href="#n:30" title="to line 30">{</a>
+<span class="ckern"><i id="n:26">  26</i>:</span>     <span class="styp">int </span>klrcsr;
+<span class="ckern"><i id="n:27">  27</i>:</span>     <span class="styp">int </span>klrbuf;
+<span class="ckern"><i id="n:28">  28</i>:</span>     <span class="styp">int </span>kltcsr;
+<span class="ckern"><i id="n:29">  29</i>:</span>     <span class="styp">int </span>kltbuf;
+<span class="ckern"><i id="n:30">  30</i>:</span> <a href="#n:25" title="from line 25">}</a>
+<span class="ckern"><i id="n:31">  31</i>:</span> 
+<span class="ckern"><i id="n:32">  32</i>:</span> <a href="#xref:s:_klopen" id="s:_klopen">klopen</a>(dev, flag)
+<span class="ckern"><i id="n:33">  33</i>:</span> <a href="#n:65" title="to line 65">{</a>
+<span class="ckern"><i id="n:34">  34</i>:</span>     <span class="skey">register </span><span class="styp">char </span>*addr;
+<span class="ckern"><i id="n:35">  35</i>:</span>     <span class="skey">register struct </span><a href="../tty.h.html#sd:tty" class="styp">tty</a> *tp;
+<span class="ckern"><i id="n:36">  36</i>:</span> 
+<span class="ckern"><i id="n:37">  37</i>:</span>     <span class="skey">if</span>(dev.d_minor &gt;= <a href="#m:NKL11" title="defined: 1">NKL11</a>+<a href="#m:NDL11" title="defined: 0">NDL11</a>) <a href="#n:40" title="to line 40">{</a>
+<span class="ckern"><i id="n:38">  38</i>:</span>         <a href="../user.h.html#s:_u">u</a>.u_error = <a href="../user.h.html#m:ENXIO" title="defined: 6">ENXIO</a>;
+<span class="ckern"><i id="n:39">  39</i>:</span>         <span class="skey">return</span>;
+<span class="ckern"><i id="n:40">  40</i>:</span>     <a href="#n:37" title="from line 37">}</a>
+<span class="ckern"><i id="n:41">  41</i>:</span>     tp = &amp;<a href="#s:_kl11">kl11</a>[dev.d_minor];
+<span class="ckern"><i id="n:42">  42</i>:</span>     <span class="skey">if </span>(<a href="../user.h.html#s:_u">u</a>.u_procp-&gt;p_ttyp == <span class="snum">0</span>) <a href="#n:45" title="to line 45">{</a>
+<span class="ckern"><i id="n:43">  43</i>:</span>         <a href="../user.h.html#s:_u">u</a>.u_procp-&gt;p_ttyp = tp;
+<span class="ckern"><i id="n:44">  44</i>:</span>         tp-&gt;t_dev = dev;
+<span class="ckern"><i id="n:45">  45</i>:</span>     <a href="#n:42" title="from line 42">}</a>
+<span class="ckern"><i id="n:46">  46</i>:</span>     <span class="scom">/*</span>
+<span class="ckern"><i id="n:47">  47</i>:</span> <span class="scom">	 * set up minor 0 to address KLADDR</span>
+<span class="ckern"><i id="n:48">  48</i>:</span> <span class="scom">	 * set up minor 1 thru NKL11-1 to address from KLBASE</span>
+<span class="ckern"><i id="n:49">  49</i>:</span> <span class="scom">	 * set up minor NKL11 on to address from DLBASE</span>
+<span class="ckern"><i id="n:50">  50</i>:</span> <span class="scom">	 */</span>
+<span class="ckern"><i id="n:51">  51</i>:</span>     addr = <a href="#m:KLADDR" title="defined: 0177560">KLADDR</a> + <span class="snum">8</span>*dev.d_minor;
+<span class="ckern"><i id="n:52">  52</i>:</span>     <span class="skey">if</span>(dev.d_minor)
+<span class="ckern"><i id="n:53">  53</i>:</span>         addr =+ <a href="#m:KLBASE" title="defined: 0176500">KLBASE</a>-<a href="#m:KLADDR" title="defined: 0177560">KLADDR</a>-<span class="snum">8</span>;
+<span class="ckern"><i id="n:54">  54</i>:</span>     <span class="skey">if</span>(dev.d_minor &gt;= <a href="#m:NKL11" title="defined: 1">NKL11</a>)
+<span class="ckern"><i id="n:55">  55</i>:</span>         addr =+ <a href="#m:DLBASE" title="defined: 0175610">DLBASE</a>-<a href="#m:KLBASE" title="defined: 0176500">KLBASE</a>-<span class="snum">8</span>*<a href="#m:NKL11" title="defined: 1">NKL11</a>+<span class="snum">8</span>;
+<span class="ckern"><i id="n:56">  56</i>:</span>     tp-&gt;t_addr = addr;
+<span class="ckern"><i id="n:57">  57</i>:</span>     <span class="skey">if </span>((tp-&gt;t_state&amp;<a href="../tty.h.html#m:ISOPEN" title="defined: 04">ISOPEN</a>) == <span class="snum">0</span>) <a href="#n:62" title="to line 62">{</a>
+<span class="ckern"><i id="n:58">  58</i>:</span>         tp-&gt;t_state = <a href="../tty.h.html#m:ISOPEN" title="defined: 04">ISOPEN</a>|<a href="../tty.h.html#m:CARR_ON" title="defined: 020">CARR_ON</a>;
+<span class="ckern"><i id="n:59">  59</i>:</span>         tp-&gt;t_flags = <a href="../tty.h.html#m:XTABS" title="defined: 02">XTABS</a>|<a href="../tty.h.html#m:LCASE" title="defined: 04">LCASE</a>|<a href="../tty.h.html#m:ECHO" title="defined: 010">ECHO</a>|<a href="../tty.h.html#m:CRMOD" title="defined: 020">CRMOD</a>;
+<span class="ckern"><i id="n:60">  60</i>:</span>         tp-&gt;t_erase = <a href="../tty.h.html#m:CERASE" title="defined: '#'">CERASE</a>;
+<span class="ckern"><i id="n:61">  61</i>:</span>         tp-&gt;t_kill = <a href="../tty.h.html#m:CKILL" title="defined: '@'">CKILL</a>;
+<span class="ckern"><i id="n:62">  62</i>:</span>     <a href="#n:57" title="from line 57">}</a>
+<span class="ckern"><i id="n:63">  63</i>:</span>     addr-&gt;klrcsr =| <a href="../tty.h.html#m:IENABLE" title="defined: 0100">IENABLE</a>|<a href="#m:DSRDY" title="defined: 02">DSRDY</a>|<a href="#m:RDRENB" title="defined: 01">RDRENB</a>;
+<span class="ckern"><i id="n:64">  64</i>:</span>     addr-&gt;kltcsr =| <a href="../tty.h.html#m:IENABLE" title="defined: 0100">IENABLE</a>;
+<span class="ckern"><i id="n:65">  65</i>:</span> <a href="#n:33" title="from line 33">}</a>
+<span class="ckern"><i id="n:66">  66</i>:</span> 
+<span class="ckern"><i id="n:67">  67</i>:</span> <a href="#xref:s:_klclose" id="s:_klclose">klclose</a>(dev)
+<span class="ckern"><i id="n:68">  68</i>:</span> <a href="#n:74" title="to line 74">{</a>
+<span class="ckern"><i id="n:69">  69</i>:</span>     <span class="skey">register struct </span><a href="../tty.h.html#sd:tty" class="styp">tty</a> *tp;
+<span class="ckern"><i id="n:70">  70</i>:</span> 
+<span class="ckern"><i id="n:71">  71</i>:</span>     tp = &amp;<a href="#s:_kl11">kl11</a>[dev.d_minor];
+<span class="ckern"><i id="n:72">  72</i>:</span>     <a href="tty.c.html#s:_wflushtty">wflushtty</a>(tp);
+<span class="ckern"><i id="n:73">  73</i>:</span>     tp-&gt;t_state = <span class="snum">0</span>;
+<span class="ckern"><i id="n:74">  74</i>:</span> <a href="#n:68" title="from line 68">}</a>
+<span class="ckern"><i id="n:75">  75</i>:</span> 
+<span class="ckern"><i id="n:76">  76</i>:</span> <a href="#xref:s:_klread" id="s:_klread">klread</a>(dev)
+<span class="ckern"><i id="n:77">  77</i>:</span> <a href="#n:79" title="to line 79">{</a>
+<span class="ckern"><i id="n:78">  78</i>:</span>     <a href="tty.c.html#s:_ttread">ttread</a>(&amp;<a href="#s:_kl11">kl11</a>[dev.d_minor]);
+<span class="ckern"><i id="n:79">  79</i>:</span> <a href="#n:77" title="from line 77">}</a>
+<span class="ckern"><i id="n:80">  80</i>:</span> 
+<span class="ckern"><i id="n:81">  81</i>:</span> <a href="#xref:s:_klwrite" id="s:_klwrite">klwrite</a>(dev)
+<span class="ckern"><i id="n:82">  82</i>:</span> <a href="#n:84" title="to line 84">{</a>
+<span class="ckern"><i id="n:83">  83</i>:</span>     <a href="tty.c.html#s:_ttwrite">ttwrite</a>(&amp;<a href="#s:_kl11">kl11</a>[dev.d_minor]);
+<span class="ckern"><i id="n:84">  84</i>:</span> <a href="#n:82" title="from line 82">}</a>
+<span class="ckern"><i id="n:85">  85</i>:</span> 
+<span class="ckern"><i id="n:86">  86</i>:</span> <a href="#xref:s:_klxint" id="s:_klxint">klxint</a>(dev)
+<span class="ckern"><i id="n:87">  87</i>:</span> <a href="#n:94" title="to line 94">{</a>
+<span class="ckern"><i id="n:88">  88</i>:</span>     <span class="skey">register struct </span><a href="../tty.h.html#sd:tty" class="styp">tty</a> *tp;
+<span class="ckern"><i id="n:89">  89</i>:</span> 
+<span class="ckern"><i id="n:90">  90</i>:</span>     tp = &amp;<a href="#s:_kl11">kl11</a>[dev.d_minor];
+<span class="ckern"><i id="n:91">  91</i>:</span>     <a href="tty.c.html#s:_ttstart">ttstart</a>(tp);
+<span class="ckern"><i id="n:92">  92</i>:</span>     <span class="skey">if </span>(tp-&gt;t_outq.c_cc == <span class="snum">0 </span>|| tp-&gt;t_outq.c_cc == <a href="../tty.h.html#m:TTLOWAT" title="defined: 30">TTLOWAT</a>)
+<span class="ckern"><i id="n:93">  93</i>:</span>         <a href="../ken/slp.c.html#s:_wakeup">wakeup</a>(&amp;tp-&gt;t_outq);
+<span class="ckern"><i id="n:94">  94</i>:</span> <a href="#n:87" title="from line 87">}</a>
+<span class="ckern"><i id="n:95">  95</i>:</span> 
+<span class="ckern"><i id="n:96">  96</i>:</span> <a href="#xref:s:_klrint" id="s:_klrint">klrint</a>(dev)
+<span class="ckern"><i id="n:97">  97</i>:</span> <a href="#n:108" title="to line 108">{</a>
+<span class="ckern"><i id="n:98">  98</i>:</span>     <span class="skey">register </span><span class="styp">int </span>c, *addr;
+<span class="ckern"><i id="n:99">  99</i>:</span>     <span class="skey">register struct </span><a href="../tty.h.html#sd:tty" class="styp">tty</a> *tp;
+<span class="ckern"><i id="n:100"> 100</i>:</span> 
+<span class="ckern"><i id="n:101"> 101</i>:</span>     tp = &amp;<a href="#s:_kl11">kl11</a>[dev.d_minor];
+<span class="ckern"><i id="n:102"> 102</i>:</span>     addr = tp-&gt;t_addr;
+<span class="ckern"><i id="n:103"> 103</i>:</span>     c = addr-&gt;klrbuf;
+<span class="ckern"><i id="n:104"> 104</i>:</span>     addr-&gt;klrcsr =| <a href="#m:RDRENB" title="defined: 01">RDRENB</a>;
+<span class="ckern"><i id="n:105"> 105</i>:</span>     <span class="skey">if </span>((c&amp;<span class="snum">0177</span>)==<span class="snum">0</span>)
+<span class="ckern"><i id="n:106"> 106</i>:</span>         addr-&gt;kltbuf = c;   <span class="scom">/* hardware botch */</span>
+<span class="ckern"><i id="n:107"> 107</i>:</span>     <a href="tty.c.html#s:_ttyinput">ttyinput</a>(c, tp);
+<span class="ckern"><i id="n:108"> 108</i>:</span> <a href="#n:97" title="from line 97">}</a>
+<span class="ckern"><i id="n:109"> 109</i>:</span> 
+<span class="ckern"><i id="n:110"> 110</i>:</span> <a href="#xref:s:_klsgtty" id="s:_klsgtty">klsgtty</a>(dev, v)
+<span class="ckern"><i id="n:111"> 111</i>:</span> <span class="styp">int </span>*v;
+<span class="ckern"><i id="n:112"> 112</i>:</span> <a href="#n:117" title="to line 117">{</a>
+<span class="ckern"><i id="n:113"> 113</i>:</span>     <span class="skey">register struct </span><a href="../tty.h.html#sd:tty" class="styp">tty</a> *tp;
+<span class="ckern"><i id="n:114"> 114</i>:</span> 
+<span class="ckern"><i id="n:115"> 115</i>:</span>     tp = &amp;<a href="#s:_kl11">kl11</a>[dev.d_minor];
+<span class="ckern"><i id="n:116"> 116</i>:</span>     <a href="tty.c.html#s:_ttystty">ttystty</a>(tp, v);
+<span class="ckern"><i id="n:117"> 117</i>:</span> <a href="#n:112" title="from line 112">}</a>
+</pre>
+</div>
+<div id="xref">
+<h4>Defined functions</h4>
+<div class="xe"><a id="xref:s:_klclose" href="#s:_klclose">klclose</a>
+ defined in line <a href="#n:67">67</a>;  <i>never used</i>
+</div>
+<div class="xo"><a id="xref:s:_klopen" href="#s:_klopen">klopen</a>
+ defined in line <a href="#n:32">32</a>;  <i>never used</i>
+</div>
+<div class="xe"><a id="xref:s:_klread" href="#s:_klread">klread</a>
+ defined in line <a href="#n:76">76</a>;  <i>never used</i>
+</div>
+<div class="xo"><a id="xref:s:_klrint" href="#s:_klrint">klrint</a>
+ defined in line <a href="#n:96">96</a>;  <i>never used</i>
+</div>
+<div class="xe"><a id="xref:s:_klsgtty" href="#s:_klsgtty">klsgtty</a>
+ defined in line <a href="#n:110">110</a>;  <i>never used</i>
+</div>
+<div class="xo"><a id="xref:s:_klwrite" href="#s:_klwrite">klwrite</a>
+ defined in line <a href="#n:81">81</a>;  <i>never used</i>
+</div>
+<div class="xe"><a id="xref:s:_klxint" href="#s:_klxint">klxint</a>
+ defined in line <a href="#n:86">86</a>;  <i>never used</i>
+</div>
+<h4>Defined variables</h4>
+<div class="xe"><a id="xref:s:_kl11" href="#s:_kl11">kl11</a>
+ defined in line <a href="#n:23">23</a>;  used 7 times
+<ul>
+<li class="xxe">in line <a href="#n:41">41</a>,
+<a href="#n:71">71</a>,
+<a href="#n:78">78</a>-<a href="#n:83">83</a>(2),
+<a href="#n:90">90</a>,
+<a href="#n:101">101</a>,
+<a href="#n:115">115</a>
+</li></ul>
+</div>
+<h4>Defined struct's</h4>
+<div class="xe"><a id="xref:sd:klregs" href="#sd:klregs">klregs</a>
+ defined in line <a href="#n:25">25</a>;  <i>never used</i>
+</div>
+<h4>Defined macros</h4>
+<div class="xe"><a id="xref:m:DLBASE" href="#m:DLBASE">DLBASE</a>
+ defined in line <a href="#n:17">17</a>;  used 1 times
+<ul>
+<li class="xxe">in line <a href="#n:55">55</a>
+</li></ul>
+</div>
+<div class="xo"><a id="xref:m:DSRDY" href="#m:DSRDY">DSRDY</a>
+ defined in line <a href="#n:20">20</a>;  used 1 times
+<ul>
+<li class="xxe">in line <a href="#n:63">63</a>
+</li></ul>
+</div>
+<div class="xe"><a id="xref:m:KLADDR" href="#m:KLADDR">KLADDR</a>
+ defined in line <a href="#n:15">15</a>;  used 2 times
+<ul>
+<li class="xxe">in line <a href="#n:51">51</a>-<a href="#n:53">53</a>(2)
+</li></ul>
+</div>
+<div class="xo"><a id="xref:m:KLBASE" href="#m:KLBASE">KLBASE</a>
+ defined in line <a href="#n:16">16</a>;  used 2 times
+<ul>
+<li class="xxe">in line <a href="#n:53">53</a>-<a href="#n:55">55</a>(2)
+</li></ul>
+</div>
+<div class="xe"><a id="xref:m:NDL11" href="#m:NDL11">NDL11</a>
+ defined in line <a href="#n:19">19</a>;  used 2 times
+<ul>
+<li class="xxe">in line <a href="#n:23">23</a>,
+<a href="#n:37">37</a>
+</li></ul>
+</div>
+<div class="xo"><a id="xref:m:NKL11" href="#m:NKL11">NKL11</a>
+ defined in line <a href="#n:18">18</a>;  used 4 times
+<ul>
+<li class="xxe">in line <a href="#n:23">23</a>,
+<a href="#n:37">37</a>,
+<a href="#n:54">54</a>-<a href="#n:55">55</a>(2)
+</li></ul>
+</div>
+<div class="xe"><a id="xref:m:RDRENB" href="#m:RDRENB">RDRENB</a>
+ defined in line <a href="#n:21">21</a>;  used 2 times
+<ul>
+<li class="xxe">in line <a href="#n:63">63</a>,
+<a href="#n:104">104</a>
+</li></ul>
+</div>
+</div>
+</div>
+<div id="tail">
+<table border="0" width="100%" cellspacing="2" cellpadding="0">
+  <tr>
+    <td align="left">
+      Last modified: 1975-07-17
+      <br/>
+      Generated: 2016-12-26
+    </td>
+    <td align="center"><small>Generated by src2html V0.67
+      <br/>page hit count: 
+      1042
+      </small>
+    </td>
+    <td align="right">
+      <a href="http://jigsaw.w3.org/css-validator/check/referer">
+        <img alt="Valid CSS" height="31" width="88"
+             src="../../../.misc/valid-css.png"/>
+      </a>
+      <a href="http://validator.w3.org/check?uri=referer">
+         <img alt="Valid XHTML 1.0 Strict" 
+              height="31" width="88" src="../../../.misc/valid-xhtml10.png"/>
+      </a>
+    </td>
+  </tr>
+</table>
+</div></div>
+</body></html>

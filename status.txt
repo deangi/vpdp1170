@@ -1,0 +1,32 @@
+EMU Status PDP 11/70
+- 7/6/2026
+- 11Mark - RSX11M - no bootup banner
+- RSTSV4 - runs, type START to begin - runs
+- RSX11M base - no boot banner
+- RT11V5 - runs, type SHOW to see devices
+- UNIXV6 - runs, boot banner @, type UNIX to begin, working
+- XXDP22 - runs XXDP+, type in date, H for help
+- XXDP25 - HALT at PC=002510
+- DOSBATCH11 - boot banner, comes up and asks a bunch of questions
+- RSTSV7 - Device RL does not interrupt, unexpected trap at 04, HALT
+- UNIXV7 - comes up with @ prompt, type boot, then rl(0,0)rl2unix
+- 211bsd - just hit enter, rl(0,0,0)unix - then runs a long time and prints boot banner
+
+7/7 - investigate base rsx11m boot.   The CPU is in an infinite loop, doing an INC on a word that is an odd address.   It takes the trap 004, but then returns to the offending instruction, which traps again
+    - the pushed PC should be the address AFTER the offending instruction, unless the instruction fetch itself was from an odd address.
+	  EMU - should update odd-address handler to push correct PC on taking the trap
+	- Fixed trap handler to push addr of next instruction, not offending instruction
+
+7/9 - Off line until 7/11 due to running out of Codex time.   Many problems with interrupt
+      system - go into plan mode and study the interrupt system of 11/40, compare it to 11/70 
+	  
+	  
+EMU Status PDP 11/40
+- RSTSV4B- Runs, OLD 1.BAS RUN, CATALOG - RSTSV4B-17
+- RT11V5 - Runs, DIR, SHOW
+- UNIX6  - Runs, ROOT, DF, DU
+- XXDP25 - Runs, says XXDP V2.4, R FKAAC0, SM mode only, MMU fault detected
+- RSX11m - Runs, RSX-11M V4.0 BL32   28.K (BASELINE), run $pip, /li
+- XXDP22 - Runs, CHMDLD0 XXDP+ DL MONITOR, R FKAAC0
+- 11Mark - Runs, RSX-11M V4.8 BL70   124.K MAPPED, DIR
+

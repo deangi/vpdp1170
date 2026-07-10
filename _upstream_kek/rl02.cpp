@@ -413,15 +413,28 @@ void rl02::complete_deferred_data_command()
 
 void rl02::service_deferred()
 {
-	if (!deferred_data_active || deferred_poll_count <= 0)
-		return;
-
-	if (deferred_service_delay > 0) {
-		deferred_service_delay--;
-		return;
+	if (deferred_data_active && deferred_poll_count > 0) {
+		if (deferred_service_delay > 0) {
+			deferred_service_delay--;
+		}
+		else {
+			complete_deferred_data_command();
+		}
 	}
 
-	complete_deferred_data_command();
+#if defined(ESP32)
+	if (irq_pending_ticks > 0 && --irq_pending_ticks == 0) {
+		if (registers[(RL02_CSR - RL02_BASE) / 2] & 64) {
+			rl02_trace("IRQ-DELIVER vec=160 BR5 CSR=%06o",
+					registers[(RL02_CSR - RL02_BASE) / 2]);
+			b->getCpu()->queue_interrupt(5, 0160);
+		}
+		else {
+			rl02_trace("IRQ-CANCEL IE cleared CSR=%06o",
+					registers[(RL02_CSR - RL02_BASE) / 2]);
+		}
+	}
+#endif
 }
 
 void rl02::write_word(const uint16_t addr, uint16_t v)
@@ -443,6 +456,11 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 	registers[reg] = v;
 
 	if (addr == RL02_CSR) {  // control status
+#if defined(ESP32)
+		irq_pending_ticks = 0;
+		if (b && b->getCpu())
+			b->getCpu()->unqueue_interrupt(5, 0160);
+#endif
 		const uint8_t command = (v >> 1) & 7;
 
 		const bool    do_exec = !(v & 128);
@@ -686,10 +704,16 @@ command_done:
 		if (do_int) {
 			if (registers[(RL02_CSR - RL02_BASE) / 2] & 64) {  // interrupt enable?
 				DOLOG(log_ss::LS_DISK, "RL02: triggering interrupt");
+#if defined(ESP32)
+				irq_pending_ticks = IRQ_DELAY_TICKS;
+				rl02_trace("IRQ-SCHEDULE unit=%d vec=160 BR5 ticks=%d CSR=%06o",
+						device, IRQ_DELAY_TICKS,
+						registers[(RL02_CSR - RL02_BASE) / 2]);
+#else
 				rl02_trace("IRQ unit=%d vec=160 BR5 CSR=%06o",
 						device, registers[(RL02_CSR - RL02_BASE) / 2]);
-
 				b->getCpu()->queue_interrupt(5, 0160);
+#endif
 			}
 			else {
 				rl02_trace("NOIRQ unit=%d IE=0 CSR=%06o",

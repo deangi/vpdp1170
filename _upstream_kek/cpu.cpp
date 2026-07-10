@@ -95,6 +95,7 @@ void cpu::reset()
 	processing_trap_depth = 0;
 	instruction_active = false;
 	instruction_pc = 0;
+	trap_pc_override.reset();
 	last_instruction_valid = false;
 	last_instruction_pc = 0;
 	last_instruction_word = 0;
@@ -272,8 +273,24 @@ void cpu::setPSW_n(const bool v)
 
 void cpu::setPSW_spl(const int v)
 {
+	const int old_spl = getPSW_spl();
 	psw &= ~(7 << 5);
 	psw |= v << 5;
+
+	// SPL can lower priority without going through setPSW(). If an interrupt
+	// was already queued but masked, wake the dispatcher now that it may be
+	// deliverable.
+	if (getPSW_spl() < old_spl) {
+		any_queued_interrupts = true;
+#if defined(FREERTOS)
+		if (qi_q && uxQueueMessagesWaiting(qi_q) == 0) {
+			uint8_t value = 1;
+			xQueueSend(qi_q, &value, 0);
+		}
+#else
+		qi_cv.notify_one();
+#endif
+	}
 }
 
 int cpu::getPSW_spl() const
@@ -327,6 +344,23 @@ bool cpu::check_pending_interrupts() const
 	}
 
 	return false;
+}
+
+bool cpu::check_if_interrupts_pending() const
+{
+#if defined(FREERTOS)
+	xSemaphoreTake(qi_lock, portMAX_DELAY);
+#else
+	std::unique_lock<std::mutex> lck(qi_lock);
+#endif
+
+	const bool pending = check_pending_interrupts();
+
+#if defined(FREERTOS)
+	xSemaphoreGive(qi_lock);
+#endif
+
+	return pending;
 }
 
 void cpu::execute_any_pending_interrupt()
@@ -389,6 +423,7 @@ void cpu::queue_interrupt(const uint8_t level, const uint16_t vector)
 #endif
 
 	queued_interrupts[level].insert(vector);
+	any_queued_interrupts = true;
 	DOLOG(log_ss::LS_TRACE, "Queueing interrupt vector %o (IPL %d, current: %d), n: %" PRIzu, vector, level, getPSW_spl(), queued_interrupts[level].size());
 
 #if defined(FREERTOS)
@@ -402,7 +437,6 @@ void cpu::queue_interrupt(const uint8_t level, const uint16_t vector)
 	qi_cv.notify_one();
 #endif
 
-	any_queued_interrupts = true;
 }
 
 bool cpu::has_queued_interrupt(const uint8_t level, const uint16_t vector)
@@ -2095,6 +2129,7 @@ bool cpu::misc_operations(const uint16_t instr)
 					vTaskDelay(1);
 					return true;
 				}
+				execute_any_pending_interrupt();
 #else
 				uint64_t start = get_us();
 
@@ -2251,7 +2286,13 @@ void cpu::trap(uint16_t vector, const int new_ipl, const bool is_interrupt)
 				set_register(6, 04);
 			}
 			before_psw = getPSW();
-			before_pc  = is_interrupt == false && instruction_active ? instruction_pc : getPC();
+			if (trap_pc_override.has_value()) {
+				before_pc = trap_pc_override.value();
+				trap_pc_override.reset();
+			}
+			else {
+				before_pc = is_interrupt == false && instruction_active ? instruction_pc : getPC();
+			}
 
 			// make sure the trap vector is retrieved from kernel space
 			psw &= 037777;  // mask off 14/15 to make it into kernel-space
@@ -2293,6 +2334,13 @@ void cpu::trap(uint16_t vector, const int new_ipl, const bool is_interrupt)
 		}
 	}
 	while(0);
+}
+
+void cpu::trap_at_current_pc(uint16_t vector)
+{
+	trap_pc_override = getPC();
+	trap(vector);
+	trap_pc_override.reset();
 }
 
 cpu::operand_parameters cpu::addressing_to_string(const uint8_t mode_register, const uint16_t pc, const word_mode_t word_mode) const

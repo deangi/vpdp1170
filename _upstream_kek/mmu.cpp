@@ -268,7 +268,7 @@ void mmu::trap_if_odd(const int page_index)
 
 	CPUERR |= 0100;
 	if (c)
-		c->trap(004);
+		c->trap_at_current_pc(004);
 }
 
 memory_addresses_t mmu::calculate_physical_address(const int run_mode, const uint16_t a) const

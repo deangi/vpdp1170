@@ -38,6 +38,11 @@ private:
 	abool *const disk_read_activity  { nullptr };
 	abool *const disk_write_activity { nullptr };
 
+#if defined(ESP32)
+	int             irq_pending_ticks { 0 };
+	static constexpr int IRQ_DELAY_TICKS = 2;
+#endif
+
 	uint32_t get_bus_address() const;
 	void     update_bus_address(const uint16_t v);
 
@@ -60,4 +65,5 @@ public:
 
 	void write_byte(const uint16_t addr, const uint8_t  v) override;
 	void write_word(const uint16_t addr, const uint16_t v) override;
+	void service_deferred();
 };
