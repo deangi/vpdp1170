@@ -1,72 +1,83 @@
-﻿# KL11 console_trace by OS (Phase 2)
+# KL11 console_trace by OS
 
-Live captures via `tools/capture_kl11_boot.py --all` (COM18 @ 115200, FTP `192.168.7.144`, `console_trace = 1000`).
+Live captures via 	ools/capture_kl11_boot.py (COM18 @ 115200, FTP 192.168.7.144, console_trace = 1000).
 
-Raw logs and per-OS register digests: `documentation/os-console/traces/`.
+Raw logs and per-OS register digests: documentation/os-console/traces/.
 
-## Capture status
+## Phase 2 baseline (pre-kek_src_tty)
 
 | OS | Status | kek TTY events | READ | WRITE | IRQ | Dominant detail |
 |----|--------|---------------:|-----:|------:|----:|-----------------|
-| rstsv4b | OK | 1000 | 0 | 0 | 1000 | `unqueue vec=064` x1000 |
-| rt11v5 | OK | 1000 | 0 | 0 | 1000 | `unqueue vec=064` x1000 |
-| unixv6 | OK | 1000 | 0 | 0 | 1000 | `unqueue vec=064` x1000 |
-| rsx11m | OK | 1000 | 0 | 0 | 1000 | `unqueue vec=064` x1000 |
-| 11mark | OK | 1000 | 0 | 0 | 1000 | `unqueue vec=064` x1000 |
+| rstsv4b | OK | 1000 | 0 | 0 | 1000 | unqueue vec=064 x1000 |
+| rt11v5 | OK | 1000 | 0 | 0 | 1000 | unqueue vec=064 x1000 |
+| unixv6 | OK | 1000 | 0 | 0 | 1000 | unqueue vec=064 x1000 |
+| rsx11m | OK | 1000 | 0 | 0 | 1000 | unqueue vec=064 x1000 |
+| 11mark | OK | 1000 | 0 | 0 | 1000 | unqueue vec=064 x1000 |
 
-Every OS hit the `kek TTY trace ended` marker with the same counters:
+Every OS hit kek TTY trace ended with:
 
     tx=0 txready=0 irq64 q/u=0/1000 rx=0 irq60 q/u=0/0
     TKS=000000 TKB=000000 TPS=000200
 
-## Cross-OS finding (primary)
+**Finding:** TX IRQ unqueue storm burned the entire console_trace=1000 budget before any guest READ/WRITE was logged (irq64 q/u=0/1000).
 
-**TX IRQ unqueue storm burns the entire `console_trace=1000` budget before any guest READ/WRITE is logged.**
+## Post kek_src_tty flash (2026-07-10)
 
-- 1000x `IRQ TPS @ 177564 val=000200 unqueue vec=064`
-- `irq64 q/u=0/1000` — zero queues, one thousand unqueues
-- No TPB writes / `tx=0` / `txready=0` / no CONSOLE char lines in the window
-- TPS stays `000200` (DONE set) during the storm
+Firmware on COM18 after flash of DEC-faithful kek_src_tty (banner still reports pdp1170 vV1.1 build 2026-07-02). Re-ran:
 
-This is OS-independent in this capture set: RSTS, RT-11, Unix V6, RSX, and 11mark all look identical at the TTY-trace layer. Guest-specific CSR patterns (Unix `0103`, RSTS KB01, RSX init) were **not observable** because IRQ unqueue events consumed the trace counter first.
+`	ext
+python tools/capture_kl11_boot.py --os rstsv4b
+python tools/capture_kl11_boot.py --os rt11v5
+python tools/capture_kl11_boot.py --os unixv6
+`
 
-Sample (all OSes):
+### Capture status
 
-- `[vpdp1170] kek TTY IRQ TPS @ 177564 val=000200 unqueue vec=064 remaining=999`
-- same until `remaining=0` / `trace ended`
+| OS | Status | kek TTY events | READ | WRITE | IRQ | TXREADY | RXREADY | unqueue |
+|----|--------|---------------:|-----:|------:|----:|--------:|--------:|--------:|
+| rstsv4b | OK | 1000 | 874 | 63 | **0** | 62 | 1 | **0** |
+| rt11v5 | OK | 1000 | 874 | 63 | **0** | 62 | 1 | **0** |
+| unixv6 | OK | 1000 | 874 | 63 | **0** | 62 | 1 | **0** |
 
-Per-OS digests: `traces/<os>-registers.md` / `traces/<os>-console.log`.
+### Cross-OS TTY finding (major pass)
 
-## Register patterns per OS
+- **Unqueue storm is gone:** IRQ=0 / unqueue=0 in all three 30s captures (was IRQ=1000 / unqueue=1000).
+- **CSR READ/WRITE visible:** dominant mix is READ TPS (874) + WRITE TPB (63) + TXREADY TPS (62).
+- **irq64 q/u stats:** not present in these logs (no kek TTY trace ended marker; budget exhausted on READ/WRITE/TXREADY before end-of-trace summary).
+- Identical CSR counters across OSes: the 1000-event window is consumed by early polled host/adapter TX (pdp1170: kek PDP-11/70 adapter console OK; trying RK0 boot... ≈ 63 TPB chars) before guest-specific CSR patterns fill the trace. Guest boot text still appears later on the serial console outside the counted kek-TTY event mix.
 
-### rstsv4b / rt11v5 / unixv6 / rsx11m / 11mark
+### Per-OS guest evidence
 
-Same Phase-2 observation for each:
+#### rstsv4b
 
-- Action mix: IRQ=1000 only
-- No TKS/TPS/TKB/TPB READ or WRITE in the traced window
-- RSTS KB01 / Unix RDR ENB / RSX init: **not visible yet** (blocked by IRQ storm)
-- Implication: need a follow-up that does not count IRQ unqueue against `console_trace`, raises the budget, or gates IRQ tracing until after first guest CSR access
+- Digests: 	races/rstsv4b-registers.md / 	races/rstsv4b-console.log
+- Guest boot text: **yes** — RSTS V04B-17 RSTSV4B, date/time prompts, RSTS4B - SYSTEM PACK MOUNTED, INIT/Ready
+- Prompt: reaches Ready (not a classic . / @)
+- **KB01:** still logs DISABLING INTERFACE FOR KB01: during INIT (full RSTS pass criterion not met from this capture alone)
+- IRQ: none; no irq64 q/u line
 
-## Spec gap vs proposed `kek_src_tty` rules
+#### rt11v5
 
-| Rule | Intent | Trace evidence / gap |
-|------|--------|----------------------|
-| IE-only CSR writes preserve DONE | Writing IE (0100) must not clear bit7 DONE | **Gap:** no CSR WRITE events captured; blocked by IRQ storm |
-| Bit 7 only | Software tests DONE via `0200` / TSTB | TPS logged as `000200` during IRQ unqueue (bit7 set); no bit15 seen |
-| Cheap TPS read | Polled putchar / RT-11 hammer TPS READ | **Gap:** zero TPS READ in window |
-| IE while DONE must IRQ | Enabling IE with DONE already 1 queues vec 064 | **Partial/negative:** `q/u=0/1000` shows unqueue without matching queue |
-| No TX requeue storm | Must not endlessly requeue/unqueue vec=064 | **FAIL / confirmed hazard:** 1000 unqueues, 0 queues, 0 TX chars |
-| RDR ENB after RBUF (Unix) | After TKB READ, TKS WRITE bit0 | **Gap:** no TKB/TKS traffic captured |
-| RSTS KB01 CSR preserve | Probe must not wipe live console CSR | **Gap:** no CSR WRITE traffic under current trace accounting |
-| RSX / 11mark from traces | Fill from live RSX patterns | **Same as others:** IRQ-only; no RSX-specific CSR pattern yet |
+- Digests: 	races/rt11v5-registers.md / 	races/rt11v5-console.log
+- Guest boot text: **yes** — RT-11FB  V05.04 F, install/help text, device list
+- Prompt: **.** present at end of capture
+- No KB01 noise
+- IRQ: none; no irq64 q/u line
 
-### Observed snapshot (this run)
+#### unixv6
 
-- **all five OSes**: TPS READ=0, TKS WRITE n=0, IRQ queue~0 requeue~0 unqueue=1000, TKB READ=0, tx=0
+- Digests: 	races/unixv6-registers.md / 	races/unixv6-console.log
+- Guest boot text: **yes** — @unix then login:
+- Prompt evidence: past @ to **login:** within the 30s window (interactive password/# not proven from capture alone)
+- IRQ: none; no irq64 q/u line
 
-### Recommended next capture tweak
+### Verdict vs Phase 2
 
-1. Stop charging `console_trace` for IRQ unqueue (or only count queue/requeue + READ/WRITE), or
-2. Keep serial open across reboot so early guest CSR traffic is not lost to the closed-port gap, and
-3. Re-run `--all` once the TX IRQ unqueue storm is fixed — then fill OS-specific rows above.
+| Check | Phase 2 | Post flash |
+|-------|---------|------------|
+| Unqueue storm | FAIL (1000x) | **PASS** (0) |
+| CSR READ/WRITE in window | FAIL (0/0) | **PASS** (874/63) |
+| Guest boot text on console | blocked / not in TTY trace | **PASS** (all three) |
+| Full interactive login / MIPS | n/a | not proven from 30s capture alone |
+
+**Major pass for the TTY rewrite:** storm gone + CSR traffic restored. Remaining OS polish (RSTS KB01 false disable, live input, MIPS) is separate from the IRQ-unqueue hazard.

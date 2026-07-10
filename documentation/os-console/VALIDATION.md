@@ -1,71 +1,56 @@
-﻿# Phase 5 validation (kek_src_tty)
+# Phase 5 validation (kek_src_tty)
 
-Status as of 2026-07-10: **blocked on firmware rebuild/flash**. New `kek_src_tty.cpp` is in the sketch tree but is **not** on the board yet.
+Status as of 2026-07-10: **post-flash captures complete** on COM18. TTY rewrite shows a **major pass** (unqueue storm gone; CSR READ/WRITE restored). Full interactive/MIPS criteria are only partially proven from 30s console_trace=1000 captures.
 
-## Tooling check (this session)
+## Tooling / flash
 
 | Check | Result |
 |-------|--------|
-| `arduino-cli` | **Not installed / not on PATH** — cannot compile or upload from CLI |
-| Sketch | `vpdp1170.ino` present; `kek_src_tty.cpp` present (~12 KB, local) |
-| COM18 | **Present** — `USB Serial Device` (also COM4/COM9 Bluetooth links) |
-| Flash from this environment | **Not possible** without Arduino IDE (or installing `arduino-cli` + board FQBN/port upload) |
+| Sketch | kek_src_tty.cpp present; flashed to board (user) |
+| COM18 | Used for captures @ 115200 |
+| FTP | 192.168.7.144 user esp32/esp32 (wait for tp: listening after reboot) |
+| Banner | pdp1170 vV1.1 build 2026-07-02 (build string unchanged; behavior matches new TTY) |
 
-## Required before re-validation
+## Captures re-run
 
-1. **Rebuild and flash** firmware in **Arduino IDE** with the sketch folder including `kek_src_tty.cpp` (and related stub changes). Confirm the upload targets the ESP32-S3 on **COM18**.
-2. Re-run KL11 boot captures (FTP + serial), at least:
-
-```text
+`	ext
 python tools/capture_kl11_boot.py --os rstsv4b
 python tools/capture_kl11_boot.py --os rt11v5
 python tools/capture_kl11_boot.py --os unixv6
-```
+`
 
-Optional: `--all` (also rsx11m, 11mark) once the three primary guests look good.
+Artifacts: documentation/os-console/traces/<os>-console.log and <os>-registers.md. Summary: KL11_BY_OS.md (Post kek_src_tty flash).
 
-3. Compare new `documentation/os-console/traces/<os>-*.log|md` against Phase 2 baselines in `KL11_BY_OS.md`.
+## Pass / fail (capture evidence)
 
-## Pass criteria (from plan Phase 5)
+Per plan: cold-boot CSR/IRQ behavior with console_trace=1000. User guidance for this session: if unqueue storm is gone and CSR READ/WRITE appear, that is a **major pass** for the TTY rewrite even without full interactive login from a 30s capture.
 
-Cold boot each OS with `console_trace=0`, `kl11_trace=0` for MIPS; use `console_trace=1000` captures to inspect CSR/IRQ behavior.
+| Guest | TTY rewrite (storm / CSR) | Guest boot text | Prompt / notes | Overall |
+|-------|---------------------------|-----------------|----------------|---------|
+| **RT-11 V5** | **PASS** — IRQ=0, unqueue=0, READ=874, WRITE=63 | **PASS** — RT-11FB V05.04 F + install text | **PASS** — . at end of capture; live input / MIPS not measured here | **PASS** (major; interactive/MIPS TBD) |
+| **RSTS V4B** | **PASS** — same CSR mix; no unqueue storm | **PASS** — RSTS V04B-17, INIT, Ready | **FAIL/partial** — still DISABLING INTERFACE FOR KB01:; live input not proven | **PASS** on TTY rewrite; **FAIL** on KB01 criterion |
+| **Unix V6** | **PASS** — same CSR mix; no unqueue storm | **PASS** — @unix then login: | **PARTIAL** — past @ to login:; # / live input / MIPS not proven in 30s | **PASS** (major; full login TBD) |
 
-| Guest | Pass criteria |
-|-------|----------------|
-| RT-11 V5 | Boot to `.`, live input, idle MIPS restored to ~pre-regression (~0.2 class, not 0.05) |
-| RSTS V4B | Past INIT; **no** false `DISABLING INTERFACE FOR KB01:`; live input |
-| Unix V6 | Boot past `@` with `boot_input`; live input at `#`; non-zero MIPS; TX works |
+### Trace expectations vs Phase 2
 
-Regression: XXDP 2.2 if time permits.
+| Expectation after flash | Result |
+|-------------------------|--------|
+| No 1000x unqueue vec=064 storm | **PASS** (0 unqueue / 0 IRQ on all three) |
+| READ/WRITE CSR traffic in window | **PASS** (874 READ / 63 WRITE) |
+| Sensible irq64 q/u (not 0/1000) | **N/A in log** — no 	race ended / irq64 q/u line (budget spent on READ/WRITE/TXREADY) |
 
-After pass: second GitHub push / PR titled “KL11 re-architect: DEC-faithful kek_src_tty (option 3).”
+## Pre-flash probe (same day, for contrast)
 
-## Trace expectations (vs Phase 2)
+| Observation | Pre-flash | Post-flash (rstsv4b/rt11v5/unixv6) |
+|-------------|-----------|-------------------------------------|
+| unqueue vec=064 | 1000 | 0 |
+| READ / WRITE | 0 / 0 | 874 / 63 |
+| IRQ | 1000 | 0 |
+| Guest console text | blocked by storm | RSTS / RT-11 / Unix visible |
 
-Phase 2 (old firmware) on every OS:
+## Next (optional)
 
-- **1000×** `IRQ TPS @ 177564 … unqueue vec=064`
-- `irq64 q/u=0/1000`, `tx=0`, **READ=0 / WRITE=0**
-- Trace budget burned before any guest CSR traffic
-
-**After** flashing `kek_src_tty.cpp`, captures should show:
-
-- **No** 1000× unqueue storm consuming the whole budget
-- **READ/WRITE CSR traffic** (TKS/TPS/TKB/TPB) visible in the `console_trace` window
-- IRQ queue/unqueue counts that make sense with guest IE/DONE (not endless unqueue with zero queue)
-
-## Optional pre-flash capture (old firmware)
-### Pre-flash probe result (2026-07-10)
-
-Method: open COM18 @ 115200, pulse DTR to reboot, capture ~20 s (no FTP OS swap; board was on RSX11M config).
-
-| Observation | Value |
-|-------------|-------|
-| Firmware banner | `vpdp1170 vV1.1 build 2026-07-02` (pre-`kek_src_tty` flash) |
-| kek TTY lines | 1001 |
-| `unqueue vec=064` | **1000** |
-| READ / WRITE | **0 / 0** |
-| Trace ended | `tx=0 txready=0 irq64 q/u=0/1000 … TPS=000200` |
-
-**Conclusion:** Running firmware still exhibits the Phase 2 TX IRQ unqueue storm. Rebuild/flash with `kek_src_tty.cpp` is required before Phase 5 pass/fail can be judged.
-
+- Longer capture or raise/rebalance console_trace so guest CSR (TKS IE, Unix RDR ENB) appears after host banner TX
+- Manual live-input + MIPS checks with console_trace=0
+- RSTS KB01 false-disable follow-up
+- Optional --all (rsx11m, 11mark) and XXDP regression
