@@ -1,7 +1,7 @@
 // rh11.h - RH11 / RP04-RP06 secondary disk controller.
 //
 // This is a pragmatic MASSBUS subset for mounting one RP-family disk as
-// secondary storage. It is not a boot controller yet.
+// RP0. Host boot installs bootrom_rp0 when boot_kind is BK_RP.
 
 #pragma once
 #include <stdint.h>

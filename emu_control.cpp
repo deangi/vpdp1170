@@ -521,7 +521,7 @@ static void execute(char* command) {
              dl11_file::enabled() ? "ENABLED" : "DISABLED",
              dl11_file::input_connected() ? dl11_file::input_path() : "",
              dl11_file::output_connected() ? dl11_file::output_path() : "",
-             cfg.boot_kind == AppConfig::BK_RK ? "RK0" : "RL0");
+             cfg.boot_unit_label());
     reply(requested, result);
   } else {
     reply(requested, "ERROR;UNKNOWN_COMMAND");

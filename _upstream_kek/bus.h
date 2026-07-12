@@ -178,6 +178,7 @@ public:
 	uint32_t read_unibus_block(uint32_t a, uint8_t *target, uint32_t n) const;
 	uint16_t read_physical(const uint32_t a);
 	uint16_t read_physical_byte(const uint32_t a);
+	uint32_t read_physical_block(uint32_t a, uint8_t *target, uint32_t n) const;
 	bool     clear_physical_block(const uint32_t a, const uint32_t n);
 
 	bool     write(const uint16_t a, const word_mode_t word_mode, const uint16_t value, const int run_mode, const d_i_space_t s = i_space);
@@ -187,5 +188,7 @@ public:
 	void     write_word(const uint16_t a, const uint16_t value, const d_i_space_t s);
 	void     write_word(const uint16_t a, const uint16_t value) override { write_word(a, value, i_space); }
 	void     write_physical(const uint32_t a, const uint16_t value);
+	void     write_physical_byte(const uint32_t a, const uint8_t value);
+	uint32_t write_physical_block(uint32_t a, const uint8_t *source, uint32_t n);
 	void     write_unibus_word(const uint32_t a, const uint16_t value);
 };

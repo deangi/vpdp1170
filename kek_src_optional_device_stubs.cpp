@@ -10,19 +10,7 @@
 #include "_upstream_kek/dc11.h"
 #include "_upstream_kek/deqna.h"
 #include "_upstream_kek/dz11.h"
-#include "_upstream_kek/rp06.h"
 #include "_upstream_kek/tm-11.h"
-
-rp06::rp06(bus *const b, abool *const disk_read_activity, abool *const disk_write_activity, const bool is_rp07)
-  : b(b), is_rp07(is_rp07), disk_read_activity(disk_read_activity), disk_write_activity(disk_write_activity) {}
-rp06::~rp06() {}
-void rp06::begin() {}
-void rp06::reset(const bool) {}
-void rp06::show_state(console *const) const {}
-uint8_t rp06::read_byte(const uint16_t) { return 0; }
-uint16_t rp06::read_word(const uint16_t) { return 0; }
-void rp06::write_byte(const uint16_t, const uint8_t) {}
-void rp06::write_word(const uint16_t, const uint16_t) {}
 
 dc11::dc11(bus *const b, comm_io *const io_channels) : b(b), io_channels(io_channels) {}
 dc11::~dc11() {}

@@ -31,6 +31,9 @@ bool disassemble_next(char* buffer, size_t size);
 bool read_physical_word(uint32_t address, uint16_t* value);
 bool write_physical_word(uint32_t address, uint16_t value);
 bool read_mmu_word(uint16_t address, uint16_t* value);
+bool read_rp06_word(uint16_t address, uint16_t* value);
+bool get_rp06_deferred(bool* active, int* delay, int* cs1_polls,
+                       int* wc_polls);
 bool get_mmu_summary(uint16_t* mmr0, uint16_t* mmr1, uint16_t* mmr2,
                      uint16_t* mmr3, uint16_t* cpuerr, uint16_t* pir,
                      uint32_t* io_base);
@@ -46,6 +49,8 @@ void set_boot_kind(int kind);
 void set_trace(bool enabled);
 void set_dl_trace(uint32_t count);
 uint32_t dl_trace_remaining();
+void set_rp_trace(uint32_t count);
+uint32_t rp_trace_remaining();
 void monitor_pause();
 void monitor_continue();
 bool monitor_paused();

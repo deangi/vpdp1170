@@ -4,6 +4,7 @@
 #include "platform.h"
 #include "disk.h"
 #include "rl11.h"
+#include "rh11.h"
 #include "pdp_core.h"
 #include "telnet.h"
 #include "ftp.h"
@@ -122,9 +123,27 @@ static String& cfg_disk_path(int slot) {
     case DRIVE_A: return cfg.disk_a;
     case DRIVE_B: return cfg.disk_b;
     case DRIVE_C: return cfg.disk_c;
+    case DRIVE_D: return cfg.disk_d;
     case DRIVE_RK0: return cfg.disk_rk0;
+    case DRIVE_RP0: return cfg.disk_rp0;
     default:      return cfg.disk_d;
   }
+}
+
+static const char* unit_name(int slot) {
+  switch (slot) {
+    case DRIVE_A: return "DL0";
+    case DRIVE_B: return "DL1";
+    case DRIVE_C: return "DL2";
+    case DRIVE_D: return "DL3";
+    case DRIVE_RK0: return "RK0";
+    case DRIVE_RP0: return "RP0";
+    default: return "?";
+  }
+}
+
+static bool slot_cfg_has_path(int slot) {
+  return cfg_disk_path(slot).length() > 0;
 }
 
 static bool slot_live(int slot) {
@@ -150,7 +169,9 @@ static bool valid_rl_file_size(const char* path, uint32_t* size_out = nullptr) {
 }
 
 static const char* slot_display_path(int slot) {
-  return slot_live(slot) ? disk_path(slot) : cfg_disk_path(slot).c_str();
+  if (slot_live(slot) && disk_is_mounted(slot) && disk_path(slot)[0])
+    return disk_path(slot);
+  return cfg_disk_path(slot).c_str();
 }
 
 // ---- build the item list / title for the current screen ----
@@ -174,34 +195,41 @@ static void rebuild() {
                cfg.boot_kind == AppConfig::BK_RL ? "Boot RL0 [active]" : "Boot RL0");
         strcpy(g_items[g_count++],
                cfg.boot_kind == AppConfig::BK_RK ? "Boot RK0 [active]" : "Boot RK0");
-        if (cfg.disk_rk0.length())
-          snprintf(g_items[g_count++], 44, "RK0 %s", cfg.disk_rk0.c_str());
+        strcpy(g_items[g_count++],
+               cfg.boot_kind == AppConfig::BK_RP ? "Boot RP0 [active]" : "Boot RP0");
+        if (slot_cfg_has_path(DRIVE_RK0) || disk_is_mounted(DRIVE_RK0))
+          snprintf(g_items[g_count++], 44, "RK0 %s",
+                   slot_display_path(DRIVE_RK0));
         else
           strcpy(g_items[g_count++], "RK0 (empty)");
-        static const char* const ui_unit_names[4] = { "DL0", "DL1", "DL2", "DL3" };
-        for (int s = 0; s < 4; s++) {
+        if (slot_cfg_has_path(DRIVE_RP0) || disk_is_mounted(DRIVE_RP0))
+          snprintf(g_items[g_count++], 44, "RP0 %s%s",
+                   slot_display_path(DRIVE_RP0),
+                   (disk_is_mounted(DRIVE_RP0) && disk_is_readonly(DRIVE_RP0))
+                     ? " [RO]" : "");
+        else
+          strcpy(g_items[g_count++], "RP0 (empty)");
+        for (int s = DRIVE_A; s <= DRIVE_D; s++) {
           if (slot_has_image(s))
-          snprintf(g_items[g_count++], 44, "%s %s%s", ui_unit_names[s],
+            snprintf(g_items[g_count++], 44, "%s %s%s", unit_name(s),
                      slot_display_path(s),
                      (slot_live(s) && disk_is_readonly(s)) ? " [RO]" : "");
           else
-            snprintf(g_items[g_count++], 44, "%s (empty)", ui_unit_names[s]);
+            snprintf(g_items[g_count++], 44, "%s (empty)", unit_name(s));
         }
       }
       break;
     case SC_DRIVE: {
-      static const char* const drv_unit_names[5] = { "DL0", "DL1", "DL2", "DL3", "RK0" };
-      snprintf(g_title, sizeof(g_title), "Drive %s", drv_unit_names[g_sel]);
+      snprintf(g_title, sizeof(g_title), "Drive %s", unit_name(g_sel));
       strcpy(g_items[g_count++],
-             (g_sel == DRIVE_RK0 ? cfg.disk_rk0.length() : slot_has_image(g_sel))
+             (slot_cfg_has_path(g_sel) || slot_has_image(g_sel))
                ? "Change Image" : "Mount Image");
-      if (g_sel == DRIVE_RK0 ? cfg.disk_rk0.length() : slot_has_image(g_sel))
+      if (slot_cfg_has_path(g_sel) || slot_has_image(g_sel))
         strcpy(g_items[g_count++], "Dismount");
       break;
     }
     case SC_PICKER: {
-      static const char* const pick_unit_names[5] = { "DL0", "DL1", "DL2", "DL3", "RK0" };
-      snprintf(g_title, sizeof(g_title), "Mount into %s", pick_unit_names[g_sel]);
+      snprintf(g_title, sizeof(g_title), "Mount into %s", unit_name(g_sel));
       for (int i = 0; i < g_file_count; i++)
         strncpy(g_items[g_count++], g_files[i], 43);
       if (g_count == 0)
@@ -321,10 +349,24 @@ static void activate(int idx) {        // idx = absolute item index
         g_screen = SC_CLOSED;
         g_dirty = false;
       } else if (idx == 2) {
+        cfg.boot_kind = AppConfig::BK_RP;
+        cfg.boot_drive = 'a';
+        g_boot_change = true;
+        g_screen = SC_CLOSED;
+        g_dirty = false;
+      } else if (idx == 3) {
         g_sel = DRIVE_RK0;
         go(SC_DRIVE);
+      } else if (idx == 4) {
+        g_sel = DRIVE_RP0;
+        if (slot_cfg_has_path(DRIVE_RP0) || disk_is_mounted(DRIVE_RP0))
+          go(SC_DRIVE);
+        else {
+          scan_files();
+          go(SC_PICKER);
+        }
       } else {
-        g_sel = idx - 3;                 // 3..6 -> DL0..DL3
+        g_sel = idx - 5;                 // 5..8 -> DL0..DL3
         if (slot_has_image(g_sel)) go(SC_DRIVE);
         else { scan_files(); go(SC_PICKER); }
       }
@@ -335,6 +377,17 @@ static void activate(int idx) {        // idx = absolute item index
         cfg.disk_rk0 = "";
         disk_dismount(DRIVE_RK0);
         if (cfg.boot_kind == AppConfig::BK_RK) {
+          g_boot_change = true;
+          g_screen = SC_CLOSED;
+          g_dirty = false;
+        } else {
+          go(SC_DRIVES);
+        }
+      } else if (g_sel == DRIVE_RP0) {
+        cfg.disk_rp0 = "";
+        disk_dismount(DRIVE_RP0);
+        rh11::media_changed(false);
+        if (cfg.boot_kind == AppConfig::BK_RP) {
           g_boot_change = true;
           g_screen = SC_CLOSED;
           g_dirty = false;
@@ -362,6 +415,16 @@ static void activate(int idx) {        // idx = absolute item index
           g_dirty = false;
         }
         LOG("ui: mount RK0: %s -> %s", path, ok ? "ok" : "FAIL");
+      } else if (g_sel == DRIVE_RP0) {
+        cfg.disk_rp0 = path;
+        ok = disk_mount(DRIVE_RP0, path);
+        if (ok) rh11::media_changed(true);
+        if (ok && cfg.boot_kind == AppConfig::BK_RP) {
+          g_boot_change = true;
+          g_screen = SC_CLOSED;
+          g_dirty = false;
+        }
+        LOG("ui: mount RP0: %s -> %s", path, ok ? "ok" : "FAIL");
       } else {
         uint32_t bytes = 0;
         if (!valid_rl_file_size(path, &bytes)) {
@@ -490,8 +553,12 @@ static void draw_list() {
     uint16_t bg = COL_ITEM;
     if (g_screen == SC_DRIVES && idx == 0 && cfg.boot_kind == AppConfig::BK_RL) bg = COL_ITEM_HI;
     if (g_screen == SC_DRIVES && idx == 1 && cfg.boot_kind == AppConfig::BK_RK) bg = COL_ITEM_HI;
-    if (g_screen == SC_DRIVES && idx == 2 && cfg.disk_rk0.length()) bg = COL_ITEM_HI;
-    if (g_screen == SC_DRIVES && idx >= 3 && idx < 7 && slot_has_image(idx - 3)) bg = COL_ITEM_HI;
+    if (g_screen == SC_DRIVES && idx == 2 && cfg.boot_kind == AppConfig::BK_RP) bg = COL_ITEM_HI;
+    if (g_screen == SC_DRIVES && idx == 3 &&
+        (cfg.disk_rk0.length() || disk_is_mounted(DRIVE_RK0))) bg = COL_ITEM_HI;
+    if (g_screen == SC_DRIVES && idx == 4 &&
+        (cfg.disk_rp0.length() || disk_is_mounted(DRIVE_RP0))) bg = COL_ITEM_HI;
+    if (g_screen == SC_DRIVES && idx >= 5 && idx < 9 && slot_has_image(idx - 5)) bg = COL_ITEM_HI;
     // SC_MAIN items 5 (Reboot PDP-11) and 6 (Reset ESP32) are destructive.
     if (g_screen == SC_MAIN && (idx == 5 || idx == 6)) bg = COL_DANGER;
     if (g_screen == SC_DRIVE && idx == 1) bg = COL_DANGER;
@@ -525,7 +592,46 @@ static void draw_info() {
   snprintf(line, sizeof(line), "RAM: %uKW active / %uKW config",
            (unsigned)(pdp_core::memory_size() / 2048),
            (unsigned)(pdp_core::target_memory_bytes() / 2048));
-  T->drawString(line, 10, y, 2); y += 20;
+  T->drawString(line, 10, y, 2); y += 18;
+
+  {
+    const char* boot_dev = cfg.boot_unit_label();
+    const char* boot_img = "";
+    if (cfg.boot_kind == AppConfig::BK_RK) {
+      if (disk_is_mounted(DRIVE_RK0) && disk_path(DRIVE_RK0)[0])
+        boot_img = disk_path(DRIVE_RK0);
+      else if (cfg.disk_rk0.length())
+        boot_img = cfg.disk_rk0.c_str();
+    } else if (cfg.boot_kind == AppConfig::BK_RP) {
+      if (disk_is_mounted(DRIVE_RP0) && disk_path(DRIVE_RP0)[0])
+        boot_img = disk_path(DRIVE_RP0);
+      else if (cfg.disk_rp0.length())
+        boot_img = cfg.disk_rp0.c_str();
+    } else {
+      if (disk_is_mounted(DRIVE_A) && disk_path(DRIVE_A)[0])
+        boot_img = disk_path(DRIVE_A);
+      else if (cfg.disk_a.length())
+        boot_img = cfg.disk_a.c_str();
+    }
+    snprintf(line, sizeof(line), "Boot: %s", boot_dev);
+    T->drawString(line, 10, y, 2); y += 18;
+    snprintf(line, sizeof(line), "Image: %s",
+             (boot_img && boot_img[0]) ? boot_img : "(none)");
+    T->drawString(line, 10, y, 2); y += 18;
+  }
+
+  if (cfg.boot_kind != AppConfig::BK_RP) {
+    const char* rp_img = "";
+    if (disk_is_mounted(DRIVE_RP0) && disk_path(DRIVE_RP0)[0])
+      rp_img = disk_path(DRIVE_RP0);
+    else if (cfg.disk_rp0.length())
+      rp_img = cfg.disk_rp0.c_str();
+    snprintf(line, sizeof(line), "RP0: %s",
+             (rp_img && rp_img[0]) ? rp_img : "(none)");
+    T->drawString(line, 10, y, 2); y += 20;
+  } else {
+    y += 2;
+  }
 
   if (WiFi.status() == WL_CONNECTED) {
     snprintf(line, sizeof(line), "WiFi: %s", WiFi.SSID().c_str());

@@ -52,7 +52,7 @@ private:
 	uint16_t fp_fec             { 0     };
 	uint16_t fp_fea             { 0     };
 	uint16_t fp_ac[6][4]        {       };
-	uint16_t stack_limit_register { 0400 };
+	uint16_t stack_limit_register { 0 };  // 11/70 reset clears SLR; zones are SLR+0340/0400
 	int      processing_trap_depth { 0  };
 	std::optional<int> delayed_trap {   };  // invoked after completion of the instruction
 	int      kw11l_counter      { 0     };

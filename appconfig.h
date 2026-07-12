@@ -70,6 +70,10 @@ struct AppConfig {
   // The counter decreases to zero automatically. 0 disables DL tracing.
   int    diag_dl_trace = 0;
 
+  // Number of upcoming kek RH/RP (DP) controller and host disk events to log.
+  // Alias name in pdpconfig/telnet: dp_trace. 0 disables RP tracing.
+  int    diag_rp_trace = 0;
+
   // Per-instruction trace ring for panic diagnosis. Disabled by default
   // because it costs an MMU decode, instruction read, and register snapshot
   // on every guest instruction.
@@ -108,16 +112,33 @@ struct AppConfig {
   String disk_d;
   // Optional RK05 image mounted at the dedicated DRIVE_RK0 host slot.
   String disk_rk0;
-  // Optional secondary RH11/RP image. Not bootable in the current host; guests
-  // see it as RP0 via the RH11/RP register set.
+  // Optional RH11/RP image (RP0). Bootable when boot_kind is BK_RP.
   String disk_rp0;
   String disk_rp0_type = "rp06";
-  // Boot drive: RL boot unit encoded as 'a'..'d' for DL0..DL3. RK boot uses
-  // the dedicated disk_rk0/DRIVE_RK0 slot. boot_kind selects the bootstrap
-  // controller path.
+  // Boot drive: RL boot unit encoded as 'a'..'d' for DL0..DL3. RK/RP boot
+  // use the dedicated disk_rk0 / disk_rp0 slots. boot_kind selects the
+  // bootstrap controller path.
   char   boot_drive = 'a';
-  enum BootKind { BK_RL = 0, BK_RK = 1 };
+  enum BootKind { BK_RL = 0, BK_RK = 1, BK_RP = 2 };
   uint8_t boot_kind = BK_RL;
+
+  // Value passed to pdp_core::set_boot_kind(): 0=RL, 1=RK, 2=RP.
+  int core_boot_kind() const {
+    if (boot_kind == BK_RK) return 1;
+    if (boot_kind == BK_RP) return 2;
+    return 0;
+  }
+
+  const char* boot_unit_label() const {
+    if (boot_kind == BK_RK) return "RK0";
+    if (boot_kind == BK_RP) return "RP0";
+    switch (boot_drive) {
+      case 'b': return "DL1";
+      case 'c': return "DL2";
+      case 'd': return "DL3";
+      default:  return "DL0";
+    }
+  }
 };
 
 // Global config instance owned by vpdp1170.ino. Other modules read it

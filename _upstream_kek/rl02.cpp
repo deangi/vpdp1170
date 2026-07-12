@@ -12,6 +12,7 @@
 #include "error.h"
 #include "gen.h"
 #include "log.h"
+#include "mmu.h"
 #include "rl02.h"
 #include "utils.h"
 
@@ -127,6 +128,8 @@ static void rl02_trace(const char *fmt, ...)
 #endif
 }
 
+static uint32_t rl02_resolve_dma_pa(bus *const b, const uint32_t bus_address);
+
 static uint32_t rl02_unibus_map_entry(const uint32_t bus_address)
 {
 	return (bus_address & 0777777) / UNIBUS_MAP_PAGE_SIZE;
@@ -136,6 +139,65 @@ static uint32_t rl02_unibus_map_base(bus *const b, const uint32_t bus_address)
 {
 	const uint32_t entry = rl02_unibus_map_entry(bus_address);
 	return b ? b->get_unibus_map_entry((int)entry) : 0;
+}
+
+// DMA destination PA for RL. Prefer Unibus map. Addresses in 0760000-0777777
+// are treated as 22-bit physical RAM: with BAE they are legitimate memory
+// targets, but the Unibus map's last page is the I/O hole (n=0 DMA).
+static uint32_t rl02_resolve_dma_pa(bus *const b, const uint32_t bus_address)
+{
+	const uint32_t addr18 = bus_address & 0777777;
+	if (addr18 >= 0760000)
+		return addr18;
+
+	const uint32_t ub_pa = b->translate_unibus_for_monitor(bus_address);
+	mmu *const mu = b->getMMU();
+	if (!mu || !mu->is_enabled())
+		return ub_pa;
+	if ((bus_address & ~0177777u) != 0)
+		return ub_pa;
+	const uint32_t ub18 = bus_address & 0777777;
+	if (ub_pa != ub18)
+		return ub_pa;  // non-identity Unibus map — trust it
+
+	const uint16_t va = uint16_t(ub18);
+	const uint8_t apf = uint8_t(va >> 13);
+	const int d_idx = mu->calc_par_pdr_index(0, d_space, apf);
+	const uint16_t pard = mu->getPAR(d_idx);
+	const uint16_t identity_par = uint16_t(apf) << 6;
+	if (pard == 0 || pard == identity_par)
+		return ub_pa;
+
+	const uint32_t mask = (mu->getMMR3() & 16) ? 017777777u : 0x3ffffu;
+	return (mu->get_physical_memory_offset(d_idx) + (va & 8191)) & mask;
+}
+
+static uint32_t rl02_dma_write(bus *const b, const uint32_t bus_address,
+			       const uint8_t *source, const uint32_t n)
+{
+	const uint32_t addr18 = bus_address & 0777777;
+	if (addr18 >= 0760000)
+		return b->write_physical_block(addr18, source, n);
+
+	const uint32_t ub_pa = b->translate_unibus_for_monitor(bus_address);
+	const uint32_t pa = rl02_resolve_dma_pa(b, bus_address);
+	if (pa == ub_pa)
+		return b->write_unibus_block(bus_address, source, n);
+	return b->write_physical_block(pa, source, n);
+}
+
+static uint32_t rl02_dma_read(bus *const b, const uint32_t bus_address,
+			      uint8_t *target, const uint32_t n)
+{
+	const uint32_t addr18 = bus_address & 0777777;
+	if (addr18 >= 0760000)
+		return b->read_physical_block(addr18, target, n);
+
+	const uint32_t ub_pa = b->translate_unibus_for_monitor(bus_address);
+	const uint32_t pa = rl02_resolve_dma_pa(b, bus_address);
+	if (pa == ub_pa)
+		return b->read_unibus_block(bus_address, target, n);
+	return b->read_physical_block(pa, target, n);
 }
 
 static uint32_t rl02_transfer_byte_count(const uint16_t mpr_value)
@@ -331,12 +393,10 @@ void rl02::write_byte(const uint16_t addr, const uint8_t v)
 
 uint32_t rl02::get_bus_address() const
 {
+	// Unibus RL11 (vpdp1140 / SIMH Unibus): 18-bit address from BAR + CSR
+	// A16/A17 only. BAE is RLV12/Q22; RSX leaves a stale BAE after the
+	// system load, which was folding HB DMA into 0760000-0777777 (I/O page).
 	const uint32_t bar = registers[(RL02_BAR - RL02_BASE) / 2];
-	const uint32_t bae = registers[(RL02_BAE - RL02_BASE) / 2] & 077;
-
-	if (bae_active)
-		return (bar | (bae << 16)) & ~1u;
-
 	return (bar | (uint32_t((registers[(RL02_CSR - RL02_BASE) / 2] >> 4) & 3) << 16)) & ~1u;
 }
 
@@ -602,7 +662,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			while(count > 0) {
 				uint32_t cur = std::min(uint32_t(sizeof xfer_buffer), count);
 
-				uint32_t copied = b->read_unibus_block(memory_address, xfer_buffer, cur);
+				uint32_t copied = rl02_dma_read(b, memory_address, xfer_buffer, cur);
 				if (copied != cur) {
 					DOLOG(log_ss::LS_DISK, "RL02: DMA read from PDP memory short transfer, requested %u got %u at %06o", cur, copied, memory_address);
 					rl02_trace("WRITE-DMA-ERR unit=%d bus=%06o requested=%u copied=%u",
@@ -694,7 +754,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					break;
 				}
 
-				uint32_t copied = b->write_unibus_block(memory_address, xfer_buffer, cur);
+				uint32_t copied = rl02_dma_write(b, memory_address, xfer_buffer, cur);
 				if (copied != cur) {
 					DOLOG(log_ss::LS_DISK, "RL02: DMA write to PDP memory short transfer, requested %u got %u at %06o", cur, copied, memory_address);
 					rl02_trace("READ-DMA-ERR unit=%d bus=%06o requested=%u copied=%u",
@@ -727,7 +787,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					registers[(RL02_DAR - RL02_BASE) / 2],
 					registers[(RL02_MPR - RL02_BASE) / 2],
 					track, head, sector, (unsigned)words_done);
-
 			do_int = true;
 		}
 		else {

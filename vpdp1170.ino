@@ -131,17 +131,14 @@ enum {
   ROW_PSRAM = 0, ROW_SD, ROW_CFG, ROW_BOOT, ROW_WIFI, ROW_IP, ROW_CORE, ROW_CPU
 };
 
-// Boot drive unit label (e.g. "DL0", "DL1", "DL2", "DL3", "RK0") and the
-// configured image path for the slot named by cfg.boot_drive ('a'..'d').
+// Boot drive unit label (e.g. "DL0", "RK0", "RP0") and the configured image
+// path for the active boot slot.
 static const char* boot_unit_label() {
-  if (cfg.boot_kind == AppConfig::BK_RK) return "RK0";
-  int slot = (cfg.boot_drive >= 'a' && cfg.boot_drive <= 'd')
-               ? (cfg.boot_drive - 'a') : 0;
-  static const char* rl_names[4] = { "DL0", "DL1", "DL2", "DL3" };
-  return rl_names[slot];
+  return cfg.boot_unit_label();
 }
 static const String& boot_image_path() {
   if (cfg.boot_kind == AppConfig::BK_RK) return cfg.disk_rk0;
+  if (cfg.boot_kind == AppConfig::BK_RP) return cfg.disk_rp0;
   int slot = (cfg.boot_drive >= 'a' && cfg.boot_drive <= 'd')
                ? (cfg.boot_drive - 'a') : 0;
   const String* paths[4] = { &cfg.disk_a, &cfg.disk_b, &cfg.disk_c, &cfg.disk_d };
@@ -238,6 +235,8 @@ static void sd_and_config_init() {
 #endif
   pdp_core::set_dl_trace((uint32_t)(cfg.diag_dl_trace < 0
                                       ? 0 : cfg.diag_dl_trace));
+  pdp_core::set_rp_trace((uint32_t)(cfg.diag_rp_trace < 0
+                                      ? 0 : cfg.diag_rp_trace));
   kwp::enabled             = cfg.kwp_enabled;
   pdp_core::set_trace(cfg.diag_trace);
   kl11::serial_in_delay_ms = (uint32_t)(cfg.diag_serialdelay_ms < 0 ? 0
@@ -310,16 +309,16 @@ static void draw_status_bar() {
 
   tft.drawFastHLine(0, sy, TFT_W, TFT_DARKGREY);
 
-  // Drive indicators DL0..DL3 (or RK0/DL1/DL2/DL3 when booting RK05) -
-  // green=mounted, yellow=active, dim=empty.
-  const char* unit_labels[4] = {
-    (cfg.boot_kind == AppConfig::BK_RK) ? "RK0" : "DL0",
-    "DL1", "DL2", "DL3"
-  };
-  const int visible_slots[4] = {
-    (cfg.boot_kind == AppConfig::BK_RK) ? DRIVE_RK0 : DRIVE_A,
-    DRIVE_B, DRIVE_C, DRIVE_D
-  };
+  // Drive indicators: boot unit in slot 0 when RK/RP, else DL0..DL3.
+  const char* unit_labels[4] = { "DL0", "DL1", "DL2", "DL3" };
+  int visible_slots[4] = { DRIVE_A, DRIVE_B, DRIVE_C, DRIVE_D };
+  if (cfg.boot_kind == AppConfig::BK_RK) {
+    unit_labels[0] = "RK0";
+    visible_slots[0] = DRIVE_RK0;
+  } else if (cfg.boot_kind == AppConfig::BK_RP) {
+    unit_labels[0] = "RP0";
+    visible_slots[0] = DRIVE_RP0;
+  }
   for (int i = 0; i < 4; i++) {
     int s = visible_slots[i];
     uint32_t r = 0, w = 0;
@@ -575,33 +574,27 @@ void setup() {
 
     if (pdp_core::is_kek_engine()) {
       disks_mount();
-      pdp_core::set_boot_kind(cfg.boot_kind == AppConfig::BK_RK ? 1 : 0);
-      if (cfg.boot_kind == AppConfig::BK_RK) {
-        LOG("--- booting kek PDP-11/70 from RK0, console -> TFT ---");
-        bool rk0_mounted = disk_is_mounted(DRIVE_RK0);
-        tft_status(ROW_BOOT, "Boot RK0:",
-                   rk0_mounted ? boot_image_path().c_str() : "not mounted",
-                   rk0_mounted ? TFT_GREEN : TFT_RED);
-        tft_status(ROW_CPU,  "CPU:   ", "kek RK0 boot", TFT_GREEN);
-      } else {
-        LOG("--- booting kek PDP-11/70 from DL0, console -> TFT ---");
-        bool dl0_mounted = disk_is_mounted(DRIVE_A);
-        tft_status(ROW_BOOT, "Boot DL0:",
-                   dl0_mounted ? boot_image_path().c_str() : "not mounted",
-                   dl0_mounted ? TFT_GREEN : TFT_RED);
-        tft_status(ROW_CPU,  "CPU:   ", "kek DL0 boot", TFT_GREEN);
-      }
+      pdp_core::set_boot_kind(cfg.core_boot_kind());
+      const char* boot_lbl = boot_unit_label();
+      LOG("--- booting kek PDP-11/70 from %s, console -> TFT ---", boot_lbl);
+      bool boot_mounted =
+          (cfg.boot_kind == AppConfig::BK_RK) ? disk_is_mounted(DRIVE_RK0) :
+          (cfg.boot_kind == AppConfig::BK_RP) ? disk_is_mounted(DRIVE_RP0) :
+                                               disk_is_mounted(DRIVE_A);
+      char boot_row[16];
+      snprintf(boot_row, sizeof(boot_row), "Boot %s:", boot_lbl);
+      tft_status(ROW_BOOT, boot_row,
+                 boot_mounted ? boot_image_path().c_str() : "not mounted",
+                 boot_mounted ? TFT_GREEN : TFT_RED);
+      char cpu_row[24];
+      snprintf(cpu_row, sizeof(cpu_row), "kek %s boot", boot_lbl);
+      tft_status(ROW_CPU,  "CPU:   ", cpu_row, TFT_GREEN);
       start_cpu(true);
       led(0, 0, 32);           // blue = PDP-11 boot stub running
     } else {
       disks_mount();
-      const char* boot_name;
-      if (cfg.boot_kind == AppConfig::BK_RK) boot_name = "RK0";
-      else boot_name = (cfg.boot_drive == 'a') ? "DL0"
-                     : (cfg.boot_drive == 'b') ? "DL1"
-                     : (cfg.boot_drive == 'c') ? "DL2"
-                     : (cfg.boot_drive == 'd') ? "DL3" : "?";
-      pdp_core::set_boot_kind(cfg.boot_kind == AppConfig::BK_RK ? 1 : 0);
+      const char* boot_name = boot_unit_label();
+      pdp_core::set_boot_kind(cfg.core_boot_kind());
       LOG("--- booting PDP-11 from %s, console -> TFT ---", boot_name);
       start_cpu(false);
       led(0, 0, 32);          // blue = PDP-11 booting
@@ -710,7 +703,7 @@ void loop() {
     LOG("EMU command: reboot PDP-11");
     dl11_file::disconnect_all();
     if (disk_reopen_all()) {
-      pdp_core::set_boot_kind(cfg.boot_kind == AppConfig::BK_RK ? 1 : 0);
+      pdp_core::set_boot_kind(cfg.core_boot_kind());
       start_cpu(true);
       boot_done = false;
       led(0, 0, 32);
@@ -721,10 +714,10 @@ void loop() {
 
   // Boot-source or boot-media changed from the menu; remount and cold boot.
   if (ui_consume_boot_change()) {
-    const char* boot_name = (cfg.boot_kind == AppConfig::BK_RK) ? "RK0" : "DL0";
+    const char* boot_name = boot_unit_label();
     LOG("ui: boot from %s", boot_name);
     disks_mount();
-    pdp_core::set_boot_kind(cfg.boot_kind == AppConfig::BK_RK ? 1 : 0);
+    pdp_core::set_boot_kind(cfg.core_boot_kind());
     start_cpu(true);
     boot_done = false;
     led(0, 0, 32);
@@ -734,7 +727,7 @@ void loop() {
   if (ui_consume_reboot()) {
     LOG("ui: reboot PDP-11");
     if (disk_reopen_all()) {
-      pdp_core::set_boot_kind(cfg.boot_kind == AppConfig::BK_RK ? 1 : 0);
+      pdp_core::set_boot_kind(cfg.core_boot_kind());
       start_cpu(true);
       boot_done = false;
       led(0, 0, 32);

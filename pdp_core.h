@@ -78,6 +78,13 @@ inline bool write_physical_word(uint32_t address, uint16_t value) {
 inline bool read_mmu_word(uint16_t address, uint16_t* value) {
   return pdp_core_kek::read_mmu_word(address, value);
 }
+inline bool read_rp06_word(uint16_t address, uint16_t* value) {
+  return pdp_core_kek::read_rp06_word(address, value);
+}
+inline bool get_rp06_deferred(bool* active, int* delay, int* cs1_polls,
+                              int* wc_polls) {
+  return pdp_core_kek::get_rp06_deferred(active, delay, cs1_polls, wc_polls);
+}
 inline bool get_mmu_summary(uint16_t* mmr0, uint16_t* mmr1, uint16_t* mmr2,
                             uint16_t* mmr3, uint16_t* cpuerr, uint16_t* pir,
                             uint32_t* io_base) {
@@ -108,6 +115,8 @@ inline void set_boot_kind(int kind) { pdp_core_kek::set_boot_kind(kind); }
 inline void set_trace(bool enabled) { pdp_core_kek::set_trace(enabled); }
 inline void set_dl_trace(uint32_t count) { pdp_core_kek::set_dl_trace(count); }
 inline uint32_t dl_trace_remaining() { return pdp_core_kek::dl_trace_remaining(); }
+inline void set_rp_trace(uint32_t count) { pdp_core_kek::set_rp_trace(count); }
+inline uint32_t rp_trace_remaining() { return pdp_core_kek::rp_trace_remaining(); }
 inline void monitor_pause() { pdp_core_kek::monitor_pause(); }
 inline void monitor_continue() { pdp_core_kek::monitor_continue(); }
 inline bool monitor_paused() { return pdp_core_kek::monitor_paused(); }
@@ -153,6 +162,8 @@ inline bool disassemble_next(char* buffer, size_t size) {
 inline bool read_physical_word(uint32_t, uint16_t*) { return false; }
 inline bool write_physical_word(uint32_t, uint16_t) { return false; }
 inline bool read_mmu_word(uint16_t, uint16_t*) { return false; }
+inline bool read_rp06_word(uint16_t, uint16_t*) { return false; }
+inline bool get_rp06_deferred(bool*, int*, int*, int*) { return false; }
 inline bool get_mmu_summary(uint16_t*, uint16_t*, uint16_t*, uint16_t*,
                             uint16_t*, uint16_t*, uint32_t*) { return false; }
 inline bool get_mmu_page(int, bool, int, uint16_t*, uint16_t*,
@@ -168,6 +179,8 @@ inline void set_boot_kind(int) {}
 inline void set_trace(bool) {}
 inline void set_dl_trace(uint32_t) {}
 inline uint32_t dl_trace_remaining() { return 0; }
+inline void set_rp_trace(uint32_t) {}
+inline uint32_t rp_trace_remaining() { return 0; }
 inline void monitor_pause() {}
 inline void monitor_continue() {}
 inline bool monitor_paused() { return true; }
@@ -213,6 +226,8 @@ inline bool write_physical_word(uint32_t address, uint16_t value) {
 inline bool read_mmu_word(uint16_t address, uint16_t* value) {
   return cpu_read_physical_word(address, value);
 }
+inline bool read_rp06_word(uint16_t, uint16_t*) { return false; }
+inline bool get_rp06_deferred(bool*, int*, int*, int*) { return false; }
 inline bool get_mmu_summary(uint16_t*, uint16_t*, uint16_t*, uint16_t*,
                             uint16_t*, uint16_t*, uint32_t*) { return false; }
 inline bool get_mmu_page(int, bool, int, uint16_t*, uint16_t*,
@@ -228,6 +243,8 @@ inline void set_boot_kind(int kind) { cpu_set_boot_kind(kind); }
 inline void set_trace(bool enabled) { cpu_set_trace(enabled); }
 inline void set_dl_trace(uint32_t) {}
 inline uint32_t dl_trace_remaining() { return 0; }
+inline void set_rp_trace(uint32_t) {}
+inline uint32_t rp_trace_remaining() { return 0; }
 inline void monitor_pause() { cpu_monitor_pause(); }
 inline void monitor_continue() { cpu_monitor_continue(); }
 inline bool monitor_paused() { return cpu_monitor_paused(); }

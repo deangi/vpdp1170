@@ -180,12 +180,13 @@ static volatile bool  s_halt_requested = false;
 static volatile bool  s_monitor_paused = false;
 static volatile uint32_t s_monitor_trace_left = 0;
 static bool           s_sam11_inited = false;
-// 0 = RL (bootrom_rl0, for RL02 XXDP+/etc.), 1 = RK (bootrom_rk0, for RK05
-// RT-11/Unix V6/etc.). The host sketch sets this from cfg.boot_kind before
-// calling cpu_reset().
+// 0 = RL (bootrom_rl0), 1 = RK (bootrom_rk0), 2 = RP (bootrom_rp0).
+// The host sketch sets this from cfg.boot_kind before calling cpu_reset().
 static int            s_boot_kind = 0;
 
-void cpu_set_boot_kind(int kind) { s_boot_kind = (kind == 1) ? 1 : 0; }
+void cpu_set_boot_kind(int kind) {
+  s_boot_kind = (kind == 1 || kind == 2) ? kind : 0;
+}
 
 
 bool cpu_init() {
@@ -227,16 +228,21 @@ void cpu_reset() {
   dl11_file::reset();
 
   // Install the chosen boot ROM at BOOT_START (02000 octal). kd11::reset()
-  // installs bootrom_rk0 by default; we overwrite that region with either
-  // bootrom_rl0 (RL02 packs - XXDP+, RSTS, V6 on RL) or bootrom_rk0
-  // (RK05 packs - RT-11, V6 on RK). The boot ROM does the actual disk-
-  // sector-0 load and jump-to-zero; we just stamp it into RAM.
+  // installs bootrom_rk0 by default; we overwrite that region with RL, RK,
+  // or RP bootstrap as selected by s_boot_kind.
   if (s_boot_kind == 1) {
     const uint32_t rk_words = sizeof(bootrom_rk0) / sizeof(uint16_t);
     LOG("cpu_reset: loading RK0 boot ROM (%u words) at PC = 0%o",
         (unsigned)rk_words, (unsigned)BOOT_START);
     for (uint32_t i = 0; i < rk_words; i++) {
       dd11::write16(BOOT_START + (i * 2), bootrom_rk0[i]);
+    }
+  } else if (s_boot_kind == 2) {
+    const uint32_t rp_words = sizeof(bootrom_rp0) / sizeof(uint16_t);
+    LOG("cpu_reset: loading RP0 boot ROM (%u words) at PC = 0%o",
+        (unsigned)rp_words, (unsigned)BOOT_START);
+    for (uint32_t i = 0; i < rp_words; i++) {
+      dd11::write16(BOOT_START + (i * 2), bootrom_rp0[i]);
     }
   } else {
     const uint32_t rl_words = sizeof(bootrom_rl0) / sizeof(uint16_t);
@@ -279,7 +285,9 @@ void cpu_reset() {
   }
   const char* msg = (s_boot_kind == 1)
                   ? "vpdp1170: booting 11/40 scaffold from RK0...\r\n"
-                  : "vpdp1170: booting 11/40 scaffold from DL0...\r\n";
+                  : (s_boot_kind == 2)
+                    ? "vpdp1170: booting 11/40 scaffold from RP0...\r\n"
+                    : "vpdp1170: booting 11/40 scaffold from DL0...\r\n";
   uint8_t* bytes = (uint8_t*)s_mem;
   uint32_t mi = 0;
   while (msg[mi]) { bytes[0001100 + mi] = (uint8_t)msg[mi]; mi++; }

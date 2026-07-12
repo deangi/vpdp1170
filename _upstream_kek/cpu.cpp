@@ -90,6 +90,7 @@ void cpu::reset()
 	fp_fec = 0;
 	fp_fea = 0;
 	memset(fp_ac, 0x00, sizeof fp_ac);
+	stack_limit_register = 0;  // 11/70 power-up / RESET clears SLR
 	init_interrupt_queue();
 	instructions_executed = 0;
 	processing_trap_depth = 0;
@@ -492,7 +493,9 @@ void cpu::unqueue_interrupt(const uint8_t level, const uint16_t vector)
 void cpu::add_to_MMR1(const int reg, const int delta)
 {
 	assert(reg >= 0 && reg < 8);
-	assert(delta >= -2 && delta <= 2);
+	// MMR1 stores a signed 5-bit delta (-16..15). Integer modes use ±1/±2;
+	// FP11 autoincrement/decrement uses ±4 (single) or ±8 (double).
+	assert(delta >= -16 && delta <= 15);
 
 	if (mmu_->isMMR1Locked() == false) {
 		DOLOG(log_ss::LS_TRACE, "MMR1: add %d to register R%d", delta, reg);
@@ -2021,22 +2024,44 @@ bool cpu::condition_code_operations(const uint16_t instr)
 void cpu::push_stack(const uint16_t v)
 {
 	if (getPSW_runmode() == 0) {
-		uint16_t use_limit = stack_limit_register == 0 ? 0400 : stack_limit_register;
-		uint16_t sp        = get_register(6);
+		// PDP-11/70 stack limit (SIMH STKLIM+STKL_R/Y): yellow when
+		// SLR+0340 <= SP < SLR+0400, red when SP < SLR+0340.
+		// RSX-11M+ secondary bootstrap probes Unibus with SP below the
+		// limit; real 11/70 takes a red-stack trap via emergency SP=4 and
+		// continues (w11 notes SimH STOP_TRAPS must be cleared for this).
+		const uint16_t slr = stack_limit_register & 0177400;
+		const uint16_t sp  = get_register(6);
 
-		if (sp < use_limit) {
-			if (sp >= use_limit - 32) {  // yellow zone
+		// Already on the emergency stack: finish trap pushes without
+		// re-entering red-zone handling (avoids nested HALT).
+		if (sp > 4 && sp < (slr + 0400)) {
+			if (sp >= (slr + 0340)) {  // yellow zone
 				uint16_t a = add_register(6, -2);
 				b->write_word(a, v, d_space);
 				delayed_trap = 04;
 				any_queued_interrupts = true;
-				mmu_->setCPUERRBit(8);
+				mmu_->setCPUERRBit(3);  // CPUE_YEL = 0010
+				return;
 			}
-			else {
-				set_register(6, 4);  // red zone
-				trap(04, 7);
-				processing_trap_depth = 127;  // double trap so halt
+
+			// Red zone: switch to emergency kernel stack at 4.
+			set_register(6, 4);
+			mmu_->setCPUERRBit(2);  // CPUE_RED = 0004
+
+			if (processing_trap_depth > 0) {
+				// Inside trap stacking (e.g. NXM during Unibus probe):
+				// complete this push on SP=4. Do not recurse or HALT.
+				uint16_t a = add_register(6, -2);
+				b->write_word(a, v, d_space);
+				return;
 			}
+
+			// Red zone on a normal kernel push: abort the push, keep
+			// emergency SP=4, and trap through 4 after the instruction.
+			// Never treat as a fatal double-trap (old depth=127 HALT).
+			(void)v;
+			delayed_trap = 04;
+			any_queued_interrupts = true;
 			return;
 		}
 	}

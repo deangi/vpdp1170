@@ -1,6 +1,6 @@
 EMU Status PDP 11/70
-- 7/6/2026
-- 11Mark - RSX11M - no bootup banner
+- 7/12/2026 V1.3
+- 11Mark - RSX-11M V4.8 BL70 124.K MAPPED — runs (RL Unibus BAE/I/O-page DMA fix)
 - RSTSV4 - runs, type START to begin - runs
 - RSX11M base - no boot banner
 - RT11V5 - runs, type SHOW to see devices
@@ -11,6 +11,7 @@ EMU Status PDP 11/70
 - RSTSV7 - Device RL does not interrupt, unexpected trap at 04, HALT
 - UNIXV7 - comes up with @ prompt, type boot, then rl(0,0)rl2unix
 - 211bsd - just hit enter, rl(0,0,0)unix - then runs a long time and prints boot banner
+- RSX11M-PLUS - still fails SAV home block on RP06 (separate from 4.8 RL fix)
 
 7/7 - investigate base rsx11m boot.   The CPU is in an infinite loop, doing an INC on a word that is an odd address.   It takes the trap 004, but then returns to the offending instruction, which traps again
     - the pushed PC should be the address AFTER the offending instruction, unless the instruction fetch itself was from an odd address.

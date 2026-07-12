@@ -23,6 +23,7 @@
 
 #if defined(ESP32)
 #include "../kek_kwp.h"
+#include "../platform.h"
 #endif
 
 
@@ -195,11 +196,13 @@ uint32_t bus::translate_unibus_address(const uint32_t a) const
 	if (entry >= UNIBUS_MAP_ENTRIES)
 		return unibus_address;
 
-	if (entry == UNIBUS_MAP_ENTRIES - 1)
-		return 017760000 + offset;
-
+	// Map disabled: 18-bit Unibus == physical (incl. 0760000-0777777 as RAM).
+	// Only when the map is enabled does the last page become the I/O hole.
 	if (!mmu_ || (mmu_->getMMR3() & 040) == 0)
 		return unibus_address;
+
+	if (entry == UNIBUS_MAP_ENTRIES - 1)
+		return 017760000 + offset;
 
 	return (unibus_map[entry] + offset) & 017777777;
 }
@@ -978,6 +981,24 @@ void bus::write_physical(const uint32_t a, const uint16_t value)
 	}
 }
 
+void bus::write_physical_byte(const uint32_t a, const uint8_t value)
+{
+	DOLOG(log_ss::LS_BUS, "write_physical_byte[%08o]=%03o", a, value);
+	if (a < m->get_memory_size())
+		m->write_byte(a, value);
+}
+
+uint32_t bus::write_physical_block(uint32_t a, const uint8_t *source, uint32_t n)
+{
+	if (a >= m->get_memory_size())
+		return 0;
+	n = std::min(n, m->get_memory_size() - a);
+	if (!m->write_block(a, source, n))
+		return 0;
+	DOLOG(log_ss::LS_BUS, "write_physical_block[%08o]=%u", a, n);
+	return n;
+}
+
 uint16_t bus::read_physical(const uint32_t a)
 {
 	if (a >= m->get_memory_size()) {
@@ -1002,6 +1023,17 @@ uint16_t bus::read_physical_byte(const uint32_t a)
 	uint16_t value = m->read_byte(a);
 	DOLOG(log_ss::LS_BUS, "read_physical_byte %03o from %o", value, a);
 	return value;
+}
+
+uint32_t bus::read_physical_block(uint32_t a, uint8_t *target, uint32_t n) const
+{
+	if (a >= m->get_memory_size())
+		return 0;
+	n = std::min(n, m->get_memory_size() - a);
+	if (!m->read_block(a, target, n))
+		return 0;
+	DOLOG(log_ss::LS_BUS, "read_physical_block[%08o]=%u", a, n);
+	return n;
 }
 
 bool bus::clear_physical_block(const uint32_t a, const uint32_t n)

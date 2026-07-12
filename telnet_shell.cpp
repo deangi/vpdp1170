@@ -318,6 +318,8 @@ static void show_runtime_settings() {
 #endif
   output_printf("dl_trace=%u\r\n",
                 (unsigned)pdp_core::dl_trace_remaining());
+  output_printf("rp_trace=%u\r\n",
+                (unsigned)pdp_core::rp_trace_remaining());
   output_printf("trace=%s\r\n", cfg.diag_trace ? "true" : "false");
   output_printf("title=\"%s\"\r\n", cfg.title.c_str());
   output_printf("boot_input=\"%s\"\r\n",
@@ -466,6 +468,17 @@ static void command_set(char* arguments) {
     output_printf("dl_trace=%d (runtime only)\r\n", parsed);
     return;
   }
+  if (!strcasecmp(name, "rp_trace") || !strcasecmp(name, "dp_trace")) {
+    int parsed;
+    if (!parse_int_value(value, 0, 1000000, &parsed)) {
+      output_text("error: rp_trace/dp_trace must be 0..1000000 events\r\n");
+      return;
+    }
+    cfg.diag_rp_trace = parsed;
+    pdp_core::set_rp_trace((uint32_t)parsed);
+    output_printf("rp_trace=%d (runtime only)\r\n", parsed);
+    return;
+  }
   if (!strcasecmp(name, "trace")) {
     bool parsed;
     if (!parse_bool_value(value, &parsed)) {
@@ -528,6 +541,7 @@ static void monitor_help() {
       "  M00100             dump 16 MMU/logical words starting at 00100\r\n"
       "  M00100:00200       dump an inclusive MMU/logical range\r\n"
       "  U                  dump MMU registers and Unibus map\r\n"
+      "  I                  dump RH70 registers (peek, no side effects)\r\n"
       "  H                  dump trace history to USB serial\r\n"
       "  T 1000             trace the next 1000 instructions to USB serial\r\n"
       "  W000100=012345     deposit one word in physical RAM\r\n"
@@ -711,8 +725,47 @@ static void monitor_dump_mmu_unibus() {
     output_printf("  %02o:%08lo", entry, (unsigned long)base);
     if ((entry & 3) == 3) output_text("\r\n");
   }
-  output_text("DMA translation: phys=(map[unibus/020000] & 017760000) | "
-              "(unibus & 017777)\r\n");
+  output_text("Unibus map (NPR devices): phys=(map[pg]+(uba&017777))&017777777\r\n");
+  output_text("RH70 DMA: phys=(BAE<<16)|BA  (no Unibus map)\r\n");
+}
+
+static void monitor_dump_rh70() {
+  // RH70/RP06 CSR block at 0176700..0176750 (Unibus addresses).
+  static const uint16_t kBase = 0176700u;
+  static const uint16_t kEnd = 0176752u;  // exclusive
+  static const char* kNames[] = {
+      "CS1", "WC", "BA", "DA", "CS2", "DS", "ER1", "AS", "LA", "DB", "MR",
+      "DT", "SN", "OF", "DC", "CC", "ER2", "ER3", "EC1", "EC2", "BAE"};
+  static constexpr unsigned kCount =
+      sizeof(kNames) / sizeof(kNames[0]);
+
+  uint16_t values[kCount];
+  for (unsigned i = 0; i < kCount; i++) {
+    uint16_t addr = (uint16_t)(kBase + i * 2u);
+    if (addr >= kEnd || !pdp_core::read_rp06_word(addr, &values[i])) {
+      output_text("error: RH70 registers unavailable\r\n");
+      return;
+    }
+  }
+
+  output_text("RH70 (peek):\r\n");
+  for (unsigned i = 0; i < kCount; i++) {
+    if ((i % 4) == 0) {
+      if (i) output_text("\r\n");
+      output_printf("  %06o:", (unsigned)(kBase + i * 2u));
+    }
+    output_printf(" %s=%06o", kNames[i], (unsigned)values[i]);
+  }
+  output_text("\r\n");
+
+  bool deferred = false;
+  int delay = 0;
+  int cs1_polls = 0;
+  int wc_polls = 0;
+  if (pdp_core::get_rp06_deferred(&deferred, &delay, &cs1_polls, &wc_polls)) {
+    output_printf("  deferred=%s delay=%d cs1_polls=%d wc_polls=%d\r\n",
+                  deferred ? "yes" : "no", delay, cs1_polls, wc_polls);
+  }
 }
 
 static void monitor_write(const char* argument) {
@@ -839,6 +892,8 @@ static void execute_monitor_command(char* line) {
     monitor_dump(command + 1, true);
   } else if (!strcasecmp(command, "U")) {
     monitor_dump_mmu_unibus();
+  } else if (!strcasecmp(command, "I")) {
+    monitor_dump_rh70();
   } else if (command[0] == 'T' || command[0] == 't') {
     monitor_trace(command + 1);
   } else if (command[0] == 'W' || command[0] == 'w') {

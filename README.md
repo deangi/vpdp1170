@@ -1,7 +1,8 @@
 # vpdp1170 — a DEC PDP-11/70 emulator for the ESP32-S3 with a touch screen display.
 
-> Development status: V1.2 boots Unix V6, RSTS V4B, RT-11 V5.04, and
-> RSX-11M V4.0 baseline through the `kek` PDP-11/70 adapter.
+> Development status: V1.3 boots Unix V6, RSTS V4B, RT-11 V5.04,
+> RSX-11M V4.0 baseline, and RSX-11M V4.8 (124KW mapped) through the
+> `kek` PDP-11/70 adapter.
 > The ESP32 host side is inherited from `vpdp1140`: TFT console, touch menu,
 > Telnet, FTP, SD card configuration, monitor/shell, and disk image management.
 > The inherited 11/40-derived scaffold remains in the tree for reference and
@@ -42,10 +43,10 @@ this project.
 ## Current Bring-Up Status
 
 The active Arduino sketch reports the selected CPU engine at boot and on the
-System Info screen. For V1.2 it should report the `kek PDP-11/70 adapter` with
-4 MB target memory. Unix V6, RSTS V4B, RT-11 V5.04, and RSX-11M V4.0 baseline
-boot and accept console input. RL01/RL02 support is wired through the kek RL
-controller for DL0-DL3 testing.
+System Info screen. For V1.3 it should report the `kek PDP-11/70 adapter` with
+4 MB target memory. Unix V6, RSTS V4B, RT-11 V5.04, RSX-11M V4.0 baseline, and
+RSX-11M V4.8 (11Mark) boot and accept console input. RL01/RL02 support is wired
+through the kek RL controller for DL0-DL3 testing.
 
 | Guest OS              | Disk image          | Result                            |
 |-----------------------|---------------------|-----------------------------------|
@@ -56,8 +57,8 @@ controller for DL0-DL3 testing.
 | RSX-11M V4.0          | RL01/RL02 image      | ✅ Boots successfully            |
 | RSX-11M V4.8          | RL01/RL02 image      | ✅ Boots 124KW mapped system     |
 
-The Unix V6, RSTS V4B, RT-11 V5.04, and RSX-11M V4.0 baseline rows are verified
-for V1.2. Broader validation on the kek PDP-11/70 path is ongoing.
+The Unix V6, RSTS V4B, RT-11 V5.04, RSX-11M V4.0 baseline, and RSX-11M V4.8
+rows are verified for V1.3. Broader validation on the kek PDP-11/70 path is ongoing.
 
 ## Hardware
 

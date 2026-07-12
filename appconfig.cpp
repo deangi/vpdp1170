@@ -210,6 +210,7 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.diag_clock_trace = 0;
   cfg.diag_console_trace = 0;
   cfg.diag_dl_trace = 0;
+  cfg.diag_rp_trace = 0;
   cfg.diag_trace      = false;
   cfg.v4b_quirks      = true;
   cfg.kwp_enabled     = false;
@@ -292,6 +293,11 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
       cfg.diag_dl_trace = count < 0 ? 0
                         : count > 1000000 ? 1000000 : (int)count;
     }
+    else if (key == "rp_trace" || key == "dp_trace") {
+      long count = val.toInt();
+      cfg.diag_rp_trace = count < 0 ? 0
+                        : count > 1000000 ? 1000000 : (int)count;
+    }
     else if (key == "trace")      cfg.diag_trace = truthy(val);
     else if (key == "v4b_quirks") cfg.v4b_quirks = (val.equalsIgnoreCase("true") ||
                                                    val == "1" ||
@@ -323,6 +329,11 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
       else if (v == "rk0" || v == "dk0") {
         cfg.boot_drive = 'a';
         cfg.boot_kind  = AppConfig::BK_RK;
+      }
+      // rp0 / hp0 / dp0: RH11/RP MASSBUS pack (DP is the older RP11 name).
+      else if (v == "rp0" || v == "hp0" || v == "dp0") {
+        cfg.boot_drive = 'a';
+        cfg.boot_kind  = AppConfig::BK_RP;
       }
       else if (v.length() == 1 && v[0] >= 'a' && v[0] <= 'd')
         cfg.boot_drive = v[0];           // legacy single-char form
@@ -512,12 +523,15 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println(";                 to the KL11 console, then stop. 0 disables.");
   f.println("; dl_trace   = log the next N kek RL/DL controller and host");
   f.println(";              disk events, then stop. 0 disables.");
+  f.println("; rp_trace   = log the next N kek RH/RP (DP) controller and host");
+  f.println(";              disk events, then stop. 0 disables. Alias: dp_trace.");
   f.printf("pcping      = %d\r\n", cfg.diag_pcping_sec);
   f.printf("serialdelay = %d\r\n", cfg.diag_serialdelay_ms);
   f.printf("io_trace    = %d\r\n", cfg.diag_io_trace);
   f.printf("clock_trace = %d\r\n", cfg.diag_clock_trace);
   f.printf("console_trace = %d\r\n", cfg.diag_console_trace);
   f.printf("dl_trace    = %d\r\n", cfg.diag_dl_trace);
+  f.printf("rp_trace    = %d\r\n", cfg.diag_rp_trace);
   f.printf("trace       = %s\r\n", cfg.diag_trace ? "true" : "false");
   f.printf("v4b_quirks  = %s\r\n", cfg.v4b_quirks ? "true" : "false");
   f.printf("kwp_enabled = %s\r\n", cfg.kwp_enabled ? "true" : "false");
@@ -525,8 +539,8 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println("[disks]");
   f.println("; dl0..dl3 = RL11 units (RL01/RL02 disk packs).");
   f.println("; rk0      = RK05 2.5 MB disk pack (e.g. RT-11).");
-  f.println("; rp0      = optional secondary RH11/RP disk pack.");
-  f.println("; rp0_type = rp04, rp05, or rp06. Default rp06.");
+  f.println("; rp0      = RH11/RP disk pack (bootable with boot=rp0).");
+  f.println("; rp0_type = rp04, rp05, rp06, or rp07. Default rp06.");
   f.println("; Leave a slot blank to dismount it at boot.");
   f.printf("dl0  = %s\r\n", cfg.disk_a.c_str());
   f.printf("dl1  = %s\r\n", cfg.disk_b.c_str());
@@ -535,9 +549,10 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.printf("rk0  = %s\r\n", cfg.disk_rk0.c_str());
   f.printf("rp0  = %s\r\n", cfg.disk_rp0.c_str());
   f.printf("rp0_type = %s\r\n", cfg.disk_rp0_type.c_str());
-  // Friendly boot value: dl0/dl1/dl2/dl3/rk0. rl0..rl3 are accepted aliases.
+  // Friendly boot value: dl0/dl1/dl2/dl3/rk0/rp0. rl*/dk0/dp0/hp0 aliases accepted.
   const char* boot_name;
   if (cfg.boot_kind == AppConfig::BK_RK) boot_name = "rk0";
+  else if (cfg.boot_kind == AppConfig::BK_RP) boot_name = "rp0";
   else boot_name = (cfg.boot_drive == 'a') ? "dl0"
                  : (cfg.boot_drive == 'b') ? "dl1"
                  : (cfg.boot_drive == 'c') ? "dl2"
@@ -679,18 +694,20 @@ void config_print(const AppConfig& cfg) {
   LOG("[ftp]     enabled=%s  port=%d  user=\"%s\" (password=%d chars)",
       cfg.ftp_enabled ? "true" : "false", cfg.ftp_port,
       cfg.ftp_user.c_str(), (int)cfg.ftp_password.length());
-  LOG("[diag]    pcping=%d sec%s  serialdelay=%d ms  io_trace=%d  clock_trace=%d  console_trace=%d  dl_trace=%d  trace=%s  v4b_quirks=%s  kwp_enabled=%s",
+  LOG("[diag]    pcping=%d sec%s  serialdelay=%d ms  io_trace=%d  clock_trace=%d  console_trace=%d  dl_trace=%d  rp_trace=%d  trace=%s  v4b_quirks=%s  kwp_enabled=%s",
       cfg.diag_pcping_sec, cfg.diag_pcping_sec <= 0 ? " (disabled)" : "",
       cfg.diag_serialdelay_ms,
       cfg.diag_io_trace,
       cfg.diag_clock_trace,
       cfg.diag_console_trace,
       cfg.diag_dl_trace,
+      cfg.diag_rp_trace,
       cfg.diag_trace ? "true" : "false",
       cfg.v4b_quirks  ? "true" : "false",
       cfg.kwp_enabled ? "true (V7 mode)" : "false (V4B-safe)");
   const char* boot_name;
   if (cfg.boot_kind == AppConfig::BK_RK) boot_name = "rk0";
+  else if (cfg.boot_kind == AppConfig::BK_RP) boot_name = "rp0";
   else boot_name = (cfg.boot_drive == 'a') ? "dl0"
                  : (cfg.boot_drive == 'b') ? "dl1"
                  : (cfg.boot_drive == 'c') ? "dl2"

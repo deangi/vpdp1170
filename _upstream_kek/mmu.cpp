@@ -144,7 +144,8 @@ void mmu::clearMMR1()
 void mmu::add_to_MMR1(const int8_t delta, const uint8_t reg)
 {
 	assert(reg >= 0 && reg <= 7);
-	assert(delta >= -2 && delta <= 2);
+	// Signed 5-bit field: integer ±1/±2, FP11 ±4/±8.
+	assert(delta >= -16 && delta <= 15);
 
 	assert((getMMR0() & 0160000) == 0);  // MMR1 should not be locked
 

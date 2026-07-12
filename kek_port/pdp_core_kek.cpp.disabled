@@ -22,9 +22,11 @@
 #include "../_upstream_kek/mmu.h"
 #include "../_upstream_kek/rk05.h"
 #include "../_upstream_kek/rl02.h"
+#include "../_upstream_kek/rp06.h"
 #include "../_upstream_kek/tty.h"
 #include "../bootrom.h"
 #include "../disk.h"
+#include "../appconfig.h"
 #include "../kek_kwp.h"
 #include "../platform.h"
 
@@ -36,6 +38,7 @@ static cpu* g_cpu = nullptr;
 static tty* g_tty = nullptr;
 static rk05* g_rk05 = nullptr;
 static rl02* g_rl02 = nullptr;
+static rp06* g_rp06 = nullptr;
 static bool g_paused = false;
 static int g_boot_kind = 0;
 static uint32_t g_trace_remaining = 0;
@@ -44,6 +47,7 @@ static TaskHandle_t g_clock_task = nullptr;
 static abool g_disk_read_activity { false };
 static abool g_disk_write_activity { false };
 static int g_rl_host_trace_left = 0;
+static int g_rp_host_trace_left = 0;
 static uint32_t g_target_memory_kw = 2048;
 
 static constexpr uint32_t kTraceRingSize = 512;
@@ -201,8 +205,18 @@ private:
 
   void log_io(const char* op, off_t offset, size_t n, bool ok, int actual) {
     bool is_rl = strcmp(device_name_, "RL02") == 0;
+    bool is_rp = strcmp(device_name_, "RP06") == 0 ||
+                 strcmp(device_name_, "RP07") == 0;
     if (is_rl && g_rl_host_trace_left > 0) {
       g_rl_host_trace_left--;
+      LOG("kek %s host %s slot=%d mounted=%d path=%s off=%u len=%u actual=%d -> %s",
+          device_name_, op, slot_, disk_is_mounted(slot_) ? 1 : 0,
+          disk_path(slot_), (unsigned)offset, (unsigned)n, actual,
+          ok ? "ok" : "FAILED");
+      return;
+    }
+    if (is_rp && g_rp_host_trace_left > 0) {
+      g_rp_host_trace_left--;
       LOG("kek %s host %s slot=%d mounted=%d path=%s off=%u len=%u actual=%d -> %s",
           device_name_, op, slot_, disk_is_mounted(slot_) ? 1 : 0,
           disk_path(slot_), (unsigned)offset, (unsigned)n, actual,
@@ -280,18 +294,46 @@ static bool ensure_rl02_attached() {
   return true;
 }
 
+static bool ensure_rp06_attached() {
+  if (!g_bus) return false;
+  if (g_rp06) return true;
+
+  // Always register the RH11/RP controller so a later UI/telnet mount of
+  // RP0 is visible without rebuilding the bus. Geometry follows rp0_type.
+  const bool is_rp07 = (cfg.disk_rp0_type == "rp07");
+  g_rp06 = new rp06(g_bus, &g_disk_read_activity, &g_disk_write_activity, is_rp07);
+  if (!g_rp06) return false;
+  g_rp06->access_disk_backends()->push_back(
+      new host_slot_disk_backend(DRIVE_RP0, is_rp07 ? "RP07" : "RP06"));
+  g_rp06->begin();
+  g_bus->add_RP06(g_rp06);
+  LOG("kek %s attached to host RP0 slot: mounted=%d path=%s bytes=%u type=%s",
+      is_rp07 ? "RP07" : "RP06",
+      disk_is_mounted(DRIVE_RP0) ? 1 : 0,
+      disk_path(DRIVE_RP0), (unsigned)disk_size_bytes(DRIVE_RP0),
+      cfg.disk_rp0_type.c_str());
+  return true;
+}
+
 static void install_boot_stub() {
   if (!g_bus || !g_cpu) return;
 
   const bool rk_attached = ensure_rk05_attached();
   const bool rl_attached = ensure_rl02_attached();
+  const bool rp_attached = ensure_rp06_attached();
   bool boot_rk = (g_boot_kind == 1) && rk_attached;
+  bool boot_rp = (g_boot_kind == 2) && rp_attached && disk_is_mounted(DRIVE_RP0);
   bool boot_rl = (g_boot_kind == 0) && rl_attached && disk_is_mounted(DRIVE_A);
 
   if (boot_rk) {
     const uint32_t rk_words = sizeof(bootrom_rk0) / sizeof(uint16_t);
     for (uint32_t i = 0; i < rk_words; i++) {
       g_bus->write_physical(BOOT_START + (i * 2), bootrom_rk0[i]);
+    }
+  } else if (boot_rp) {
+    const uint32_t rp_words = sizeof(bootrom_rp0) / sizeof(uint16_t);
+    for (uint32_t i = 0; i < rp_words; i++) {
+      g_bus->write_physical(BOOT_START + (i * 2), bootrom_rp0[i]);
     }
   } else if (boot_rl) {
     const uint32_t rl_words = sizeof(bootrom_rl0) / sizeof(uint16_t);
@@ -301,9 +343,9 @@ static void install_boot_stub() {
   }
 
   // Same diagnostic banner style as the inherited scaffold, but it runs on
-  // the kek CPU and writes through the kek TTY registers. If RK0 is mounted,
-  // the banner jumps into the real RK boot ROM at 02000. Otherwise it remains
-  // a local smoke test and loops after printing a clear diagnostic.
+  // the kek CPU and writes through the kek TTY registers. If a boot device
+  // is mounted, the banner jumps into the real boot ROM at 02000. Otherwise
+  // it remains a local smoke test and loops after printing a clear diagnostic.
   static const uint16_t banner_prog[] = {
     0012700, 0001100,   // MOV  #01100, R0
     0112001,            // MOVB (R0)+, R1
@@ -312,28 +354,31 @@ static void install_boot_stub() {
     0100375,            // BPL  -3 -> back to TSTB
     0110137, 0177566,   // MOVB R1, @#TPB
     0000770,            // BR   -8 -> next char
-    0000137, 0002000,   // JMP @#02000, patched below to BR . if no RK0
+    0000137, 0002000,   // JMP @#02000, patched below to BR . if no boot device
   };
 
   for (uint32_t i = 0; i < sizeof(banner_prog) / sizeof(banner_prog[0]); i++) {
     g_bus->write_physical(0001000 + (i * 2), banner_prog[i]);
   }
-  if (!boot_rk && !boot_rl) {
+  if (!boot_rk && !boot_rp && !boot_rl) {
     g_bus->write_physical(0001024, 0000777);  // BR .
   }
 
   const char* msg = boot_rk
       ? "vpdp1170: kek PDP-11/70 adapter console OK; trying RK0 boot...\r\n"
-      : boot_rl
-        ? "vpdp1170: kek PDP-11/70 adapter console OK; trying DL0 boot...\r\n"
-        : "vpdp1170: kek PDP-11/70 adapter console OK\r\n"
-          "vpdp1170: no boot device attached - looping in smoke ROM\r\n";
+      : boot_rp
+        ? "vpdp1170: kek PDP-11/70 adapter console OK; trying RP0 boot...\r\n"
+        : boot_rl
+          ? "vpdp1170: kek PDP-11/70 adapter console OK; trying DL0 boot...\r\n"
+          : "vpdp1170: kek PDP-11/70 adapter console OK\r\n"
+            "vpdp1170: no boot device attached - looping in smoke ROM\r\n";
   write_physical_bytes(0001100, msg);
 
   g_cpu->setPC(0001000);
+  const char* boot_label = boot_rk ? "RK0" : boot_rp ? "RP0" : boot_rl ? "DL0" : "no";
   LOG("kek boot stub installed: banner @01000, %s boot ROM @02000%s",
-      boot_rk ? "RK0" : boot_rl ? "DL0" : "no",
-      (boot_rk || boot_rl) ? "" : " (boot device not attached)");
+      boot_label,
+      (boot_rk || boot_rp || boot_rl) ? "" : " (boot device not attached)");
 }
 
 static void clear_trace_ring() {
@@ -747,7 +792,9 @@ static void print_trace_entry(const char* prefix, const TraceEntry& entry) {
 }
 
 static void record_trace_entry() {
-  if (!g_trace_enabled || !g_trace_ring || g_trace_frozen) return;
+  // Keep a ring whenever it is allocated (trace=on or rp_trace>0), so panics
+  // still show recent instructions even if verbose trace printing is off.
+  if (!g_trace_ring || g_trace_frozen) return;
   if (capture_last_instruction_trace_entry(&g_trace_ring[g_trace_ring_next])) {
     g_trace_ring_next++;
     if (g_trace_ring_next >= kTraceRingSize) {
@@ -765,19 +812,27 @@ static void trace_next_instruction() {
 }
 
 static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
-  if (!g_trace_enabled) {
+  TraceEntry current {};
+  capture_trace_entry(&current);
+
+  if (!g_trace_ring) {
     if (honor_panic_latch) {
-      TraceEntry current {};
-      capture_trace_entry(&current);
       LOGE("kek PDP-11/70 stopped: %s PC=%06o ins=%06o PS=%06o %s",
            reason ? reason : "unknown",
            current.valid ? (unsigned)current.pc : 0,
            current.valid ? (unsigned)current.opcode : 0,
            current.valid ? (unsigned)current.psw : 0,
            current.valid ? current.disasm : "");
+      if (current.valid && g_cpu && g_bus) {
+        LOGE("kek HALT regs R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o",
+             (unsigned)current.regs[0], (unsigned)current.regs[1],
+             (unsigned)current.regs[2], (unsigned)current.regs[3],
+             (unsigned)current.regs[4], (unsigned)current.regs[5],
+             (unsigned)current.regs[6]);
+      }
       return;
     }
-    LOG("kek trace history requested but trace is disabled");
+    LOG("kek trace history requested but trace ring is not allocated");
     return;
   }
   if (honor_panic_latch && g_panic_trace_dumped) return;
@@ -786,8 +841,6 @@ static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
     g_trace_frozen = true;
   }
 
-  TraceEntry current {};
-  capture_trace_entry(&current);
   if (honor_panic_latch) {
     LOGE("kek PDP-11/70 stopped: %s PC=%06o PS=%06o",
          reason ? reason : "unknown",
@@ -800,7 +853,7 @@ static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
         current.valid ? (unsigned)current.psw : 0);
   }
 
-  uint32_t count = g_trace_ring ? (g_trace_ring_wrapped ? kTraceRingSize : g_trace_ring_next) : 0;
+  uint32_t count = g_trace_ring_wrapped ? kTraceRingSize : g_trace_ring_next;
   Serial.printf("[vpdp1170]   --- last %u kek instructions %s ---\r\n",
                 (unsigned)count,
                 honor_panic_latch ? "before stop" : "in history");
@@ -953,12 +1006,14 @@ void cold_boot() {
 static void service_deferred_devices() {
   if (g_rl02) g_rl02->service_deferred();
   if (g_rk05) g_rk05->service_deferred();
+  if (g_rp06) g_rp06->service_deferred();
   if (g_tty) g_tty->service_deferred();
 }
 
 static void service_instruction_deferred_devices() {
   if (g_rl02) g_rl02->service_deferred();
   if (g_rk05) g_rk05->service_deferred();
+  if (g_rp06) g_rp06->service_deferred();
   if (g_tty) g_tty->service_deferred();
 }
 
@@ -967,18 +1022,18 @@ uint32_t run(uint32_t max_cycles) {
   uint32_t ran = 0;
   while (ran < max_cycles) {
     if (g_cpu->getPC() & 1) {
-      if (g_trace_enabled) record_trace_entry();
+      record_trace_entry();
       dump_panic_trace("odd PC before instruction fetch");
       g_paused = true;
       break;
     }
     if (!g_cpu->step()) {
-      if (g_trace_enabled) record_trace_entry();
+      record_trace_entry();
       dump_panic_trace("cpu step returned false");
       g_paused = true;
       break;
     }
-    if (g_trace_enabled) record_trace_entry();
+    record_trace_entry();
     if (g_trace_remaining) trace_next_instruction();
     service_instruction_deferred_devices();
     ran++;
@@ -1081,6 +1136,23 @@ bool read_mmu_word(uint16_t address, uint16_t* value) {
   return true;
 }
 
+bool read_rp06_word(uint16_t address, uint16_t* value) {
+  if (!g_rp06 || !value || (address & 1)) return false;
+  if (address < RP06_BASE || address >= RP06_END) return false;
+  *value = g_rp06->peek_word(address);
+  return true;
+}
+
+bool get_rp06_deferred(bool* active, int* delay, int* cs1_polls,
+                       int* wc_polls) {
+  if (!g_rp06 || !active || !delay || !cs1_polls || !wc_polls) return false;
+  *active = g_rp06->is_deferred_active();
+  *delay = g_rp06->deferred_delay_remaining();
+  *cs1_polls = g_rp06->deferred_cs1_poll_count();
+  *wc_polls = g_rp06->deferred_wc_poll_count();
+  return true;
+}
+
 bool get_mmu_summary(uint16_t* mmr0, uint16_t* mmr1, uint16_t* mmr2,
                      uint16_t* mmr3, uint16_t* cpuerr, uint16_t* pir,
                      uint32_t* io_base) {
@@ -1152,7 +1224,8 @@ bool write_physical_word(uint32_t address, uint16_t value) {
 }
 
 void set_boot_kind(int kind) {
-  g_boot_kind = kind;
+  // 0=RL, 1=RK, 2=RP; anything else falls back to RL.
+  g_boot_kind = (kind == 1 || kind == 2) ? kind : 0;
 }
 
 void set_trace(bool enabled) {
@@ -1182,8 +1255,26 @@ void set_dl_trace(uint32_t count) {
 uint32_t dl_trace_remaining() {
   int controller = rl02_trace_remaining();
   int host = g_rl_host_trace_left;
-  int remaining = controller > host ? controller : host;
-  return remaining < 0 ? 0 : (uint32_t)remaining;
+  return (uint32_t)(controller > host ? controller : host);
+}
+
+void set_rp_trace(uint32_t count) {
+  uint32_t limited = count > 1000000 ? 1000000 : count;
+  g_rp_host_trace_left = (int)limited;
+  rp06_set_trace((int)limited);
+  if (limited > 0) {
+    // Allocate the panic instruction ring so a later HALT dumps history
+    // even when diag trace=false.
+    ensure_trace_ring();
+    clear_trace_ring();
+    LOG("kek RP/DP trace=%u (panic instruction ring armed)", (unsigned)limited);
+  }
+}
+
+uint32_t rp_trace_remaining() {
+  int controller = rp06_trace_remaining();
+  int host = g_rp_host_trace_left;
+  return (uint32_t)(controller > host ? controller : host);
 }
 
 void monitor_pause() {
