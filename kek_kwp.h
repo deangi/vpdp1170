@@ -11,7 +11,10 @@ static constexpr uint16_t END_ADDR  = 0172550;
 static constexpr uint16_t VECTOR    = 0104;
 static constexpr uint8_t  BR_LEVEL  = 6;
 
+using InstructionCounterFn = uint64_t (*)();
+
 bool     contains(uint16_t addr);
+void     set_instruction_counter(InstructionCounterFn fn);
 void     reset();
 void     tick();
 bool     take_interrupt();

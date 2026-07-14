@@ -1,7 +1,5 @@
 #include "kek_kwp.h"
 
-#include <Arduino.h>
-
 #include "kwp.h"
 #include "platform.h"
 
@@ -25,13 +23,39 @@ static constexpr uint32_t RATE_US[4] = {
     100000,   // external input, modeled as 10 Hz
 };
 
+// Emulator-time periods: same scale as kek KW11-L.
+// PDP-11/70 ~700 KIPS => 700000/60 ≈ 11667 instr per 60 Hz line tick.
+// RATE_US[] names are historical; periods are scaled to guest instructions so
+// trace/diagnostics slow KW11-P with the guest (see kek_port timing notes).
+static constexpr uint32_t kLinePeriodUs = 16667;
+static constexpr uint32_t kLinePeriodInstr = 11667;
+
+static InstructionCounterFn g_guest_instr_count = nullptr;
+
 static uint16_t csr = 0;
 static uint16_t csb = 0;
 static uint16_t cntr = 0;
-static uint32_t last_us = 0;
-static uint32_t remainder_us = 0;
-static uint8_t poll_divider = 0;
+static uint64_t last_instr = 0;
+static uint32_t remainder_instr = 0;
 static bool irq_pending = false;
+
+void set_instruction_counter(InstructionCounterFn fn)
+{
+  g_guest_instr_count = fn;
+}
+
+static uint64_t guest_instr_now()
+{
+  return g_guest_instr_count ? g_guest_instr_count() : 0;
+}
+
+static uint32_t period_instr(uint8_t rate_idx)
+{
+  const uint32_t us = RATE_US[rate_idx & 3u];
+  if (us == 0) return 1u;
+  const uint64_t scaled = (uint64_t)kLinePeriodInstr * us / kLinePeriodUs;
+  return scaled ? (uint32_t)scaled : 1u;
+}
 
 bool contains(uint16_t addr)
 {
@@ -107,7 +131,7 @@ static void advance_steps(uint64_t steps)
     record_expirations(expirations);
     csb = 0;
     csr &= (uint16_t)~CSR_GO;
-    remainder_us = 0;
+    remainder_instr = 0;
     return;
   }
 
@@ -125,19 +149,19 @@ static void advance_steps(uint64_t steps)
 
 static void update_clock()
 {
-  uint32_t now = micros();
-  uint32_t elapsed = now - last_us;
-  last_us = now;
+  const uint64_t now = guest_instr_now();
+  const uint64_t elapsed = last_instr == 0 ? 0 : now - last_instr;
+  last_instr = now;
 
   if (!(csr & CSR_GO)) {
-    remainder_us = 0;
+    remainder_instr = 0;
     return;
   }
 
-  uint32_t period = RATE_US[rate_index()];
-  uint64_t accumulated = (uint64_t)remainder_us + elapsed;
-  uint64_t steps = accumulated / period;
-  remainder_us = (uint32_t)(accumulated % period);
+  const uint32_t period = period_instr(rate_index());
+  const uint64_t accumulated = (uint64_t)remainder_instr + elapsed;
+  const uint64_t steps = accumulated / period;
+  remainder_instr = (uint32_t)(accumulated % period);
   advance_steps(steps);
 }
 
@@ -165,10 +189,9 @@ void reset()
   csr = 0;
   csb = 0;
   cntr = 0;
-  remainder_us = 0;
-  poll_divider = 0;
+  remainder_instr = 0;
   irq_pending = false;
-  last_us = micros();
+  last_instr = guest_instr_now();
 }
 
 uint16_t read_word(uint16_t addr)
@@ -217,14 +240,14 @@ void write_word(uint16_t addr, uint16_t value)
       csr = value & CSR_WRMASK;
 
       if (!(csr & CSR_GO)) {
-        remainder_us = 0;
+        remainder_instr = 0;
         if (value & CSR_FIX)
           manual_tick();
       } else if (!was_running || old_rate != rate_index()) {
         cntr = csb;
-        remainder_us = 0;
+        remainder_instr = 0;
       }
-      last_us = micros();
+      last_instr = guest_instr_now();
       break;
     }
 
@@ -233,8 +256,8 @@ void write_word(uint16_t addr, uint16_t value)
       cntr = value;
       csr &= (uint16_t)~(CSR_ERR | CSR_DONE);
       clear_interrupt();
-      remainder_us = 0;
-      last_us = micros();
+      remainder_instr = 0;
+      last_instr = guest_instr_now();
       break;
 
     case CNTR_ADDR:
@@ -263,10 +286,7 @@ void tick()
 {
   if (!kwp::enabled)
     return;
-  if (++poll_divider >= 16) {
-    poll_divider = 0;
-    update_clock();
-  }
+  update_clock();
 }
 
 }  // namespace kek_kwp

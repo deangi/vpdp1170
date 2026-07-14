@@ -42,6 +42,7 @@ bool get_mmu_page(int run_mode, bool data_space, int page, uint16_t* par,
 bool get_unibus_map_entry(int entry, uint32_t* base);
 bool get_interrupt_summary(uint16_t* psw, bool* any_pending,
                            uint8_t counts[8], uint16_t first_vectors[8]);
+// us_since_tick: guest instructions since the last KW11-L tick (not wall us).
 bool get_kw11l_summary(uint16_t* csr, uint32_t* us_since_tick,
                        bool* irq_queued);
 

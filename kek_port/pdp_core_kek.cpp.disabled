@@ -42,8 +42,39 @@ static rp06* g_rp06 = nullptr;
 static bool g_paused = false;
 static int g_boot_kind = 0;
 static uint32_t g_trace_remaining = 0;
-static uint32_t g_last_clock_us = 0;
+static uint64_t g_last_clock_instr = 0;
 static TaskHandle_t g_clock_task = nullptr;
+
+// KW11-L tick rate in guest instructions (~60 Hz emulator time).
+// PDP-11/70 is listed at ~700 KIPS, so 700000/60 ≈ 11667 instr/tick.
+// (sam11 LKS_SHIFT_TICK used 16384; that is slower guest-time than 11/70.)
+static constexpr uint32_t kInstrPerTick = 11667;
+
+// KW11-L timing approaches (current: FreeRTOS task + instruction count):
+//
+// 1. FreeRTOS task + micros() wall clock (~60 Hz real time)
+//    + Matches wall-clock OS expectations when emulation keeps pace.
+//    - Guest can lag while wall ticks continue (IRQ overlap risk).
+//    - Zero overhead in the cpu->step() hot path.
+//
+// 2. FreeRTOS task + instruction count [CURRENT]
+//    + Emulator-time ticks: trace slows the line clock with the guest.
+//    + Zero overhead in the cpu->step() hot path.
+//    - ~1 ms poll jitter on when the tick is delivered (after threshold).
+//    - 64-bit counter read from another task (single writer; OK in practice).
+//    - Not wall-clock accurate when emulation IPS varies.
+//
+// 3. Tick inside run() after cpu->step()
+//    + Exact instruction-boundary alignment for IRQ delivery.
+//    + Can check once per run(N) batch for negligible overhead.
+//    - Any per-step check adds work on the emulation hot path (small).
+//
+// 4. Upstream kw11_l::begin() thread (desktop/Pico)
+//    + Uses the stock kek device model.
+//    - Still wall-clock driven on non-Teensy builds; not ideal for ESP32 trace.
+//
+// KW11-P (kek_kwp) uses the same emulator-time scale: guest instruction count
+// via set_instruction_counter(), with rate periods scaled from kInstrPerTick.
 static abool g_disk_read_activity { false };
 static abool g_disk_write_activity { false };
 static int g_rl_host_trace_left = 0;
@@ -68,6 +99,12 @@ static bool g_trace_ring_wrapped = false;
 static bool g_trace_enabled = false;
 static bool g_panic_trace_dumped = false;
 static bool g_trace_frozen = false;
+
+// RSX-11M-PLUS V4.6 RL02 (rsx11mp46) BE.NCT investigation — summary only.
+// Details / rejected hypotheses live in status.txt (2026-07-13).
+// Current finding: $TKTCB @001060 stays Null (051100); $ACTHD @001032
+// gets AT.T1 (057060) at PC=005704; MOV/CLR @$TKTCB peal to Null.T.LNK;
+// never MOV AT.T1,@#$TKTCB. Next: why dispatch omits that store.
 
 extern "C" bool vpdp1170_kek_trace_enabled() {
   return g_trace_enabled;
@@ -519,7 +556,23 @@ static void trace_operand_spec(uint8_t spec, char* buffer, size_t size,
       if (ctx) {
         uint16_t disp = trace_fetch_ext_word(ctx);
         if (reg == 7) {
-          snprintf(buffer, size, "@%06o", (unsigned)trace_pc_relative_target(*ctx, disp));
+          // Mode 7 PC: EA = mem[updated_PC + X]. Print pointer location and
+          // the pealed destination — "@001060" alone looked like VA $TKTCB
+          // when it was only the pointer cell address.
+          const uint16_t ptr = trace_pc_relative_target(*ctx, disp);
+          uint16_t ea = 0xffff;
+          bool pealed_ok = false;
+          if (g_bus) {
+            auto pealed = g_bus->peek_word(0, ptr);
+            if (pealed.has_value()) {
+              ea = pealed.value();
+              pealed_ok = true;
+            }
+          }
+          if (pealed_ok)
+            snprintf(buffer, size, "@[%06o]->%06o", (unsigned)ptr, (unsigned)ea);
+          else
+            snprintf(buffer, size, "@[%06o]->?????", (unsigned)ptr);
         } else {
           snprintf(buffer, size, "@%06o(%s)", (unsigned)disp, r);
         }
@@ -902,26 +955,30 @@ static void dump_panic_trace(const char* reason) {
   dump_trace_ring(reason, true);
 }
 
+static uint64_t guest_instruction_count_for_kwp() {
+  return g_cpu ? g_cpu->get_instructions_executed_count() : 0;
+}
+
 static void service_line_clock() {
   if (!g_bus || !g_cpu || !g_bus->getKW11_L()) return;
   if (g_tty) g_tty->service_deferred();
 
+  // KW11-P counter advance (emulator-time via kek_kwp instruction counter).
   kek_kwp::tick();
   if (kek_kwp::take_interrupt())
     g_cpu->queue_interrupt(kek_kwp::BR_LEVEL, kek_kwp::VECTOR);
 
-  constexpr uint32_t kClockPeriodUs = 16667;  // KW11-L line clock, ~60 Hz.
-  uint32_t now = micros();
-  if (g_last_clock_us == 0) {
-    g_last_clock_us = now;
+  const uint64_t now_instr = g_cpu->get_instructions_executed_count();
+  if (g_last_clock_instr == 0) {
+    g_last_clock_instr = now_instr;
     return;
   }
 
-  if ((uint32_t)(now - g_last_clock_us) >= kClockPeriodUs) {
-    // Do not replay missed ticks in a burst. During traced or otherwise slow
-    // execution, catch-up delivery can become an interrupt storm that prevents
-    // the guest from leaving the clock handler.
-    g_last_clock_us = now;
+  if (now_instr - g_last_clock_instr >= kInstrPerTick) {
+    // Do not replay missed ticks in a burst. If the guest ran far ahead of
+    // this 1 ms poll, deliver one tick and advance the baseline — same guard
+    // as the former wall-clock path used against interrupt storms.
+    g_last_clock_instr = now_instr;
 
     kw11_l* clock = g_bus->getKW11_L();
     uint16_t csr = clock->read_word(ADDR_LFC);
@@ -951,11 +1008,12 @@ bool init() {
   const uint32_t ram_kw = target_kw > kIoPageKW ? target_kw - kIoPageKW : target_kw;
   const uint32_t pages = std::min<uint32_t>(kFullMemoryPages, std::max<uint32_t>(1, (ram_kw + 3) / 4));
   g_bus->set_memory_size((int)pages);
-  kek_kwp::reset();
 
   g_cpu = new cpu(g_bus, &g_event);
   if (!g_cpu) return false;
   g_bus->add_cpu(g_cpu);
+  kek_kwp::set_instruction_counter(guest_instruction_count_for_kwp);
+  kek_kwp::reset();
 
   g_tty = new tty(nullptr, g_bus);
   if (!g_tty) return false;
@@ -964,7 +1022,8 @@ bool init() {
   if (!g_clock_task) {
     xTaskCreatePinnedToCore(line_clock_task, "kek-kw11l", 3072, nullptr,
                             3, &g_clock_task, 0);
-    LOG("kek KW11-L line clock task started at 60 Hz");
+    LOG("kek KW11-L line clock task started (emulator-time ~60 Hz, %u instr/tick)",
+        (unsigned)kInstrPerTick);
   }
 
   clear_trace_ring();
@@ -986,7 +1045,7 @@ void reset() {
   if (!g_cpu) return;
   store_event(EVENT_NONE);
   g_cpu->reset();
-  g_last_clock_us = 0;
+  g_last_clock_instr = 0;
   kek_kwp::reset();
   clear_trace_ring();
   install_boot_stub();
@@ -997,7 +1056,7 @@ void cold_boot() {
   store_event(EVENT_NONE);
   g_bus->reset(true);
   g_cpu->reset();
-  g_last_clock_us = 0;
+  g_last_clock_instr = 0;
   kek_kwp::reset();
   clear_trace_ring();
   install_boot_stub();
@@ -1212,7 +1271,9 @@ bool get_kw11l_summary(uint16_t* csr, uint32_t* us_since_tick,
   }
 
   *csr = g_bus->getKW11_L()->read_word(ADDR_LFC);
-  *us_since_tick = g_last_clock_us == 0 ? 0 : (uint32_t)(micros() - g_last_clock_us);
+  const uint64_t instr_now = g_cpu->get_instructions_executed_count();
+  *us_since_tick = g_last_clock_instr == 0 ? 0 :
+      (uint32_t)(instr_now - g_last_clock_instr);
   *irq_queued = g_cpu->has_queued_interrupt(6, 0100);
   return true;
 }

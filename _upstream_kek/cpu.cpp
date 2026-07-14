@@ -2477,18 +2477,26 @@ cpu::operand_parameters cpu::addressing_to_string(const uint8_t mode_register, c
 
 		case 7:
 			{
-				uint16_t calculated_address = get_register(reg) + next_word;
-				temp2 = b->peek_word(run_mode, calculated_address);
+				// For PC (relative deferred): pointer = updated_PC + X =
+				// (extension_addr + 2) + X. Do not use live R7 — that is
+				// wrong when disassembling history while PC has moved.
+				const uint16_t pointer_addr = (reg == 7)
+					? uint16_t((pc + 2 + next_word) & 65535)
+					: uint16_t(get_register(reg) + next_word);
+				temp2 = b->peek_word(run_mode, pointer_addr);
+				uint16_t ea = 0xffff;
 				if (temp2.has_value() == false)
-					temp2 = 0xffff, valid = false, error = format("cannot fetch memory from %o", calculated_address);
+					temp2 = 0xffff, valid = false, error = format("cannot fetch memory from %o", pointer_addr);
 				else {
-					temp2 = b->peek_word(run_mode, temp2.value());
+					ea = temp2.value();
+					temp2 = b->peek_word(run_mode, ea);
 					if (temp2.has_value() == false)
-						temp2 = 0xffff, valid = false, error = format("cannot fetch memory from %o", temp2.value());
+						temp2 = 0xffff, valid = false, error = format("cannot fetch memory from %o", ea);
 				}
 
 				if (reg == 7)
-					return { format("@%06o", next_word), 4, int(next_word), uint16_t(temp2.value() & mask), valid, error };
+					return { format("@[%06o]->%06o", pointer_addr, ea), 4, int(next_word),
+						 uint16_t(temp2.value() & mask), valid, error };
 
 				return { format("@%o(%s)", next_word, reg_name.c_str()), 4, int(next_word), uint16_t(temp2.value() & mask), valid, error };
 			}
