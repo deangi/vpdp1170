@@ -43,6 +43,7 @@ static bool g_paused = false;
 static int g_boot_kind = 0;
 static uint32_t g_trace_remaining = 0;
 static uint64_t g_last_clock_instr = 0;
+static uint32_t g_last_wait_clock_ms = 0;
 static TaskHandle_t g_clock_task = nullptr;
 
 // KW11-L tick rate in guest instructions (~60 Hz emulator time).
@@ -974,11 +975,16 @@ static void service_line_clock() {
     return;
   }
 
-  if (now_instr - g_last_clock_instr >= kInstrPerTick) {
+  const uint32_t now_ms = millis();
+  const bool wait_tick = g_cpu->is_waiting() &&
+      (g_last_wait_clock_ms == 0 || now_ms - g_last_wait_clock_ms >= 17);
+
+  if (wait_tick || now_instr - g_last_clock_instr >= kInstrPerTick) {
     // Do not replay missed ticks in a burst. If the guest ran far ahead of
     // this 1 ms poll, deliver one tick and advance the baseline — same guard
     // as the former wall-clock path used against interrupt storms.
     g_last_clock_instr = now_instr;
+    if (wait_tick) g_last_wait_clock_ms = now_ms;
 
     kw11_l* clock = g_bus->getKW11_L();
     uint16_t csr = clock->read_word(ADDR_LFC);
@@ -1004,9 +1010,9 @@ bool init() {
   g_bus = new bus();
   if (!g_bus) return false;
 
-  const uint32_t target_kw = std::min<uint32_t>(2048, std::max<uint32_t>(32, g_target_memory_kw));
-  const uint32_t ram_kw = target_kw > kIoPageKW ? target_kw - kIoPageKW : target_kw;
-  const uint32_t pages = std::min<uint32_t>(kFullMemoryPages, std::max<uint32_t>(1, (ram_kw + 3) / 4));
+  const uint32_t target_kw = std::min<uint32_t>(2044, std::max<uint32_t>(32, g_target_memory_kw));
+
+  const uint32_t pages = std::min<uint32_t>(kFullMemoryPages - 1, std::max<uint32_t>(1, target_kw / 4));
   g_bus->set_memory_size((int)pages);
 
   g_cpu = new cpu(g_bus, &g_event);
@@ -1032,12 +1038,12 @@ bool init() {
 
 void set_target_memory_kw(uint32_t kw) {
   if (kw < 32) kw = 32;
-  if (kw > 2048) kw = 2048;
-  g_target_memory_kw = kw;
+  if (kw > 2044) kw = 2044;
+  g_target_memory_kw = ((kw + 2) / 4) * 4;
 }
 
 uint32_t target_memory_bytes() {
-  const uint32_t target_kw = std::min<uint32_t>(2048, std::max<uint32_t>(32, g_target_memory_kw));
+  const uint32_t target_kw = std::min<uint32_t>(2044, std::max<uint32_t>(32, g_target_memory_kw));
   return target_kw * 2048u;
 }
 
@@ -1046,6 +1052,7 @@ void reset() {
   store_event(EVENT_NONE);
   g_cpu->reset();
   g_last_clock_instr = 0;
+  g_last_wait_clock_ms = 0;
   kek_kwp::reset();
   clear_trace_ring();
   install_boot_stub();
@@ -1057,6 +1064,7 @@ void cold_boot() {
   g_bus->reset(true);
   g_cpu->reset();
   g_last_clock_instr = 0;
+  g_last_wait_clock_ms = 0;
   kek_kwp::reset();
   clear_trace_ring();
   install_boot_stub();

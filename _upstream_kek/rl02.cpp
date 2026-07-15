@@ -570,6 +570,10 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 				track, head, sector, (unsigned)fhs.size());
 
 		bool          do_int  = false;
+		// CRDY set means this is only a register load. Do not probe the
+		// selected unit or execute a command until software clears CRDY.
+		if (!do_exec)
+			return;
 
 		if (size_t(device) >= fhs.size() || !rl02_unit_attached(device)) {
 			DOLOG(log_ss::LS_DISK, "RL02: PDP11/70 is accessing virtual disk %d which is not attached", device);

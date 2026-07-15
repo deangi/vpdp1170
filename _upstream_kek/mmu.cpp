@@ -149,9 +149,14 @@ void mmu::add_to_MMR1(const int8_t delta, const uint8_t reg)
 
 	assert((getMMR0() & 0160000) == 0);  // MMR1 should not be locked
 
-	MMR1 <<= 8;
-	MMR1 |= (delta & 31) << 3;
-	MMR1 |= reg;
+	const uint8_t entry = ((delta & 31) << 3) | reg;
+
+	// MMR1 records the first register change in the low byte and the
+	// second in the high byte. Later changes are not recorded.
+	if ((MMR1 & 0000377) == 0)
+		MMR1 = entry;
+	else if ((MMR1 & 0177400) == 0)
+		MMR1 |= uint16_t(entry) << 8;
 }
 
 void mmu::write_pdr(const uint32_t a, const int run_mode, const uint16_t value, const word_mode_t word_mode)

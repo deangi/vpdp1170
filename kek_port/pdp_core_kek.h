@@ -5,7 +5,7 @@
 namespace pdp_core_kek {
 
 static constexpr uint32_t kPageBytes = 8192;
-static constexpr uint32_t kIoPageKW = 8;
+static constexpr uint32_t kIoPageKW = 4;
 static constexpr uint32_t kFullMemoryPages = 512;
 static constexpr uint32_t kFullMemoryBytes = kFullMemoryPages * kPageBytes;
 

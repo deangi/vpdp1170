@@ -657,7 +657,10 @@ uint16_t bus::read(const uint16_t addr_in, const word_mode_t word_mode, const in
 
 	verify_pointer_bounds(m_offset, page_index);
 
-	mmu_->set_page_accessed(page_index);
+	// With relocation disabled page_index is only the virtual page number;
+	// it must not be interpreted as a PAR/PDR array index.
+	if (mmu_->is_enabled())
+		mmu_->set_page_accessed(page_index);
 
 	uint16_t temp = 0;
 	if (word_mode == wm_byte)
@@ -942,7 +945,10 @@ bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, const uint1
 
 	verify_pointer_bounds(m_offset, page_index);
 
-	mmu_->set_page_written_to(page_index);
+	// MMR0 maintenance mode translates writes even when relocation is off.
+	// Only accesses which actually used the map may alter the PDR A/W bits.
+	if (mmu_->is_enabled() || (mmu_->getMMR0() & 0000400))
+		mmu_->set_page_written_to(page_index);
 
 	if (word_mode == wm_byte)
 		m->write_byte(m_offset, value);

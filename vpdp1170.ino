@@ -32,7 +32,14 @@
 // cartidges.  Round, about 15" diameter, about 3-4" thick.
 //
 // Sample disks: https://www.pcjs.org/software/dec/pdp11/disks/rl02k/xxdp/
-
+// PDP 11/70 KB11-B/C, up to 4 Mb of memory, 
+// KW11-L Line clock
+// Optional KW11-P programmable clock
+// Unibus connected RL and RK controller
+// Masbus connected RP controller
+// KL11 console
+// Optional Serial1
+// 
 //------------------------------------------------------------------------------------------------
 #include <Arduino.h>
 #include <WiFi.h>

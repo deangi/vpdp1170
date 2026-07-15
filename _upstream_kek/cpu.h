@@ -57,6 +57,7 @@ private:
 	std::optional<int> delayed_trap {   };  // invoked after completion of the instruction
 	int      kw11l_counter      { 0     };
 	bool     wait_stuck         { false };
+	bool     waiting            { false };
 	bool     instruction_active { false };
 	uint16_t instruction_pc     { 0     };
 	std::optional<uint16_t> trap_pc_override { };
@@ -156,6 +157,7 @@ public:
 	bool     get_last_instruction_physical(uint32_t *address) const;
 
 	uint64_t get_instructions_executed_count() const { return instructions_executed; }
+	bool     is_waiting() const { return waiting; }
 	uint32_t calc_instruction_duration(const uint16_t pc) const;  // nanoseconds
 	uint64_t get_trap_counter() const { return trap_counter; }
 	auto     get_trap_counts() const { return trap_counts; }

@@ -94,6 +94,8 @@ void cpu::reset()
 	init_interrupt_queue();
 	instructions_executed = 0;
 	processing_trap_depth = 0;
+	wait_stuck = false;
+	waiting = false;
 	instruction_active = false;
 	instruction_pc = 0;
 	trap_pc_override.reset();
@@ -2145,12 +2147,12 @@ bool cpu::misc_operations(const uint16_t instr)
 		case 0b0000000000000001: // WAIT
 			{
 #if defined(ESP32)
-				if (check_pending_interrupts() == false) {
+				if (check_if_interrupts_pending() == false) {
 					if (wait_stuck == false) {
 						wait_stuck = true;
 						DOLOG(log_ss::LS_CPU, "cpu: WAIT idle, returning to host loop");
 					}
-					setPC(getPC() - 2);
+					waiting = true;
 					vTaskDelay(1);
 					return true;
 				}
@@ -3455,6 +3457,17 @@ std::unordered_map<std::string, std::vector<std::string> > cpu::disassemble(cons
 bool cpu::step()
 {
 	instructions_executed++;
+
+#if defined(ESP32)
+	if (waiting) {
+		if (!check_if_interrupts_pending()) {
+			vTaskDelay(1);
+			return true;
+		}
+		waiting = false;
+		wait_stuck = false;
+	}
+#endif
 
 #if defined(TEENSY4_1)
 	if (any_queued_interrupts) {
