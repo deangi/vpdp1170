@@ -85,6 +85,12 @@ inline bool get_rp06_deferred(bool* active, int* delay, int* cs1_polls,
                               int* wc_polls) {
   return pdp_core_kek::get_rp06_deferred(active, delay, cs1_polls, wc_polls);
 }
+inline bool set_rp06_operator_stop(bool stopped) {
+  return pdp_core_kek::set_rp06_operator_stop(stopped);
+}
+inline bool get_rp06_operator_stop(bool* stopped) {
+  return pdp_core_kek::get_rp06_operator_stop(stopped);
+}
 inline bool get_mmu_summary(uint16_t* mmr0, uint16_t* mmr1, uint16_t* mmr2,
                             uint16_t* mmr3, uint16_t* cpuerr, uint16_t* pir,
                             uint32_t* io_base) {
@@ -164,6 +170,8 @@ inline bool write_physical_word(uint32_t, uint16_t) { return false; }
 inline bool read_mmu_word(uint16_t, uint16_t*) { return false; }
 inline bool read_rp06_word(uint16_t, uint16_t*) { return false; }
 inline bool get_rp06_deferred(bool*, int*, int*, int*) { return false; }
+inline bool set_rp06_operator_stop(bool) { return false; }
+inline bool get_rp06_operator_stop(bool*) { return false; }
 inline bool get_mmu_summary(uint16_t*, uint16_t*, uint16_t*, uint16_t*,
                             uint16_t*, uint16_t*, uint32_t*) { return false; }
 inline bool get_mmu_page(int, bool, int, uint16_t*, uint16_t*,
@@ -228,6 +236,8 @@ inline bool read_mmu_word(uint16_t address, uint16_t* value) {
 }
 inline bool read_rp06_word(uint16_t, uint16_t*) { return false; }
 inline bool get_rp06_deferred(bool*, int*, int*, int*) { return false; }
+inline bool set_rp06_operator_stop(bool) { return false; }
+inline bool get_rp06_operator_stop(bool*) { return false; }
 inline bool get_mmu_summary(uint16_t*, uint16_t*, uint16_t*, uint16_t*,
                             uint16_t*, uint16_t*, uint32_t*) { return false; }
 inline bool get_mmu_page(int, bool, int, uint16_t*, uint16_t*,

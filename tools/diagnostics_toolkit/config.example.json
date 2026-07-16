@@ -1,0 +1,40 @@
+{
+  "serial": {
+    "port": "COM18",
+    "baud": 115200,
+    "control_host": "127.0.0.1",
+    "control_port": 11701,
+    "read_buffer_limit": 1048576,
+    "reset": {
+      "method": "dtr_rts",
+      "pulse_seconds": 0.50,
+      "settle_seconds": 0.50
+    }
+  },
+  "telnet": {
+    "target_host": "192.168.7.144",
+    "target_port": 23,
+    "control_host": "127.0.0.1",
+    "control_port": 11702,
+    "read_buffer_limit": 1048576
+  },
+  "runner": {
+    "startup_timeout_seconds": 20.0,
+    "boot_poll_seconds": 1.0,
+    "diagnostic_poll_seconds": 5.0,
+    "silent_timeout_seconds": 60.0,
+    "max_run_seconds": 900.0,
+    "xxdp_banner": "XXDP-XM EXTENDED MONITOR - XXDP V2.5",
+    "prompt": ".",
+    "serial_service": {
+      "enabled": true,
+      "python": "python",
+      "script": "services/serialcoms_service.py"
+    },
+    "telnet_service": {
+      "enabled": true,
+      "python": "python",
+      "script": "services/telnetcoms_service.py"
+    }
+  }
+}

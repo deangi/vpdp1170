@@ -42,7 +42,6 @@ constexpr const char * const commands[] = {
 	};
 
 static int rl02_trace_left = 0;
-static int rl02_diag_trace_left = 1600;
 
 static constexpr uint32_t rl01_image_bytes = 5242880u;
 static constexpr uint32_t rl02_image_bytes = 10485760u;
@@ -140,81 +139,6 @@ static void rl02_trace(const char *fmt, ...)
 	LOG("kek RL02 %s", buffer);
 #else
 	(void)fmt;
-#endif
-}
-
-void rl02::diag_trace(const char *event, uint16_t addr, uint16_t value) const
-{
-#if defined(ESP32)
-	uint16_t pc = 0;
-	uint16_t psw = 0;
-	if (b && b->getCpu()) {
-		pc = b->getCpu()->getPC();
-		psw = b->getCpu()->getPSW();
-	}
-
-	const bool is_reset = strcmp(event, "RESET") == 0 || strcmp(event, "RESET-HARD") == 0;
-	const bool is_error_event =
-		strstr(event, "HNF") != nullptr ||
-		strstr(event, "ERR") != nullptr ||
-		strstr(event, "DCK") != nullptr ||
-		strstr(event, "NXM") != nullptr;
-	const bool is_transfer_event =
-		strcmp(event, "READ-DATA") == 0 ||
-		strcmp(event, "WRITE-DATA") == 0 ||
-		strcmp(event, "WCHK-DATA") == 0 ||
-		strcmp(event, "DEFER-DATA") == 0 ||
-		strcmp(event, "DEFER-COMP") == 0;
-	const bool is_irq_event =
-		strcmp(event, "IRQ-SCHED") == 0 ||
-		strcmp(event, "IRQ-DELIVER") == 0 ||
-		strcmp(event, "IRQ-CANCEL") == 0;
-	const bool near_diag = pc >= 017000 && pc < 020000;
-	const bool nxm_probe_diag = pc >= 023600 && pc < 024100;
-	const uint16_t csr_candidate = addr == RL02_CSR ? value : registers[(RL02_CSR - RL02_BASE) / 2];
-	const int selected_device = (csr_candidate >> 8) & 3;
-
-	// Keep the loader quiet: XXDP boots from DL0 and can consume the whole
-	// trace budget before the diagnostic starts. ZRLHB1 is being run against
-	// drive 1, so preserve the log for DL1 plus any direct high-PC diag access.
-	if (!is_reset && selected_device != 1 && !near_diag)
-		return;
-
-	if (!is_reset && !is_error_event && !is_irq_event && !(is_transfer_event && nxm_probe_diag))
-		return;
-
-	if (!is_reset && rl02_diag_trace_left <= 0)
-		return;
-
-	Serial.printf("[vpdp1170] kek RL02 %-13s PC=%06o PS=%06o addr=%06o val=%06o "
-			"CSR=%06o BAR=%06o DAR=%06o MPR0=%06o MPR1=%06o MPR2=%06o BAE=%06o "
-			"trk=%d head=%u sec=%u def=%d exec=%d poll=%d delay=%d irq=%d slots=%u left=%d\r\n",
-			event,
-			(unsigned)pc, (unsigned)psw,
-			(unsigned)addr, (unsigned)value,
-			(unsigned)registers[(RL02_CSR - RL02_BASE) / 2],
-			(unsigned)registers[(RL02_BAR - RL02_BASE) / 2],
-			(unsigned)registers[(RL02_DAR - RL02_BASE) / 2],
-			(unsigned)mpr[0], (unsigned)mpr[1], (unsigned)mpr[2],
-			(unsigned)registers[(RL02_BAE - RL02_BASE) / 2],
-			track, (unsigned)head, (unsigned)sector,
-			deferred_data_active ? 1 : 0,
-			deferred_execute ? 1 : 0,
-			deferred_poll_count,
-			deferred_service_delay,
-			irq_pending_ticks,
-			(unsigned)fhs.size(),
-			rl02_diag_trace_left);
-	if (is_reset)
-		return;
-
-	rl02_diag_trace_left--;
-	if (rl02_diag_trace_left == 0)
-		Serial.printf("[vpdp1170] kek RL02 trace limit reached\r\n");
-#else
-	(void)event;
-	(void)addr;
-	(void)value;
 #endif
 }
 
@@ -316,8 +240,6 @@ void rl02::begin()
 
 void rl02::reset(const bool hard)
 {
-	rl02_diag_trace_left = 1600;
-
 	if (hard) {
 		memset(registers,   0x00, sizeof registers  );
 		memset(xfer_buffer, 0x00, sizeof xfer_buffer);
@@ -341,8 +263,6 @@ void rl02::reset(const bool hard)
 	track  = 0;
 	head   = 0;
 	sector = 0;
-
-	diag_trace(hard ? "RESET-HARD" : "RESET");
 }
 
 FLASHMEM void rl02::show_state(console *const cnsl) const
@@ -439,7 +359,6 @@ uint16_t rl02::read_word(const uint16_t addr)
 						deferred_device, deferred_command, commands[deferred_command],
 						deferred_poll_count, deferred_service_delay, value,
 						deferred_bar, deferred_dar, deferred_mpr);
-				diag_trace("READ-BUSY", addr, value);
 			}
 
 			return value;
@@ -466,7 +385,6 @@ uint16_t rl02::read_word(const uint16_t addr)
 			regnames[reg], addr, value,
 			registers[0], registers[1], registers[2], mpr[0],
 			track, head, sector);
-	diag_trace("READ", addr, value);
 
 	return value;
 }
@@ -575,7 +493,6 @@ void rl02::defer_data_command(const uint16_t csr, const uint8_t command, const i
 	rl02_trace("DEFER-DATA unit=%d cmd=%u(%s) CSR=%06o BAR=%06o DAR=%06o MPR=%06o",
 			device, command, commands[command], registers[0], deferred_bar,
 			deferred_dar, deferred_mpr);
-	diag_trace("DEFER-DATA", RL02_CSR, csr);
 }
 
 void rl02::complete_deferred_data_command()
@@ -601,7 +518,6 @@ void rl02::complete_deferred_data_command()
 	rl02_trace("DEFER-COMPLETE unit=%d cmd=%u(%s) CSR=%06o BAR=%06o DAR=%06o MPR=%06o",
 			device, command, commands[command], csr, deferred_bar,
 			deferred_dar, deferred_mpr);
-	diag_trace("DEFER-COMP", RL02_CSR, csr);
 	write_word(RL02_CSR, csr);
 	deferred_execute = false;
 }
@@ -615,7 +531,6 @@ void rl02::service_deferred()
 			deferred_service_delay--;
 		else
 			complete_deferred_data_command();
-		diag_trace("SERVICE", RL02_CSR, registers[(RL02_CSR - RL02_BASE) / 2]);
 	}
 
 #if defined(ESP32)
@@ -623,13 +538,11 @@ void rl02::service_deferred()
 		if (registers[(RL02_CSR - RL02_BASE) / 2] & 64) {
 			rl02_trace("IRQ-DELIVER vec=160 BR5 CSR=%06o",
 					registers[(RL02_CSR - RL02_BASE) / 2]);
-			diag_trace("IRQ-DELIVER", RL02_CSR, registers[(RL02_CSR - RL02_BASE) / 2]);
 			b->getCpu()->queue_interrupt(5, 0160);
 		}
 		else {
 			rl02_trace("IRQ-CANCEL IE cleared CSR=%06o",
 					registers[(RL02_CSR - RL02_BASE) / 2]);
-			diag_trace("IRQ-CANCEL", RL02_CSR, registers[(RL02_CSR - RL02_BASE) / 2]);
 		}
 	}
 #endif
@@ -640,7 +553,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 	const int reg = (addr - RL02_BASE) / 2;
 
 	DOLOG(log_ss::LS_DISK, "RL02: write \"%s\"/%06o: %06o", regnames[reg], addr, v);
-	diag_trace("WRITE-IN", addr, v);
 
 	// While a data xfer is in progress, keep BAR/DAR/MPR/CSR stable. RSX was
 	// observed issuing GETSTAT (DAR=13) during the deferred window, which
@@ -648,7 +560,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 	if (deferred_data_active && !deferred_execute) {
 		rl02_trace("WRITE-BUSY-IGNORE @ %06o val=%06o pending CSR=%06o BAR=%06o DAR=%06o MPR=%06o",
 				addr, v, deferred_csr, deferred_bar, deferred_dar, deferred_mpr);
-		diag_trace("WRITE-BUSY", addr, v);
 		setBit(registers[(RL02_CSR - RL02_BASE) / 2], 0, true);
 		setBit(registers[(RL02_CSR - RL02_BASE) / 2], 7, false);
 		return;
@@ -661,7 +572,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 				addr, v, registers[reg],
 				registers[0], registers[1], registers[2],
 				registers[(RL02_MPR - RL02_BASE) / 2]);
-		diag_trace("WRITE-BAE", addr, v);
 		return;
 	}
 
@@ -691,7 +601,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 				registers[0], registers[1], registers[2],
 				registers[(RL02_MPR - RL02_BASE) / 2],
 				track, head, sector, (unsigned)fhs.size());
-		diag_trace("WRITE-CSR", addr, v);
 
 		bool          do_int  = false;
 		// CRDY set means this is only a register load. Do not probe the
@@ -704,7 +613,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 
 			registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 15);
 			rl02_trace("NOT-ATTACHED unit=%d CSR=%06o", device, registers[(RL02_CSR - RL02_BASE) / 2]);
-			diag_trace("NOT-ATTACHED", addr, v);
 
 			do_int = true;
 		}
@@ -734,7 +642,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 				rl02_trace("WCHK-HNF unit=%d media=%s track=%d sector=%u max_track=%d",
 						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
 						requested_track, requested_sector, media_tracks - 1);
-				diag_trace("WCHK-HNF", RL02_DAR, temp);
 				do_int = true;
 				goto command_done;
 			}
@@ -750,7 +657,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					device, (unsigned)count, (unsigned)temp_disk_offset,
 					(unsigned)memory_address, track, head, sector,
 					registers[(RL02_MPR - RL02_BASE) / 2]);
-			diag_trace("WCHK-DATA", RL02_DAR, temp);
 
 			while(count > 0) {
 				const uint32_t cur = std::min(uint32_t(rl02_bytes_per_sector), count);
@@ -810,7 +716,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			}
 			do_int = true;
 			rl02_trace("GETSTAT unit=%d media=%s -> MPR=%06o", device, rl02_unit_is_rl02(device) ? "RL02" : "RL01", mpr[0]);
-			diag_trace("GETSTAT", addr, v);
 		}
 		else if (command == 3) {  // seek
 			uint16_t temp = registers[(RL02_DAR - RL02_BASE) / 2];
@@ -830,7 +735,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					device, rl02_unit_is_rl02(device) ? "RL02" : "RL01", temp, track, new_track, cylinder_count);
 			track  = new_track;
 			head   = (temp & 000020) ? 1 : 0;
-			diag_trace("SEEK", RL02_DAR, temp);
 
 //			update_dar();
 
@@ -843,7 +747,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			DOLOG(log_ss::LS_DISK, "RL02: device %d, read header [cylinder: %d, head: %d, sector: %d] %06o", device, track, head, sector, mpr[0]);
 			rl02_trace("RDHDR unit=%d -> hdr=%06o trk=%d head=%u sec=%u",
 					device, mpr[0], track, head, sector);
-			diag_trace("READ-HDR", RL02_MPR, mpr[0]);
 
 			sector = (sector + 1) % rl02_sectors_per_track;
 
@@ -870,7 +773,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 				rl02_trace("WRITE-HNF unit=%d media=%s track=%d sector=%u max_track=%d",
 						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
 						requested_track, requested_sector, media_tracks - 1);
-				diag_trace("WRITE-HNF", RL02_DAR, temp);
 				do_int = true;
 				goto command_done;
 			}
@@ -888,7 +790,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					(unsigned)b->translate_unibus_for_monitor(memory_address),
 					track, head, sector,
 					registers[(RL02_MPR - RL02_BASE) / 2]);
-			diag_trace("WRITE-DATA", RL02_DAR, temp);
 
 			while(count > 0) {
 				const uint32_t requested = std::min(uint32_t(rl02_bytes_per_sector), count);
@@ -900,7 +801,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					DOLOG(log_ss::LS_DISK, "RL02: DMA read from PDP memory short transfer, requested %u got %u at %06o", cur, copied, memory_address);
 					rl02_trace("WRITE-DMA-ERR unit=%d bus=%06o requested=%u copied=%u",
 							device, (unsigned)memory_address, (unsigned)cur, (unsigned)copied);
-					diag_trace("WRITE-DMAERR", RL02_BAR, registers[(RL02_BAR - RL02_BASE) / 2]);
 					cur = copied & ~1u;
 					if (cur == 0)
 						break;
@@ -913,7 +813,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					rl02_trace("WRITE-ERR unit=%d disk_off=%u len=%u trk=%d head=%u sec=%u",
 							device, (unsigned)temp_disk_offset, (unsigned)cur,
 							track, head, sector);
-					diag_trace("WRITE-ERR", RL02_DAR, temp);
 					break;
 				}
 
@@ -961,7 +860,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 				rl02_trace("READ-HNF unit=%d media=%s track=%d sector=%u max_track=%d",
 						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
 					requested_track, requested_sector, media_tracks - 1);
-				diag_trace("READ-HNF", RL02_DAR, temp);
 				do_int = true;
 				goto command_done;
 			}
@@ -995,7 +893,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					(unsigned)b->translate_unibus_for_monitor(memory_address),
 					track, head, sector,
 					registers[(RL02_MPR - RL02_BASE) / 2]);
-			diag_trace("READ-DATA", RL02_DAR, temp);
 
 			while(count > 0) {
 				uint32_t cur = std::min(uint32_t(sizeof xfer_buffer), count);
@@ -1009,7 +906,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					rl02_trace("READ-ERR unit=%d disk_off=%u len=%u trk=%d head=%u sec=%u",
 							device, (unsigned)temp_disk_offset, (unsigned)cur,
 							track, head, sector);
-					diag_trace("READ-ERR", RL02_DAR, temp);
 					break;
 				}
 
@@ -1018,7 +914,6 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					DOLOG(log_ss::LS_DISK, "RL02: DMA write to PDP memory short transfer, requested %u got %u at %06o", cur, copied, memory_address);
 					rl02_trace("READ-DMA-ERR unit=%d bus=%06o requested=%u copied=%u",
 							device, (unsigned)memory_address, (unsigned)cur, (unsigned)copied);
-					diag_trace("READ-DMAERR", RL02_BAR, registers[(RL02_BAR - RL02_BASE) / 2]);
 					cur = copied & ~1u;
 					if (cur == 0)
 						break;
@@ -1068,7 +963,6 @@ command_done:
 				rl02_trace("IRQ-SCHEDULE unit=%d vec=160 BR5 ticks=%d CSR=%06o",
 						device, IRQ_DELAY_TICKS,
 						registers[(RL02_CSR - RL02_BASE) / 2]);
-				diag_trace("IRQ-SCHED", RL02_CSR, registers[(RL02_CSR - RL02_BASE) / 2]);
 #else
 				rl02_trace("IRQ unit=%d vec=160 BR5 CSR=%06o",
 						device, registers[(RL02_CSR - RL02_BASE) / 2]);

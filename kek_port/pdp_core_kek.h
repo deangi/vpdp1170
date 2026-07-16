@@ -34,6 +34,8 @@ bool read_mmu_word(uint16_t address, uint16_t* value);
 bool read_rp06_word(uint16_t address, uint16_t* value);
 bool get_rp06_deferred(bool* active, int* delay, int* cs1_polls,
                        int* wc_polls);
+bool set_rp06_operator_stop(bool stopped);
+bool get_rp06_operator_stop(bool* stopped);
 bool get_mmu_summary(uint16_t* mmr0, uint16_t* mmr1, uint16_t* mmr2,
                      uint16_t* mmr3, uint16_t* cpuerr, uint16_t* pir,
                      uint32_t* io_base);

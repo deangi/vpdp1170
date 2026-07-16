@@ -61,6 +61,7 @@ private:
 	// Deferred DMA: keep RDY clear for a few instruction steps so a BA=0
 	// bootstrap can poll CS1 before its own code is overwritten.
 	bool     deferred_active { false };
+	bool     operator_stopped { false };
 	uint16_t deferred_fnc    { 0 };
 	uint16_t deferred_cs1    { 0 };
 	uint16_t deferred_wc     { 0 };
@@ -88,6 +89,8 @@ public:
 	void begin() override;
 	void reset(const bool hard) override;
 	void service_deferred();
+	void set_operator_stop(bool stopped);
+	bool operator_stop_active() const { return operator_stopped; }
 
 	void show_state(console *const cnsl) const override;
 

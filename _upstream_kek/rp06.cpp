@@ -152,6 +152,19 @@ static uint16_t rp06_drive_type(const bool is_rp07)
 	return is_rp07 ? 020042 : 020022;  // RP07 / RP06
 }
 
+static uint16_t rp06_selected_drive_bit(const uint16_t cs2)
+{
+	return uint16_t(1u << (cs2 & 07));
+}
+
+static uint16_t rp06_drive_status(const bool operator_stopped)
+{
+	uint16_t ds = default_DS;
+	if (operator_stopped)
+		ds &= ~(uint16_t(rp06::ds_bits::MOL) | uint16_t(rp06::ds_bits::DRY));
+	return ds;
+}
+
 rp06::rp06(bus *const b, abool *const disk_read_activity, abool *const disk_write_activity, const bool is_rp07) :
 	b(b),
 	is_rp07(is_rp07),
@@ -178,7 +191,9 @@ void rp06::reset(const bool hard)
 	if (hard) {
 		memset(registers, 0x00, sizeof registers);
 		registers[reg_num(RP06_CS1)] = uint16_t(rp06::cs1_bits::RDY);
-		registers[reg_num(RP06_DS)] = default_DS;
+		operator_stopped = false;
+		registers[reg_num(RP06_DS)] = rp06_drive_status(operator_stopped);
+		registers[reg_num(RP06_AS)] = 000001;
 		registers[reg_num(RP06_DT)] = rp06_drive_type(is_rp07);
 		registers[reg_num(RP06_SN)] = 000001;
 		int_cnt = 0;
@@ -281,8 +296,13 @@ uint16_t rp06::read_word(const uint16_t addr)
 			return value;
 		}
 	} else if (addr == RP06_DS) {
-		value = default_DS;
-		if (registers[reg_num(RP06_AS)] & 000001)
+		if (operator_stopped) {
+			value = registers[reg_num(RP06_DS)];
+			DOLOG(log_ss::LS_DISK, "RP06: read \"%s\"/%o: %06o", rp06_reg_name(reg), addr, value);
+			return value;
+		}
+		value = rp06_drive_status(operator_stopped);
+		if (registers[reg_num(RP06_AS)] & rp06_selected_drive_bit(registers[reg_num(RP06_CS2)]))
 			value |= DS_ATA;
 		registers[reg_num(RP06_DS)] = value;
 	} else if (addr == RP06_DT) {
@@ -291,6 +311,11 @@ uint16_t rp06::read_word(const uint16_t addr)
 	} else if (addr == RP06_SN) {
 		value = registers[reg_num(RP06_SN)] ? registers[reg_num(RP06_SN)] : 000001;
 	} else if (addr == RP06_RMLA) {
+		if (operator_stopped) {
+			value = registers[reg_num(RP06_RMLA)];
+			DOLOG(log_ss::LS_DISK, "RP06: read \"%s\"/%o: %06o", rp06_reg_name(reg), addr, value);
+			return value;
+		}
 		// SIMH/RH: look-ahead is (sector under head) << 6. Do not echo
 		// writes — RSX's pre-READ "MOV #1,LA" poll expects rotation, and
 		// echoing 1 made it take a different (hanging) path.
@@ -320,6 +345,14 @@ uint16_t rp06::peek_word(const uint16_t addr) const
 {
 	if (addr < RP06_BASE || addr >= RP06_END || (addr & 1))
 		return 0;
+	if (operator_stopped)
+		return registers[reg_num(addr)];
+	if (addr == RP06_DS) {
+		uint16_t ds = rp06_drive_status(operator_stopped);
+		if (registers[reg_num(RP06_AS)] & rp06_selected_drive_bit(registers[reg_num(RP06_CS2)]))
+			ds |= DS_ATA;
+		return ds;
+	}
 	return registers[reg_num(addr)];
 }
 
@@ -330,7 +363,8 @@ int rp06::reg_num(uint16_t addr) const
 
 void rp06::write_byte(const uint16_t addr, const uint8_t v)
 {
-	uint16_t vtemp = registers[reg_num(addr)];
+	const uint16_t word_addr = addr & ~1;
+	uint16_t vtemp = registers[reg_num(word_addr)];
 
 	if (addr & 1) {
 		vtemp &= 0x00ff;
@@ -341,7 +375,14 @@ void rp06::write_byte(const uint16_t addr, const uint8_t v)
 		vtemp |= v;
 	}
 
-	write_word(addr & ~1, vtemp);
+	write_word(word_addr, vtemp);
+}
+
+void rp06::set_operator_stop(const bool stopped)
+{
+	operator_stopped = stopped;
+	registers[reg_num(RP06_DS)] = rp06_drive_status(operator_stopped);
+	registers[reg_num(RP06_AS)] |= rp06_selected_drive_bit(registers[reg_num(RP06_CS2)]);
 }
 
 uint32_t rp06::compute_offset() const
@@ -580,6 +621,17 @@ void rp06::write_word(const uint16_t addr, uint16_t v)
 		return;
 	}
 
+	if (operator_stopped) {
+		if (addr == RP06_CS2 && (v & CS2_CLR)) {
+			reset(true);
+			rp06_trace("CS2 CLR while stopped -> controller reset");
+			return;
+		}
+		if (addr != RP06_DT && addr != RP06_SN)
+			registers[reg] = v;
+		return;
+	}
+
 	if (addr == RP06_AS) {
 		// Write-1-to-clear attention bits.
 		registers[reg_num(RP06_AS)] &= uint16_t(~v);
@@ -603,6 +655,10 @@ void rp06::write_word(const uint16_t addr, uint16_t v)
 
 	if (addr != RP06_CS1) {
 		registers[reg] = v;
+		if (addr == RP06_ERRREG1 && v != 0) {
+			registers[reg_num(RP06_AS)] |= rp06_selected_drive_bit(registers[reg_num(RP06_CS2)]);
+			registers[reg_num(RP06_CS1)] |= uint16_t(rp06::cs1_bits::TRE);
+		}
 		return;
 	}
 
@@ -639,7 +695,7 @@ void rp06::write_word(const uint16_t addr, uint16_t v)
 		  uint16_t(rp06::cs1_bits::TRE));
 
 	// SIMH rp_clr_as: starting a command clears this drive's attention.
-	registers[reg_num(RP06_AS)] &= ~000001;
+	registers[reg_num(RP06_AS)] &= ~rp06_selected_drive_bit(registers[reg_num(RP06_CS2)]);
 
 	rp06_trace("CMD fnc=%02o (%s) CS1=%06o WC=%06o BA=%06o DA=%06o DC=%06o AS=%06o slots=%u",
 		   fnc, rp06_func_name(fnc),
@@ -654,7 +710,7 @@ void rp06::write_word(const uint16_t addr, uint16_t v)
 	auto finish_ok = [&](bool set_attention) {
 		registers[reg_num(RP06_CS1)] |= uint16_t(rp06::cs1_bits::RDY);
 		if (set_attention)
-			registers[reg_num(RP06_AS)] |= 000001;  // drive 0 attention
+			registers[reg_num(RP06_AS)] |= rp06_selected_drive_bit(registers[reg_num(RP06_CS2)]);
 		generate_interrupt = true;
 	};
 
@@ -678,7 +734,7 @@ void rp06::write_word(const uint16_t addr, uint16_t v)
 		finish_ok(true);
 	} else if (fnc == 010 || fnc == 011) {
 		// PRESET / PACK ACK — volume valid; no ATA (SIMH returns early).
-		registers[reg_num(RP06_DS)] = default_DS;
+		registers[reg_num(RP06_DS)] = rp06_drive_status(operator_stopped);
 		registers[reg_num(RP06_DA)] = 0;
 		registers[reg_num(RP06_DC)] = 0;
 		registers[reg_num(RP06_CC)] = 0;

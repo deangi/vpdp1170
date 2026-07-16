@@ -522,6 +522,7 @@ static void command_help() {
       "  drives                      show mounted disk images\r\n"
       "  mount <unit> <path> [ro]    mount RL0-RL3, RK0, or RP0\r\n"
       "  dismount <unit>             dismount a drive\r\n"
+      "  rp <stop|start|status>      toggle emulated RP0 front-panel STOP\r\n"
       "  create <rk|rl01|rl02> <path> create an empty disk image\r\n"
       "  set [name=value]            show/change runtime settings\r\n"
       "  tty                         show console TTY counters\r\n"
@@ -548,6 +549,45 @@ static void monitor_help() {
       "  R0=012345          set R0-R5, SP, PC, or PS\r\n"
       "  >                  return to the management shell\r\n"
       "  ?                  show this help\r\n");
+}
+
+static void command_rp(const char* action) {
+  if (!action || !*action ||
+      (!strcasecmp(action, "status") || !strcasecmp(action, "stat"))) {
+    uint16_t ds = 0;
+    uint16_t as = 0;
+    bool stopped = false;
+    if (!pdp_core::read_rp06_word(0176712, &ds) ||
+        !pdp_core::read_rp06_word(0176716, &as) ||
+        !pdp_core::get_rp06_operator_stop(&stopped)) {
+      output_text("error: RP06/RH70 is unavailable\r\n");
+      return;
+    }
+    output_printf("RP0 %s DS=%06o AS=%06o\r\n",
+                  stopped ? "stopped/offline" : "started/online",
+                  (unsigned)ds, (unsigned)as);
+    return;
+  }
+
+  if (!strcasecmp(action, "stop") || !strcasecmp(action, "offline")) {
+    if (!pdp_core::set_rp06_operator_stop(true)) {
+      output_text("error: RP06/RH70 is unavailable\r\n");
+      return;
+    }
+    output_text("RP0 STOP asserted: MOL/DRY low\r\n");
+    return;
+  }
+
+  if (!strcasecmp(action, "start") || !strcasecmp(action, "online")) {
+    if (!pdp_core::set_rp06_operator_stop(false)) {
+      output_text("error: RP06/RH70 is unavailable\r\n");
+      return;
+    }
+    output_text("RP0 START asserted: MOL/DRY high\r\n");
+    return;
+  }
+
+  output_text("usage: rp <stop|start|status>\r\n");
 }
 
 static void monitor_state() {
@@ -1350,6 +1390,8 @@ static void execute_command(char* line) {
   else if (!strcasecmp(words[0], "dismount") ||
            !strcasecmp(words[0], "unmount"))
     command_dismount(count > 1 ? words[1] : nullptr);
+  else if (!strcasecmp(words[0], "rp"))
+    command_rp(count > 1 ? words[1] : nullptr);
   else if (!strcasecmp(words[0], "create"))
     command_create(count > 1 ? words[1] : nullptr,
                    count > 2 ? words[2] : nullptr);
