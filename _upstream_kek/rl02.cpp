@@ -42,6 +42,7 @@ constexpr const char * const commands[] = {
 	};
 
 static int rl02_trace_left = 0;
+static int rl02_diag_trace_left = 1600;
 
 static constexpr uint32_t rl01_image_bytes = 5242880u;
 static constexpr uint32_t rl02_image_bytes = 10485760u;
@@ -51,6 +52,20 @@ static constexpr int rl01_track_count = 256;
 // vpdp1140 completes data in the CSR write and only delays the IRQ 2 ticks.
 static constexpr int rl02_deferred_completion_instructions = 2;
 static constexpr int rl02_register_count = 5;
+
+static uint16_t rl02_crc16(const uint16_t *words, const int word_count)
+{
+	uint32_t crc = 0;
+	for (int i = 0; i < word_count; i++) {
+		uint16_t data = words[i];
+		for (int bit = 0; bit < 16; bit++) {
+			crc = (crc & ~1u) | ((crc & 1u) ^ (data & 1u));
+			crc = (crc & 1u) ? (crc >> 1) ^ 0120001u : crc >> 1;
+			data >>= 1;
+		}
+	}
+	return uint16_t(crc);
+}
 
 void rl02_set_trace(const int count)
 {
@@ -125,6 +140,81 @@ static void rl02_trace(const char *fmt, ...)
 	LOG("kek RL02 %s", buffer);
 #else
 	(void)fmt;
+#endif
+}
+
+void rl02::diag_trace(const char *event, uint16_t addr, uint16_t value) const
+{
+#if defined(ESP32)
+	uint16_t pc = 0;
+	uint16_t psw = 0;
+	if (b && b->getCpu()) {
+		pc = b->getCpu()->getPC();
+		psw = b->getCpu()->getPSW();
+	}
+
+	const bool is_reset = strcmp(event, "RESET") == 0 || strcmp(event, "RESET-HARD") == 0;
+	const bool is_error_event =
+		strstr(event, "HNF") != nullptr ||
+		strstr(event, "ERR") != nullptr ||
+		strstr(event, "DCK") != nullptr ||
+		strstr(event, "NXM") != nullptr;
+	const bool is_transfer_event =
+		strcmp(event, "READ-DATA") == 0 ||
+		strcmp(event, "WRITE-DATA") == 0 ||
+		strcmp(event, "WCHK-DATA") == 0 ||
+		strcmp(event, "DEFER-DATA") == 0 ||
+		strcmp(event, "DEFER-COMP") == 0;
+	const bool is_irq_event =
+		strcmp(event, "IRQ-SCHED") == 0 ||
+		strcmp(event, "IRQ-DELIVER") == 0 ||
+		strcmp(event, "IRQ-CANCEL") == 0;
+	const bool near_diag = pc >= 017000 && pc < 020000;
+	const bool nxm_probe_diag = pc >= 023600 && pc < 024100;
+	const uint16_t csr_candidate = addr == RL02_CSR ? value : registers[(RL02_CSR - RL02_BASE) / 2];
+	const int selected_device = (csr_candidate >> 8) & 3;
+
+	// Keep the loader quiet: XXDP boots from DL0 and can consume the whole
+	// trace budget before the diagnostic starts. ZRLHB1 is being run against
+	// drive 1, so preserve the log for DL1 plus any direct high-PC diag access.
+	if (!is_reset && selected_device != 1 && !near_diag)
+		return;
+
+	if (!is_reset && !is_error_event && !is_irq_event && !(is_transfer_event && nxm_probe_diag))
+		return;
+
+	if (!is_reset && rl02_diag_trace_left <= 0)
+		return;
+
+	Serial.printf("[vpdp1170] kek RL02 %-13s PC=%06o PS=%06o addr=%06o val=%06o "
+			"CSR=%06o BAR=%06o DAR=%06o MPR0=%06o MPR1=%06o MPR2=%06o BAE=%06o "
+			"trk=%d head=%u sec=%u def=%d exec=%d poll=%d delay=%d irq=%d slots=%u left=%d\r\n",
+			event,
+			(unsigned)pc, (unsigned)psw,
+			(unsigned)addr, (unsigned)value,
+			(unsigned)registers[(RL02_CSR - RL02_BASE) / 2],
+			(unsigned)registers[(RL02_BAR - RL02_BASE) / 2],
+			(unsigned)registers[(RL02_DAR - RL02_BASE) / 2],
+			(unsigned)mpr[0], (unsigned)mpr[1], (unsigned)mpr[2],
+			(unsigned)registers[(RL02_BAE - RL02_BASE) / 2],
+			track, (unsigned)head, (unsigned)sector,
+			deferred_data_active ? 1 : 0,
+			deferred_execute ? 1 : 0,
+			deferred_poll_count,
+			deferred_service_delay,
+			irq_pending_ticks,
+			(unsigned)fhs.size(),
+			rl02_diag_trace_left);
+	if (is_reset)
+		return;
+
+	rl02_diag_trace_left--;
+	if (rl02_diag_trace_left == 0)
+		Serial.printf("[vpdp1170] kek RL02 trace limit reached\r\n");
+#else
+	(void)event;
+	(void)addr;
+	(void)value;
 #endif
 }
 
@@ -226,6 +316,8 @@ void rl02::begin()
 
 void rl02::reset(const bool hard)
 {
+	rl02_diag_trace_left = 1600;
+
 	if (hard) {
 		memset(registers,   0x00, sizeof registers  );
 		memset(xfer_buffer, 0x00, sizeof xfer_buffer);
@@ -249,6 +341,8 @@ void rl02::reset(const bool hard)
 	track  = 0;
 	head   = 0;
 	sector = 0;
+
+	diag_trace(hard ? "RESET-HARD" : "RESET");
 }
 
 FLASHMEM void rl02::show_state(console *const cnsl) const
@@ -345,6 +439,7 @@ uint16_t rl02::read_word(const uint16_t addr)
 						deferred_device, deferred_command, commands[deferred_command],
 						deferred_poll_count, deferred_service_delay, value,
 						deferred_bar, deferred_dar, deferred_mpr);
+				diag_trace("READ-BUSY", addr, value);
 			}
 
 			return value;
@@ -371,6 +466,7 @@ uint16_t rl02::read_word(const uint16_t addr)
 			regnames[reg], addr, value,
 			registers[0], registers[1], registers[2], mpr[0],
 			track, head, sector);
+	diag_trace("READ", addr, value);
 
 	return value;
 }
@@ -420,6 +516,20 @@ void rl02::update_dar()
 	registers[(RL02_DAR - RL02_BASE) / 2] = (sector & 63) | (head << 6) | (track << 7);
 }
 
+void rl02::advance_dar_raw(uint32_t bytes)
+{
+	uint32_t sectors = (bytes + rl02_bytes_per_sector - 1) / rl02_bytes_per_sector;
+	uint16_t dar = registers[(RL02_DAR - RL02_BASE) / 2];
+
+	while(sectors-- > 0) {
+		dar++;
+		if ((dar & 077) == 0)
+			dar = (dar & ~uint16_t(077)) + 0100;
+	}
+
+	registers[(RL02_DAR - RL02_BASE) / 2] = dar;
+}
+
 void rl02::advance_disk_position(uint32_t bytes)
 {
 	uint32_t sectors = (bytes + rl02_bytes_per_sector - 1) / rl02_bytes_per_sector;
@@ -441,7 +551,7 @@ void rl02::advance_disk_position(uint32_t bytes)
 bool rl02::data_command_pending(const uint16_t csr) const
 {
 	const uint8_t command = (csr >> 1) & 7;
-	return command == 5 || command == 6 || command == 7;
+	return command == 1 || command == 5 || command == 6 || command == 7;
 }
 
 void rl02::defer_data_command(const uint16_t csr, const uint8_t command, const int device)
@@ -465,6 +575,7 @@ void rl02::defer_data_command(const uint16_t csr, const uint8_t command, const i
 	rl02_trace("DEFER-DATA unit=%d cmd=%u(%s) CSR=%06o BAR=%06o DAR=%06o MPR=%06o",
 			device, command, commands[command], registers[0], deferred_bar,
 			deferred_dar, deferred_mpr);
+	diag_trace("DEFER-DATA", RL02_CSR, csr);
 }
 
 void rl02::complete_deferred_data_command()
@@ -490,6 +601,7 @@ void rl02::complete_deferred_data_command()
 	rl02_trace("DEFER-COMPLETE unit=%d cmd=%u(%s) CSR=%06o BAR=%06o DAR=%06o MPR=%06o",
 			device, command, commands[command], csr, deferred_bar,
 			deferred_dar, deferred_mpr);
+	diag_trace("DEFER-COMP", RL02_CSR, csr);
 	write_word(RL02_CSR, csr);
 	deferred_execute = false;
 }
@@ -503,6 +615,7 @@ void rl02::service_deferred()
 			deferred_service_delay--;
 		else
 			complete_deferred_data_command();
+		diag_trace("SERVICE", RL02_CSR, registers[(RL02_CSR - RL02_BASE) / 2]);
 	}
 
 #if defined(ESP32)
@@ -510,11 +623,13 @@ void rl02::service_deferred()
 		if (registers[(RL02_CSR - RL02_BASE) / 2] & 64) {
 			rl02_trace("IRQ-DELIVER vec=160 BR5 CSR=%06o",
 					registers[(RL02_CSR - RL02_BASE) / 2]);
+			diag_trace("IRQ-DELIVER", RL02_CSR, registers[(RL02_CSR - RL02_BASE) / 2]);
 			b->getCpu()->queue_interrupt(5, 0160);
 		}
 		else {
 			rl02_trace("IRQ-CANCEL IE cleared CSR=%06o",
 					registers[(RL02_CSR - RL02_BASE) / 2]);
+			diag_trace("IRQ-CANCEL", RL02_CSR, registers[(RL02_CSR - RL02_BASE) / 2]);
 		}
 	}
 #endif
@@ -525,6 +640,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 	const int reg = (addr - RL02_BASE) / 2;
 
 	DOLOG(log_ss::LS_DISK, "RL02: write \"%s\"/%06o: %06o", regnames[reg], addr, v);
+	diag_trace("WRITE-IN", addr, v);
 
 	// While a data xfer is in progress, keep BAR/DAR/MPR/CSR stable. RSX was
 	// observed issuing GETSTAT (DAR=13) during the deferred window, which
@@ -532,6 +648,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 	if (deferred_data_active && !deferred_execute) {
 		rl02_trace("WRITE-BUSY-IGNORE @ %06o val=%06o pending CSR=%06o BAR=%06o DAR=%06o MPR=%06o",
 				addr, v, deferred_csr, deferred_bar, deferred_dar, deferred_mpr);
+		diag_trace("WRITE-BUSY", addr, v);
 		setBit(registers[(RL02_CSR - RL02_BASE) / 2], 0, true);
 		setBit(registers[(RL02_CSR - RL02_BASE) / 2], 7, false);
 		return;
@@ -544,8 +661,14 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 				addr, v, registers[reg],
 				registers[0], registers[1], registers[2],
 				registers[(RL02_MPR - RL02_BASE) / 2]);
+		diag_trace("WRITE-BAE", addr, v);
 		return;
 	}
+
+	// RLBA is a word-addressed DMA register; bit 0 is not implemented.
+	// XXDP ZRLGE0 verifies that attempts to set it still read back as zero.
+	if (addr == RL02_BAR)
+		v &= ~uint16_t(1);
 
 	registers[reg] = v;
 
@@ -568,6 +691,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 				registers[0], registers[1], registers[2],
 				registers[(RL02_MPR - RL02_BASE) / 2],
 				track, head, sector, (unsigned)fhs.size());
+		diag_trace("WRITE-CSR", addr, v);
 
 		bool          do_int  = false;
 		// CRDY set means this is only a register load. Do not probe the
@@ -580,6 +704,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 
 			registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 15);
 			rl02_trace("NOT-ATTACHED unit=%d CSR=%06o", device, registers[(RL02_CSR - RL02_BASE) / 2]);
+			diag_trace("NOT-ATTACHED", addr, v);
 
 			do_int = true;
 		}
@@ -587,12 +712,105 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			defer_data_command(v, command, device);
 			return;
 		}
+		else if (command == 0) {  // no-op
+			do_int = true;
+		}
+		else if (command == 1) {  // write check
+			if (disk_read_activity)
+				*disk_read_activity = true;
+
+			uint32_t memory_address = get_bus_address();
+			uint32_t count = rl02_transfer_byte_count(registers[(RL02_MPR - RL02_BASE) / 2]);
+			uint16_t temp = registers[(RL02_DAR - RL02_BASE) / 2];
+
+			const uint8_t requested_sector = temp & 63;
+			const uint8_t requested_head = (temp >> 6) & 1;
+			const int requested_track = temp >> 7;
+			const int media_tracks = rl02_unit_track_count(device);
+			if (requested_sector >= rl02_sectors_per_track ||
+					requested_track >= media_tracks ||
+					requested_track != track || requested_head != head) {
+				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 12) | (1 << 15);
+				rl02_trace("WCHK-HNF unit=%d media=%s track=%d sector=%u max_track=%d",
+						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
+						requested_track, requested_sector, media_tracks - 1);
+				diag_trace("WCHK-HNF", RL02_DAR, temp);
+				do_int = true;
+				goto command_done;
+			}
+			sector = requested_sector;
+
+			uint32_t temp_disk_offset = calc_offset();
+			uint32_t words_done = 0;
+			bool dck = false;
+			uint8_t *const disk_buf = xfer_buffer;
+			uint8_t *const mem_buf = xfer_buffer + rl02_bytes_per_sector;
+
+			rl02_trace("WCHK-DATA unit=%d bytes=%u disk_off=%u bus=%06o trk=%d head=%u sec=%u MPR=%06o",
+					device, (unsigned)count, (unsigned)temp_disk_offset,
+					(unsigned)memory_address, track, head, sector,
+					registers[(RL02_MPR - RL02_BASE) / 2]);
+			diag_trace("WCHK-DATA", RL02_DAR, temp);
+
+			while(count > 0) {
+				const uint32_t cur = std::min(uint32_t(rl02_bytes_per_sector), count);
+				memset(disk_buf, 0, rl02_bytes_per_sector);
+				memset(mem_buf, 0, rl02_bytes_per_sector);
+
+				if (fhs.at(device) == nullptr || fhs.at(device)->read(temp_disk_offset, rl02_bytes_per_sector, disk_buf, rl02_bytes_per_sector) == false) {
+					rl02_trace("WCHK-READ-ERR unit=%d disk_off=%u trk=%d head=%u sec=%u",
+							device, (unsigned)temp_disk_offset, track, head, sector);
+					break;
+				}
+
+				uint32_t copied = rl02_dma_read(b, memory_address, mem_buf, cur);
+				if (copied != cur) {
+					rl02_trace("WCHK-DMA-ERR unit=%d bus=%06o requested=%u copied=%u",
+							device, (unsigned)memory_address, (unsigned)cur, (unsigned)copied);
+					copied &= ~1u;
+					if (copied == 0)
+						break;
+				}
+
+				if (memcmp(disk_buf, mem_buf, copied) != 0)
+					dck = true;
+
+				memory_address += copied;
+				words_done += copied / 2;
+				temp_disk_offset += rl02_bytes_per_sector;
+				count -= copied;
+				advance_disk_position(rl02_bytes_per_sector);
+			}
+
+			update_bus_address(memory_address);
+			registers[(RL02_MPR - RL02_BASE) / 2] += words_done;
+			mpr[0] = registers[(RL02_MPR - RL02_BASE) / 2];
+			rl02_clamp_position_to_media(device, track, head, sector);
+			update_dar();
+			if (dck)
+				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 14) | (1 << 15);
+			rl02_trace("WCHK-DONE unit=%d BAR=%06o DAR=%06o MPR=%06o dck=%d words=%u",
+					device, registers[(RL02_BAR - RL02_BASE) / 2],
+					registers[(RL02_DAR - RL02_BASE) / 2],
+					registers[(RL02_MPR - RL02_BASE) / 2],
+					dck ? 1 : 0, (unsigned)words_done);
+			do_int = true;
+		}
 		else if (command == 2) {  // get status
-			mpr[0] = 5 /* lock on */ | (1 << 3) /* brush home */ | (1 << 4) /* heads over disk */ | (head << 6);
-			if (rl02_unit_is_rl02(device))
-				mpr[0] |= (1 << 7) /* RL02 */;
-			mpr[1] = mpr[0];
+			if (!(registers[(RL02_DAR - RL02_BASE) / 2] & 000002)) {
+				// GET STATUS without the GS modifier does not request a drive
+				// status word; the RL11 completes with OPI and composite ERR.
+				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 15);
+			}
+			else {
+				mpr[0] = 5 /* lock on */ | (1 << 3) /* brush home */ | (1 << 4) /* heads over disk */ | (head << 6);
+				if (rl02_unit_is_rl02(device))
+					mpr[0] |= (1 << 7) /* RL02 */;
+				mpr[1] = mpr[0];
+			}
+			do_int = true;
 			rl02_trace("GETSTAT unit=%d media=%s -> MPR=%06o", device, rl02_unit_is_rl02(device) ? "RL02" : "RL01", mpr[0]);
+			diag_trace("GETSTAT", addr, v);
 		}
 		else if (command == 3) {  // seek
 			uint16_t temp = registers[(RL02_DAR - RL02_BASE) / 2];
@@ -611,6 +829,8 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			rl02_trace("SEEK unit=%d media=%s DAR=%06o old_track=%d new_track=%d distance=%d",
 					device, rl02_unit_is_rl02(device) ? "RL02" : "RL01", temp, track, new_track, cylinder_count);
 			track  = new_track;
+			head   = (temp & 000020) ? 1 : 0;
+			diag_trace("SEEK", RL02_DAR, temp);
 
 //			update_dar();
 
@@ -619,11 +839,13 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 		else if (command == 4) {  // read header
 			mpr[0] = (sector & 63) | (head << 6) | (track << 7);
 			mpr[1] = 0;  // zero
-			mpr[2] = 0;  // TODO: CRC
-
+			mpr[2] = rl02_crc16(mpr, 2);
 			DOLOG(log_ss::LS_DISK, "RL02: device %d, read header [cylinder: %d, head: %d, sector: %d] %06o", device, track, head, sector, mpr[0]);
 			rl02_trace("RDHDR unit=%d -> hdr=%06o trk=%d head=%u sec=%u",
 					device, mpr[0], track, head, sector);
+			diag_trace("READ-HDR", RL02_MPR, mpr[0]);
+
+			sector = (sector + 1) % rl02_sectors_per_track;
 
 			do_int = true;
 		}
@@ -637,18 +859,22 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 
 			uint16_t temp             = registers[(RL02_DAR - RL02_BASE) / 2];
 
-			sector = temp & 63;
-			head   = (temp >> 6) & 1;
-			track  = temp >> 7;
+			const uint8_t requested_sector = temp & 63;
+			const uint8_t requested_head = (temp >> 6) & 1;
+			const int requested_track = temp >> 7;
 			const int media_tracks = rl02_unit_track_count(device);
-			if (track >= media_tracks) {
-				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 15);
-				rl02_trace("WRITE-ERR unit=%d media=%s track=%d beyond max=%d",
+			if (requested_sector >= rl02_sectors_per_track ||
+					requested_track >= media_tracks ||
+					requested_track != track || requested_head != head) {
+				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 12) | (1 << 15);
+				rl02_trace("WRITE-HNF unit=%d media=%s track=%d sector=%u max_track=%d",
 						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
-						track, media_tracks - 1);
+						requested_track, requested_sector, media_tracks - 1);
+				diag_trace("WRITE-HNF", RL02_DAR, temp);
 				do_int = true;
 				goto command_done;
 			}
+			sector = requested_sector;
 
 			uint32_t temp_disk_offset = calc_offset();
 			uint32_t words_done       = 0;
@@ -662,15 +888,19 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					(unsigned)b->translate_unibus_for_monitor(memory_address),
 					track, head, sector,
 					registers[(RL02_MPR - RL02_BASE) / 2]);
+			diag_trace("WRITE-DATA", RL02_DAR, temp);
 
 			while(count > 0) {
-				uint32_t cur = std::min(uint32_t(sizeof xfer_buffer), count);
+				const uint32_t requested = std::min(uint32_t(rl02_bytes_per_sector), count);
+				uint32_t cur = requested;
+				memset(xfer_buffer, 0, rl02_bytes_per_sector);
 
 				uint32_t copied = rl02_dma_read(b, memory_address, xfer_buffer, cur);
 				if (copied != cur) {
 					DOLOG(log_ss::LS_DISK, "RL02: DMA read from PDP memory short transfer, requested %u got %u at %06o", cur, copied, memory_address);
 					rl02_trace("WRITE-DMA-ERR unit=%d bus=%06o requested=%u copied=%u",
 							device, (unsigned)memory_address, (unsigned)cur, (unsigned)copied);
+					diag_trace("WRITE-DMAERR", RL02_BAR, registers[(RL02_BAR - RL02_BASE) / 2]);
 					cur = copied & ~1u;
 					if (cur == 0)
 						break;
@@ -678,19 +908,20 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 				memory_address += cur;
 				words_done += cur / 2;
 
-				if (fhs.at(device) == nullptr || fhs.at(device)->write(temp_disk_offset, cur, xfer_buffer, 256) == false) {
+				if (fhs.at(device) == nullptr || fhs.at(device)->write(temp_disk_offset, rl02_bytes_per_sector, xfer_buffer, rl02_bytes_per_sector) == false) {
 					DOLOG(log_ss::LS_DISK, "RL02: write error, device %d, disk offset %u, read size %u, cylinder %d, head %d, sector %d", device, temp_disk_offset, cur, track, head, sector);
 					rl02_trace("WRITE-ERR unit=%d disk_off=%u len=%u trk=%d head=%u sec=%u",
 							device, (unsigned)temp_disk_offset, (unsigned)cur,
 							track, head, sector);
+					diag_trace("WRITE-ERR", RL02_DAR, temp);
 					break;
 				}
 
-				temp_disk_offset += cur;
+				temp_disk_offset += rl02_bytes_per_sector;
 
 				count -= cur;
 
-				advance_disk_position(cur);
+				advance_disk_position(rl02_bytes_per_sector);
 			}
 			update_bus_address(memory_address);
 			registers[(RL02_MPR - RL02_BASE) / 2] += words_done;
@@ -718,11 +949,33 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 
 			uint16_t temp             = registers[(RL02_DAR - RL02_BASE) / 2];
 
-			sector = temp & 63;
-			head   = (temp >> 6) & 1;
-			track  = temp >> 7;
+			const uint8_t requested_sector = temp & 63;
+			const uint8_t requested_head = (temp >> 6) & 1;
+			const int requested_track = temp >> 7;
 			const int media_tracks = rl02_unit_track_count(device);
 			bool zero_read = false;
+			if (command == 6 && (requested_sector >= rl02_sectors_per_track ||
+					requested_track >= media_tracks ||
+					requested_track != track || requested_head != head)) {
+				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 12) | (1 << 15);
+				rl02_trace("READ-HNF unit=%d media=%s track=%d sector=%u max_track=%d",
+						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
+					requested_track, requested_sector, media_tracks - 1);
+				diag_trace("READ-HNF", RL02_DAR, temp);
+				do_int = true;
+				goto command_done;
+			}
+			const uint16_t raw_dar = temp;
+			if (command == 6) {
+				sector = requested_sector;
+				head = requested_head;
+				track = requested_track;
+			}
+			else {
+				sector = requested_sector;
+				head = requested_head;
+				track = requested_track;
+			}
 			if (track >= media_tracks) {
 				rl02_trace("READ-ERR unit=%d media=%s track=%d beyond max=%d",
 						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
@@ -742,6 +995,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					(unsigned)b->translate_unibus_for_monitor(memory_address),
 					track, head, sector,
 					registers[(RL02_MPR - RL02_BASE) / 2]);
+			diag_trace("READ-DATA", RL02_DAR, temp);
 
 			while(count > 0) {
 				uint32_t cur = std::min(uint32_t(sizeof xfer_buffer), count);
@@ -755,6 +1009,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					rl02_trace("READ-ERR unit=%d disk_off=%u len=%u trk=%d head=%u sec=%u",
 							device, (unsigned)temp_disk_offset, (unsigned)cur,
 							track, head, sector);
+					diag_trace("READ-ERR", RL02_DAR, temp);
 					break;
 				}
 
@@ -763,6 +1018,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					DOLOG(log_ss::LS_DISK, "RL02: DMA write to PDP memory short transfer, requested %u got %u at %06o", cur, copied, memory_address);
 					rl02_trace("READ-DMA-ERR unit=%d bus=%06o requested=%u copied=%u",
 							device, (unsigned)memory_address, (unsigned)cur, (unsigned)copied);
+					diag_trace("READ-DMAERR", RL02_BAR, registers[(RL02_BAR - RL02_BASE) / 2]);
 					cur = copied & ~1u;
 					if (cur == 0)
 						break;
@@ -782,7 +1038,13 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			registers[(RL02_MPR - RL02_BASE) / 2] += words_done;
 			mpr[0] = registers[(RL02_MPR - RL02_BASE) / 2];
 			rl02_clamp_position_to_media(device, track, head, sector);
-			update_dar();
+			if (command == 7) {
+				registers[(RL02_DAR - RL02_BASE) / 2] = raw_dar;
+				advance_dar_raw(words_done * 2u);
+			}
+			else {
+				update_dar();
+			}
 			rl02_trace("READ-DONE unit=%d BAR=%06o map[%02u]=%08o phys=%08o DAR=%06o MPR=%06o trk=%d head=%u sec=%u words=%u",
 					device, registers[(RL02_BAR - RL02_BASE) / 2],
 					(unsigned)rl02_unibus_map_entry(get_bus_address()),
@@ -806,6 +1068,7 @@ command_done:
 				rl02_trace("IRQ-SCHEDULE unit=%d vec=160 BR5 ticks=%d CSR=%06o",
 						device, IRQ_DELAY_TICKS,
 						registers[(RL02_CSR - RL02_BASE) / 2]);
+				diag_trace("IRQ-SCHED", RL02_CSR, registers[(RL02_CSR - RL02_BASE) / 2]);
 #else
 				rl02_trace("IRQ unit=%d vec=160 BR5 CSR=%06o",
 						device, registers[(RL02_CSR - RL02_BASE) / 2]);

@@ -68,9 +68,11 @@ private:
 	uint32_t get_bus_address() const;
 	void     update_bus_address(const uint32_t a);
 	void     update_dar();
+	void     advance_dar_raw(uint32_t bytes);
 	void     advance_disk_position(uint32_t bytes);
 	uint32_t calc_offset() const;
 	bool     data_command_pending(const uint16_t csr) const;
+	void     diag_trace(const char *event, uint16_t addr = 0, uint16_t value = 0) const;
 	void     defer_data_command(const uint16_t csr, const uint8_t command, const int device);
 	void     complete_deferred_data_command();
 
