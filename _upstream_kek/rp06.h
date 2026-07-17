@@ -62,6 +62,13 @@ private:
 	// bootstrap can poll CS1 before its own code is overwritten.
 	bool     deferred_active { false };
 	bool     operator_stopped { false };
+	bool     volume_valid { true };
+	bool     report_dva_after_start { false };
+	bool     last_block_status { false };
+	bool     bad_header_valid { false };
+	uint16_t bad_header_dc { 0 };
+	uint16_t bad_header_da { 0 };
+	int      pack_ack_transient_ticks { 0 };
 	uint16_t deferred_fnc    { 0 };
 	uint16_t deferred_cs1    { 0 };
 	uint16_t deferred_wc     { 0 };
@@ -72,6 +79,10 @@ private:
 	int      deferred_delay  { -1 };
 	int      deferred_cs1_polls { 0 };
 	int      deferred_wc_polls  { 0 };
+	bool     control_active { false };
+	uint16_t control_fnc { 0 };
+	uint16_t control_cs1 { 0 };
+	int      control_delay { -1 };
 	int      la_sector { 0 };
 
 	int      reg_num(uint16_t addr) const;
@@ -81,6 +92,8 @@ private:
 	uint32_t compute_offset_from(uint16_t dc, uint16_t da) const;
 	void     defer_data_command(uint16_t fnc, uint16_t cs1_after_go);
 	void     complete_deferred_data_command();
+	void     defer_control_command(uint16_t fnc, uint16_t cs1_after_go);
+	void     complete_deferred_control_command();
 
 public:
 	rp06(bus *const b, abool *const disk_read_activity, abool *const disk_write_activity, const bool is_rp07);

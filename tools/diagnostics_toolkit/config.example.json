@@ -19,7 +19,7 @@
     "read_buffer_limit": 1048576
   },
   "runner": {
-    "startup_timeout_seconds": 20.0,
+    "startup_timeout_seconds": 35.0,
     "boot_poll_seconds": 1.0,
     "diagnostic_poll_seconds": 5.0,
     "silent_timeout_seconds": 60.0,

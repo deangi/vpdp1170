@@ -71,9 +71,12 @@ connection.
 
 - Owns the serial port (`COM18`, `115200` baud by default).
 - Accepts JSON-lines commands on localhost port `11701`.
-- Commands: `status`, `reboot-board`, `send`, `read`, `flush`, `clear`, `exit`.
-- `reboot-board` leaves DTR high, pulses RTS low for 0.5 seconds, then leaves
-  RTS high.
+- Commands: `status`, `connect`, `disconnect`, `reboot-board`, `send`,
+  `read`, `flush`, `clear`, `exit`.
+- `reboot-board` sets `DTR=False`, pulses `RTS=True` for 0.5 seconds, then
+  releases reset with `DTR=False` and `RTS=False`.
+- Use `disconnect` before Arduino CLI upload so the uploader can own `COM18`,
+  then `connect` after upload to resume serial capture.
 
 `TelnetComs`
 
@@ -95,6 +98,8 @@ connection.
 - Starts both services.
 - Sends `reboot-board` to `SerialComs`.
 - Waits for the XXDP V2.5 banner and `.` prompt.
+- XXDP25 boot has been observed to complete about 25 seconds after reset is
+  released (`RTS=False`), so the default startup timeout is 35 seconds.
 - Sends the requested diagnostic command, appending carriage return if needed.
 - Polls serial output and classifies the run as requesting input, running with
   output, running silently, HALTed, crashed, complete/waiting, or timed out.
@@ -106,8 +111,10 @@ layer should add explicit build/upload commands using Arduino CLI before the
 session starts, for example:
 
 ```powershell
+python tools\diagnostics_toolkit\dtkctl.py serial disconnect
 arduino-cli compile ...
 arduino-cli upload ...
+python tools\diagnostics_toolkit\dtkctl.py serial connect
 ```
 
 Keep build/upload as an explicit runner option so log-only diagnostic sessions

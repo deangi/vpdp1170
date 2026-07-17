@@ -2,6 +2,7 @@
 
 #include "SD_FTP_Server/src/SD_FTP_Server.h"
 #include "appconfig.h"
+#include "config.h"
 #include "disk.h"
 #include "dd11.h"
 #include "emu_control.h"
@@ -522,8 +523,8 @@ static void command_help() {
       "  drives                      show mounted disk images\r\n"
       "  mount <unit> <path> [ro]    mount RL0-RL3, RK0, or RP0\r\n"
       "  dismount <unit>             dismount a drive\r\n"
-      "  rp <stop|start|status>      toggle emulated RP0 front-panel STOP\r\n"
-      "  create <rk|rl01|rl02> <path> create an empty disk image\r\n"
+      "  rp <stop|start|status|regs> toggle RP0 STOP or dump RH70/RP06 state\r\n"
+      "  create <rk|rl01|rl02|rp04|rp05|rp06> <path> create an empty disk image\r\n"
       "  set [name=value]            show/change runtime settings\r\n"
       "  tty                         show console TTY counters\r\n"
       "  monitor                     enter PDP-11 front-panel monitor\r\n"
@@ -551,6 +552,66 @@ static void monitor_help() {
       "  ?                  show this help\r\n");
 }
 
+static void dump_rp_registers() {
+  static const uint16_t kBase = 0176700u;
+  static const char* kNames[] = {
+      "CS1", "WC", "BA", "DA", "CS2", "DS", "ER1", "AS", "LA", "DB", "MR",
+      "DT", "SN", "OF", "DC", "CC", "ER2", "ER3", "EC1", "EC2", "BAE"};
+  static constexpr unsigned kCount = sizeof(kNames) / sizeof(kNames[0]);
+
+  uint16_t values[kCount] = {};
+  for (unsigned i = 0; i < kCount; i++) {
+    if (!pdp_core::read_rp06_word((uint16_t)(kBase + i * 2u), &values[i])) {
+      output_text("error: RP06/RH70 is unavailable\r\n");
+      return;
+    }
+  }
+
+  bool stopped = false;
+  if (!pdp_core::get_rp06_operator_stop(&stopped))
+    stopped = false;
+
+  output_printf("RP0 %s RH70/RP06 registers (peek):\r\n",
+                stopped ? "stopped/offline" : "started/online");
+  for (unsigned i = 0; i < kCount; i++) {
+    if ((i % 4) == 0) {
+      if (i) output_text("\r\n");
+      output_printf("  %06o:", (unsigned)(kBase + i * 2u));
+    }
+    output_printf(" %s=%06o", kNames[i], (unsigned)values[i]);
+  }
+  output_text("\r\n");
+
+  bool deferred = false;
+  int delay = 0;
+  int cs1_polls = 0;
+  int wc_polls = 0;
+  if (pdp_core::get_rp06_deferred(&deferred, &delay, &cs1_polls, &wc_polls)) {
+    output_printf("  deferred=%s delay=%d cs1_polls=%d wc_polls=%d\r\n",
+                  deferred ? "yes" : "no", delay, cs1_polls, wc_polls);
+  }
+
+  uint16_t psw = 0;
+  bool any_pending = false;
+  uint8_t counts[8] = {};
+  uint16_t vectors[8] = {};
+  if (pdp_core::get_interrupt_summary(&psw, &any_pending, counts, vectors)) {
+    output_printf("  CPU PC=%06o PS=%06o SPL=%u any_irq=%u queued:",
+                  (unsigned)pdp_core::pc(), (unsigned)psw,
+                  (unsigned)((psw >> 5) & 7), any_pending ? 1 : 0);
+    bool printed = false;
+    for (int level = 0; level < 8; level++) {
+      if (!counts[level]) continue;
+      output_printf(" BR%d=%06o", level, (unsigned)vectors[level]);
+      if (counts[level] > 1)
+        output_printf("(+%u)", (unsigned)(counts[level] - 1));
+      printed = true;
+    }
+    if (!printed) output_text(" none");
+    output_text("\r\n");
+  }
+}
+
 static void command_rp(const char* action) {
   if (!action || !*action ||
       (!strcasecmp(action, "status") || !strcasecmp(action, "stat"))) {
@@ -566,6 +627,11 @@ static void command_rp(const char* action) {
     output_printf("RP0 %s DS=%06o AS=%06o\r\n",
                   stopped ? "stopped/offline" : "started/online",
                   (unsigned)ds, (unsigned)as);
+    return;
+  }
+
+  if (!strcasecmp(action, "regs") || !strcasecmp(action, "registers")) {
+    dump_rp_registers();
     return;
   }
 
@@ -587,7 +653,7 @@ static void command_rp(const char* action) {
     return;
   }
 
-  output_text("usage: rp <stop|start|status>\r\n");
+  output_text("usage: rp <stop|start|status|regs>\r\n");
 }
 
 static void monitor_state() {
@@ -1297,8 +1363,14 @@ static void command_create(const char* type, const char* path_arg) {
   if (type && !strcasecmp(type, "rk")) bytes = 2494464u;
   else if (type && !strcasecmp(type, "rl01")) bytes = 5242880u;
   else if (type && !strcasecmp(type, "rl02")) bytes = 10485760u;
+  else if (type && !strcasecmp(type, "rp04"))
+    bytes = uint32_t(RP04_CYL) * RP_HEADS * RP_SECTORS * RP_BYTES_PER_SEC;
+  else if (type && !strcasecmp(type, "rp05"))
+    bytes = uint32_t(RP05_CYL) * RP_HEADS * RP_SECTORS * RP_BYTES_PER_SEC;
+  else if (type && !strcasecmp(type, "rp06"))
+    bytes = uint32_t(RP06_CYL) * RP_HEADS * RP_SECTORS * RP_BYTES_PER_SEC;
   if (!bytes || !path_arg) {
-    output_text("usage: create <rk|rl01|rl02> <path>\r\n");
+    output_text("usage: create <rk|rl01|rl02|rp04|rp05|rp06> <path>\r\n");
     return;
   }
   char path[SHELL_PATH_MAX];

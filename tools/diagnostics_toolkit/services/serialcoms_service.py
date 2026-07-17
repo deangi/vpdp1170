@@ -45,19 +45,47 @@ class SerialComs:
                 "error: pyserial is required for SerialComs. Install with `python -m pip install pyserial`."
             ) from SERIAL_IMPORT_ERROR
 
-        self._serial = serial.Serial(
-            self.config.port,
-            self.config.baud,
-            timeout=0.05,
-            write_timeout=2.0,
-        )
+        self.connect()
         self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._reader_thread.start()
 
+    def connect(self) -> dict[str, Any]:
+        if serial is None:
+            return {"ok": False, "error": "pyserial is not available"}
+        with self._lock:
+            if self._serial and self._serial.is_open:
+                return {"ok": True, "connected": True}
+            try:
+                self._serial = serial.Serial(
+                    self.config.port,
+                    self.config.baud,
+                    timeout=0.05,
+                    write_timeout=2.0,
+                )
+                self._last_error = ""
+            except Exception as exc:
+                self._serial = None
+                self._last_error = str(exc)
+                return {"ok": False, "connected": False, "error": str(exc)}
+        return {"ok": True, "connected": True}
+
+    def disconnect(self) -> dict[str, Any]:
+        with self._lock:
+            if self._serial:
+                try:
+                    self._serial.close()
+                finally:
+                    self._serial = None
+        return {"ok": True, "connected": False}
+
     def _reader_loop(self) -> None:
         while not self._reader_stop.is_set():
+            serial_port = self._serial
+            if not serial_port or not serial_port.is_open:
+                time.sleep(0.1)
+                continue
             try:
-                data = self._serial.read(4096)
+                data = serial_port.read(4096)
                 if data:
                     self.buffer.append(data.decode("utf-8", errors="replace"))
             except Exception as exc:
@@ -68,8 +96,7 @@ class SerialComs:
         self._reader_stop.set()
         if self._reader_thread:
             self._reader_thread.join(timeout=2.0)
-        if self._serial:
-            self._serial.close()
+        self.disconnect()
 
     def status(self) -> dict[str, Any]:
         is_open = bool(self._serial and self._serial.is_open)
@@ -85,6 +112,8 @@ class SerialComs:
 
     def send(self, text: str) -> dict[str, Any]:
         with self._lock:
+            if not self._serial or not self._serial.is_open:
+                return {"ok": False, "error": "serial port is not connected"}
             self._serial.write(text.encode("utf-8"))
             self._serial.flush()
         return {"ok": True, "sent_chars": len(text)}
@@ -95,13 +124,13 @@ class SerialComs:
             return {"ok": False, "error": f"unsupported reset method: {reset.method}"}
 
         with self._lock:
-            self._serial.dtr = True
+            if not self._serial or not self._serial.is_open:
+                return {"ok": False, "error": "serial port is not connected"}
+            self._serial.dtr = False
             self._serial.rts = True
-            time.sleep(0.05)
-            self._serial.rts = False
             time.sleep(reset.pulse_seconds)
-            self._serial.dtr = True
-            self._serial.rts = True
+            self._serial.dtr = False
+            self._serial.rts = False
             time.sleep(reset.settle_seconds)
 
         return {"ok": True, "method": reset.method}
@@ -111,6 +140,10 @@ class SerialComs:
 
         if command == "status":
             return self.status()
+        if command == "connect":
+            return self.connect()
+        if command == "disconnect":
+            return self.disconnect()
         if command == "reboot-board":
             return self.reboot_board()
         if command == "send":

@@ -42,7 +42,7 @@ class ServiceProcessConfig:
 
 @dataclass(frozen=True)
 class RunnerConfig:
-    startup_timeout_seconds: float = 20.0
+    startup_timeout_seconds: float = 35.0
     boot_poll_seconds: float = 1.0
     diagnostic_poll_seconds: float = 5.0
     silent_timeout_seconds: float = 60.0
@@ -99,7 +99,7 @@ def load_config(path: Path | None) -> ToolkitConfig:
             read_buffer_limit=int(telnet_data.get("read_buffer_limit", 1024 * 1024)),
         ),
         runner=RunnerConfig(
-            startup_timeout_seconds=float(runner_data.get("startup_timeout_seconds", 20.0)),
+            startup_timeout_seconds=float(runner_data.get("startup_timeout_seconds", 35.0)),
             boot_poll_seconds=float(runner_data.get("boot_poll_seconds", 1.0)),
             diagnostic_poll_seconds=float(runner_data.get("diagnostic_poll_seconds", 5.0)),
             silent_timeout_seconds=float(runner_data.get("silent_timeout_seconds", 60.0)),
