@@ -245,6 +245,11 @@ static uint16_t rp06_selected_drive_bit(const uint16_t cs2)
 	return uint16_t(1u << (cs2 & 07));
 }
 
+static bool rp06_selected_drive_present(const uint16_t cs2)
+{
+	return (cs2 & 07) == 0;
+}
+
 static uint16_t rp06_drive_status(const bool operator_stopped, const bool volume_valid)
 {
 	uint16_t ds = default_DS;
@@ -319,7 +324,7 @@ void rp06::reset(const bool hard)
 		bad_header_da = 0;
 		pack_ack_transient_ticks = 0;
 		registers[reg_num(RP06_DS)] = rp06_drive_status(operator_stopped, volume_valid);
-		registers[reg_num(RP06_AS)] = 000001;
+		registers[reg_num(RP06_AS)] = 000000;
 		registers[reg_num(RP06_DT)] = rp06_drive_type(is_rp07);
 		registers[reg_num(RP06_SN)] = 000001;
 		int_cnt = 0;
@@ -439,6 +444,13 @@ uint16_t rp06::read_word(const uint16_t addr)
 			value |= CS1_DVA;
 		if (pack_ack_transient_ticks > 0)
 			value |= CS1_IR;
+	} else if (!rp06_selected_drive_present(registers[reg_num(RP06_CS2)]) &&
+		   (addr == RP06_DS || addr == RP06_DT || addr == RP06_SN ||
+		    addr == RP06_RMLA || addr == RP06_DB || addr == RP06_MR ||
+		    addr == RP06_OFR || addr == RP06_DC || addr == RP06_CC ||
+		    addr == RP06_ERRREG1 || addr == RP06_ER2 || addr == RP06_ER3 ||
+		    addr == RP06_EC1 || addr == RP06_EC2)) {
+		value = 0;
 	} else if (addr == RP06_WC) {
 		value = registers[reg_num(RP06_WC)];
 		if (deferred_active) {
@@ -526,6 +538,14 @@ uint16_t rp06::peek_word(const uint16_t addr) const
 		if (pack_ack_transient_ticks > 0)
 			cs1 |= CS1_IR;
 		return cs1;
+	}
+	if (!rp06_selected_drive_present(registers[reg_num(RP06_CS2)]) &&
+	    (addr == RP06_DS || addr == RP06_DT || addr == RP06_SN ||
+	     addr == RP06_RMLA || addr == RP06_DB || addr == RP06_MR ||
+	     addr == RP06_OFR || addr == RP06_DC || addr == RP06_CC ||
+	     addr == RP06_ERRREG1 || addr == RP06_ER2 || addr == RP06_ER3 ||
+	     addr == RP06_EC1 || addr == RP06_EC2)) {
+		return 0;
 	}
 	if (addr == RP06_DS) {
 		uint16_t ds = rp06_drive_status(operator_stopped, volume_valid);
@@ -1000,6 +1020,10 @@ void rp06::write_word(const uint16_t addr, uint16_t v)
 	if (addr == RP06_AS) {
 		// Write-1-to-clear attention bits.
 		registers[reg_num(RP06_AS)] &= uint16_t(~v);
+		if (!registers[reg_num(RP06_AS)] && b && b->getCpu()) {
+			b->getCpu()->unqueue_interrupt(5, 0254);
+			registers[reg_num(RP06_CS1)] &= ~CS1_IR;
+		}
 		return;
 	}
 

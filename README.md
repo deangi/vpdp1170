@@ -1,6 +1,6 @@
 # vpdp1170 — a DEC PDP-11/70 emulator for the ESP32-S3 with a touch screen display.
 
-> Development status: V1.3 boots Unix V6, RSTS V4B, RT-11 V5.04,
+> Development status: V1.4 boots Unix V6, RSTS V4B, RT-11 V5.04,
 > RSX-11M V4.0 baseline, and RSX-11M V4.8 (124KW mapped) through the
 > `kek` PDP-11/70 adapter.
 > The ESP32 host side is inherited from `vpdp1140`: TFT console, touch menu,
@@ -43,7 +43,7 @@ this project.
 ## Current Bring-Up Status
 
 The active Arduino sketch reports the selected CPU engine at boot and on the
-System Info screen. For V1.3 it should report the `kek PDP-11/70 adapter` with
+System Info screen. For V1.4 it should report the `kek PDP-11/70 adapter` with
 4 MB target memory. Unix V6, RSTS V4B, RT-11 V5.04, RSX-11M V4.0 baseline, and
 RSX-11M V4.8 (11Mark) boot and accept console input. RL01/RL02 support is wired
 through the kek RL controller for DL0-DL3 testing.
@@ -58,7 +58,7 @@ through the kek RL controller for DL0-DL3 testing.
 | RSX-11M V4.8          | RL01/RL02 image      | ✅ Boots 124KW mapped system     |
 
 The Unix V6, RSTS V4B, RT-11 V5.04, RSX-11M V4.0 baseline, and RSX-11M V4.8
-rows are verified for V1.3. Broader validation on the kek PDP-11/70 path is ongoing.
+rows are verified for V1.4. Broader validation on the kek PDP-11/70 path is ongoing.
 
 ## Hardware
 

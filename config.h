@@ -2,8 +2,8 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vpdp1170"
-#define APP_VERSION     "V1.3"
-#define APP_BUILD_DATE  "2026-07-12"
+#define APP_VERSION     "V1.4"
+#define APP_BUILD_DATE  "2026-07-17"
 
 // ---- PDP core selection ----
 // 0 = inherited vpdp1140/sam11 PDP-11/40-derived scaffold.

@@ -24,7 +24,9 @@ without requiring an emulator rebuild.
 ```text
 tools/diagnostics_toolkit/
   dtk.py                 command-line entry point
+  run_xxdp_diagnostic.py one-shot serial reset/run/capture helper
   diagtoolkit/           parser and analysis modules
+  services/              SerialComs and TelnetComs JSON-lines services
   runbooks/              diagnostic runbooks by subsystem
   samples/               tiny parser fixtures, not full logs
 ```
@@ -37,6 +39,7 @@ From the `vpdp1170` repo root:
 python tools\diagnostics_toolkit\dtk.py analyze-log path\to\capture.txt
 python tools\diagnostics_toolkit\dtk.py next-action path\to\capture.txt
 python tools\diagnostics_toolkit\dtk.py run-diagnostic "R ZRJAD0" --config tools\diagnostics_toolkit\config.example.json
+python tools\diagnostics_toolkit\run_xxdp_diagnostic.py "R ZRJDE0" --reply "ENTER DATE:=17-JUL-76\r"
 ```
 
 ## Initial Commands
@@ -119,3 +122,9 @@ python tools\diagnostics_toolkit\dtkctl.py serial connect
 
 Keep build/upload as an explicit runner option so log-only diagnostic sessions
 do not accidentally rewrite the board.
+
+## Repeatable Workflow
+
+See `runbooks/diagnostic_workflow.md` for the exact reset sequence, serial and
+telnet service commands, direct diagnostic runner examples, and Arduino CLI
+build/upload commands used during the RH70/RP04-RP06 diagnostic pass.
