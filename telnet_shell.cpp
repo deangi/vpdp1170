@@ -293,6 +293,17 @@ static bool parse_int_value(const char* value, int minimum, int maximum,
   return true;
 }
 
+static bool parse_octal_value(const char* text, uint32_t maximum,
+                              uint32_t* result) {
+  if (!text || !*text || !result) return false;
+  char* end = nullptr;
+  unsigned long value = strtoul(text, &end, 8);
+  while (end && (*end == ' ' || *end == '\t')) end++;
+  if (!end || *end || value > maximum) return false;
+  *result = (uint32_t)value;
+  return true;
+}
+
 static String unquote_shell_value(const char* value) {
   String result = value ? value : "";
   if (result.length() >= 2) {
@@ -526,6 +537,8 @@ static void command_help() {
       "  rp <stop|start|status|regs> toggle RP0 STOP or dump RH70/RP06 state\r\n"
       "  create <rk|rl01|rl02|rp04|rp05|rp06> <path> create an empty disk image\r\n"
       "  set [name=value]            show/change runtime settings\r\n"
+      "  lights                      show console address/data lights\r\n"
+      "  switches [octal|bit=0|1]    show or set console switch register\r\n"
       "  tty                         show console TTY counters\r\n"
       "  monitor                     enter PDP-11 front-panel monitor\r\n"
       "  reboot                      cold reboot the PDP-11\r\n"
@@ -681,12 +694,7 @@ static void monitor_state() {
 
 static bool parse_monitor_octal(const char* text, uint32_t maximum,
                                 uint32_t* result) {
-  if (!text || !*text || !result) return false;
-  char* end = nullptr;
-  unsigned long value = strtoul(text, &end, 8);
-  if (!end || *end || value > maximum) return false;
-  *result = (uint32_t)value;
-  return true;
+  return parse_octal_value(text, maximum, result);
 }
 
 static void monitor_dump(const char* argument, bool logical) {
@@ -1279,6 +1287,76 @@ static void command_drives() {
   }
 }
 
+static void command_switches(const char* argument) {
+  uint16_t value = 0;
+  if (!pdp_core::get_console_switches(&value)) {
+    output_text("error: console switch register is unavailable\r\n");
+    return;
+  }
+
+  if (!argument || !*argument) {
+    output_printf("switches=%06o\r\n", (unsigned)value);
+    return;
+  }
+
+  char buffer[32];
+  strncpy(buffer, argument, sizeof(buffer) - 1);
+  buffer[sizeof(buffer) - 1] = 0;
+  char* equals = strchr(buffer, '=');
+  if (equals) {
+    *equals++ = 0;
+    char* bit_text = trim_in_place(buffer);
+    char* state_text = trim_in_place(equals);
+    int bit = -1;
+    bool state = false;
+    if (!parse_int_value(bit_text, 0, 15, &bit) ||
+        !parse_bool_value(state_text, &state)) {
+      output_text("usage: switches [octal|bit=0|1]\r\n");
+      return;
+    }
+    if (!pdp_core::set_console_switch(bit, state)) {
+      output_text("error: cannot set console switch\r\n");
+      return;
+    }
+  } else {
+    uint32_t new_value = 0;
+    if (!parse_octal_value(trim_in_place(buffer), 0177777u, &new_value)) {
+      output_text("usage: switches [octal|bit=0|1]\r\n");
+      return;
+    }
+    if (!pdp_core::set_console_switches((uint16_t)new_value)) {
+      output_text("error: cannot set console switches\r\n");
+      return;
+    }
+  }
+
+  if (!pdp_core::get_console_switches(&value)) {
+    output_text("error: console switch register is unavailable\r\n");
+    return;
+  }
+  output_printf("switches=%06o\r\n", (unsigned)value);
+}
+
+static void command_lights() {
+  uint16_t address = 0;
+  uint32_t physical_address = 0;
+  uint16_t data = 0;
+  uint16_t leds = 0;
+  bool data_valid = false;
+  if (!pdp_core::get_console_lights(&address, &physical_address, &data,
+                                    &data_valid, &leds)) {
+    output_text("error: console lights are unavailable\r\n");
+    return;
+  }
+  output_printf("address=%06o physical=%08o data=",
+                (unsigned)address, (unsigned)physical_address);
+  if (data_valid)
+    output_printf("%06o", (unsigned)data);
+  else
+    output_text("------");
+  output_printf(" leds=%06o\r\n", (unsigned)leds);
+}
+
 static bool unit_is_rl(const char* unit) {
   return unit && (!strncasecmp(unit, "RL", 2) || !strncasecmp(unit, "DL", 2));
 }
@@ -1467,6 +1545,11 @@ static void execute_command(char* line) {
   else if (!strcasecmp(words[0], "create"))
     command_create(count > 1 ? words[1] : nullptr,
                    count > 2 ? words[2] : nullptr);
+  else if (!strcasecmp(words[0], "switches") ||
+           !strcasecmp(words[0], "switch"))
+    command_switches(count > 1 ? words[1] : nullptr);
+  else if (!strcasecmp(words[0], "lights"))
+    command_lights();
 #if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
   else if (!strcasecmp(words[0], "tty"))
     command_tty_stats();

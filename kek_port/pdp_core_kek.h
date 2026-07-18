@@ -47,6 +47,12 @@ bool get_interrupt_summary(uint16_t* psw, bool* any_pending,
 // us_since_tick: guest instructions since the last KW11-L tick (not wall us).
 bool get_kw11l_summary(uint16_t* csr, uint32_t* us_since_tick,
                        bool* irq_queued);
+bool get_console_switches(uint16_t* value);
+bool set_console_switches(uint16_t value);
+bool set_console_switch(int bit, bool state);
+bool get_console_lights(uint16_t* address, uint32_t* physical_address,
+                        uint16_t* data, bool* data_valid,
+                        uint16_t* leds);
 
 void set_boot_kind(int kind);
 void set_trace(bool enabled);

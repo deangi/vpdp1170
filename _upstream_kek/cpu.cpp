@@ -103,6 +103,10 @@ void cpu::reset()
 	last_instruction_pc = 0;
 	last_instruction_word = 0;
 	last_instruction_phys = 0;
+	previous_instruction_valid = false;
+	previous_instruction_pc = 0;
+	previous_instruction_word = 0;
+	previous_instruction_phys = 0;
 	kw11l_counter         = 0;
 }
 
@@ -162,6 +166,32 @@ void cpu::set_registerLowByte(const int nr, const word_mode_t word_mode, const u
 	}
 }
 
+bool cpu::check_stack_limit_write(const gam_rc_t & g)
+{
+	if (!g.stack_ref || !g.is_addr || getPSW_runmode() != 0)
+		return true;
+
+	const uint16_t slr = stack_limit_register & 0177400;
+	const bool red_zone = g.addr < (slr + 0340) || g.addr >= 0177776;
+	const bool yellow_zone = !red_zone && g.addr < (slr + 0400);
+
+	if (!red_zone && !yellow_zone)
+		return true;
+
+	if (yellow_zone) {
+		delayed_trap = 04;
+		any_queued_interrupts = true;
+		mmu_->setCPUERRBit(3);  // CPUE_YEL = 0010
+		return true;
+	}
+
+	set_register(6, 4);
+	mmu_->setCPUERRBit(2);  // CPUE_RED = 0004
+	delayed_trap = 04;
+	any_queued_interrupts = true;
+	return false;
+}
+
 bool cpu::put_result(const gam_rc_t & g, const uint16_t value)
 {
 	if (g.is_addr == false) {
@@ -169,6 +199,9 @@ bool cpu::put_result(const gam_rc_t & g, const uint16_t value)
 
 		return true;
 	}
+
+	if (!check_stack_limit_write(g))
+		return false;
 
 	return b->write(g.addr, g.word_mode, value, getPSW_runmode(), g.space) == false;
 }
@@ -308,7 +341,11 @@ void cpu::setPSW(const uint16_t v, const bool limited)
 	if (limited) {
 		int cur_mode  = std::max( v >> 14,       psw >> 14);
 		int prev_mode = std::max((v >> 12) & 3, (psw >> 12) & 3);
-		psw = (psw & 004340) | (v & 037) | (cur_mode << 14) | (prev_mode << 12);
+		if (cur_mode == 2)
+			cur_mode = 3;
+		if (prev_mode == 2)
+			prev_mode = 3;
+		psw = (psw & 004340) | (v & 004037) | (cur_mode << 14) | (prev_mode << 12);
 	}
 	else {
 		psw = v & 0174377;  // mask off reserved bits
@@ -379,7 +416,7 @@ void cpu::execute_any_pending_interrupt()
 	// PDP-11_70_Handbook_1977-78.pdf page 1-5, "processor priority"
 	uint8_t start_level   = current_level + 1;
 
-	for(uint8_t i=0; i < 8; i++) {
+	for(int i=7; i >= 0; i--) {
 		if (queued_interrupts[i].empty() == false) {
 			any_queued_interrupts = true;
 
@@ -389,6 +426,8 @@ void cpu::execute_any_pending_interrupt()
 			auto     vector = queued_interrupts[i].begin();
 			uint16_t v      = *vector;
 			queued_interrupts[i].erase(vector);
+			if (v == 0240)
+				mmu_->clearPIRRequest((uint8_t)i);
 
 			if (cnsl) {
 				if (v == 0100) {  // 50 Hz interrupt
@@ -509,13 +548,15 @@ void cpu::add_to_MMR1(const int reg, const int delta)
 gam_rc_t cpu::getGAM(const uint8_t mode, const uint8_t reg, const word_mode_t word_mode, const bool read_value)
 {
 	d_i_space_t isR7_space = reg == 7 ? i_space : d_space;
-	gam_rc_t    g { word_mode, isR7_space, !!mode, 0, { } };
+	gam_rc_t    g { word_mode, isR7_space, !!mode, 0, { }, false };
 
 	if (mode == 0) {
 		g.reg   = reg;
 		g.value = get_register(reg) & word_mode_mask[word_mode];
 		return g;
 	}
+
+	g.stack_ref = reg == 6;
 
 	d_i_space_t read_space = d_space;
 	int         run_mode   = getPSW_runmode();
@@ -584,6 +625,8 @@ bool cpu::putGAM(const gam_rc_t & g, const uint16_t value)
 	assert(value < 256 || g.word_mode == wm_word);
 
 	if (g.is_addr) {
+		if (!check_stack_limit_write(g))
+			return false;
 		auto rc = b->write(g.addr, g.word_mode, value, getPSW_runmode(), g.space);
 		return rc == false;
 	}
@@ -831,7 +874,8 @@ bool cpu::additional_double_operand_instructions(const uint16_t instr)
 		case 1: { // DIV
 				auto    R2g     = getGAM(dst_mode, dst_reg, wm_word);
 				int16_t divider = R2g.value;
-				int32_t R0R1    = (uint32_t(get_register(reg)) << 16) | get_register(reg | 1);
+				int32_t R0R1    = (int32_t(int16_t(get_register(reg))) << 16) |
+				                   get_register(reg | 1);
 
 				if (divider == 0) {  // divide by zero
 					setPSW_n(false);
@@ -2088,8 +2132,11 @@ bool cpu::jsr_instruction(const uint16_t instr)
 		return false;
 
 	int dst_mode = (instr >> 3) & 7;
-	if (dst_mode == 0)  // cannot jump to a register
-		return false;
+	if (dst_mode == 0) {  // cannot jump to a register
+		instruction_active = false;
+		trap(004);
+		return true;
+	}
 
 	int      dst_reg   = instr & 7;
 	uint16_t dst_value = 0;
@@ -2139,6 +2186,7 @@ bool cpu::misc_operations(const uint16_t instr)
 				*event = EVENT_HALT;
 			}
 			else {
+				mmu_->setCPUERRBit(7);  // CPUE_HALT = 0200
 				instruction_active = false;
 				trap(4);
 			}
@@ -2235,8 +2283,11 @@ bool cpu::misc_operations(const uint16_t instr)
 
 	if ((instr & ~0b111111) == 0b0000000001000000) { // JMP
 		int dst_mode = (instr >> 3) & 7;
-		if (dst_mode == 0)  // cannot jump to a register
-			return false;
+		if (dst_mode == 0) {  // cannot jump to a register
+			instruction_active = false;
+			trap(004);
+			return true;
+		}
 
 		int dst_reg = instr & 7;
 
@@ -2318,7 +2369,11 @@ void cpu::trap(uint16_t vector, const int new_ipl, const bool is_interrupt)
 				trap_pc_override.reset();
 			}
 			else {
-				before_pc = is_interrupt == false && instruction_active ? instruction_pc : getPC();
+				// For traps detected after instruction fetch/decode, the PDP-11
+				// stacks the PC after the opcode and any extension words already
+				// consumed. Instruction-fetch faults can override this with the
+				// offending instruction PC.
+				before_pc = getPC();
 			}
 
 			// make sure the trap vector is retrieved from kernel space
@@ -3491,6 +3546,10 @@ bool cpu::step()
 		mmu_->MMRStartInstruction(instruction_pc);
 		auto instruction_meta = mmu_->calculate_physical_address(getPSW_runmode(), pc);
 		uint16_t instr = b->read_word(pc);
+		previous_instruction_valid = last_instruction_valid;
+		previous_instruction_pc = last_instruction_pc;
+		previous_instruction_word = last_instruction_word;
+		previous_instruction_phys = last_instruction_phys;
 		last_instruction_valid = true;
 		last_instruction_pc = instruction_pc;
 		last_instruction_word = instr;
@@ -3552,6 +3611,25 @@ bool cpu::get_last_instruction_physical(uint32_t *address) const
 		return false;
 
 	*address = last_instruction_phys;
+	return true;
+}
+
+bool cpu::get_previous_instruction(uint16_t *address, uint16_t *opcode) const
+{
+	if (!previous_instruction_valid || !address || !opcode)
+		return false;
+
+	*address = previous_instruction_pc;
+	*opcode = previous_instruction_word;
+	return true;
+}
+
+bool cpu::get_previous_instruction_physical(uint32_t *address) const
+{
+	if (!previous_instruction_valid || !address)
+		return false;
+
+	*address = previous_instruction_phys;
 	return true;
 }
 

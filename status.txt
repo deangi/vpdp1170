@@ -46,4 +46,77 @@ EMU Status PDP 11/40
 - mp30 rp06   - fail - home block not found - problem with addresses
 - mp87 rp06   - fail - SAV -- Booted device not in system - DB 176700
 - mp4687 rp06 - fail - SAV -- Booted device not in system - DB 176700
-- m70 rp06    - 
+- m70 rp06    - fail - not a real boot image?
+
+15-July-2026
+- MMU changes - XXDP25 now boots
+
+TODO:
+1) speedup
+2) fixed - pdp reboot from halt doesn't working
+3) add pill for RP06 - find room
+4) Big display version
+5) Telnet is laggy
+
+
+https://thd.co/4gKhEG8 tracking no 17948803, order no WN63962645  Home Depot
+20 July-2026
+
+18-July-2026 - Diagnostics checkpoint / compressed context
+
+Current focus: shelved FK series; running 11/70 EK CPU/core diagnostics.
+
+Test progress:
+- EKBAD0 - PASS by TFT "END PASS:".
+- EKBBF0 - currently runs to the console-switch-7 manual checkpoint.  It does
+  not pass yet, but the pre-switch failure list is much smaller after fixes.
+- Latest capture: build/captures/ekbbf0_fixes4_to_switch7.txt
+
+EKBBF0 failures fixed before the switch-7 checkpoint:
+- Stack-limit/red-zone cluster fixed enough to clear the prior TEST 36/40
+  reports.  General SP-based writes now participate in stack-limit handling,
+  including the 177776 red-zone case noted by PCjs for EKBBF0.
+- Unibus/no-such-I/O timeout CPUERR bit 0020 now latches on unhandled I/O page
+  read/write probes; prior "UNIBUS TIMEOUT BIT ... DIDN'T SET" is gone.
+- Illegal HALT outside kernel mode now latches CPUERR bit 0200; prior TEST 62
+  report is gone.
+- RTI/RTT limited PSW restoration now preserves/protects mode and register-set
+  bits closely enough to clear the prior TEST 61 reports.
+- PIR writes now queue PIRQ vector 0240, PIRQ acceptance clears the matching PIR
+  request bit, and interrupt selection scans highest pending level first.
+
+New telnet shell diagnostic controls:
+- switches
+- switches 7=1 / switches 7=0
+- lights
+
+Known automation caveat:
+- Closing/opening COM18 can pulse board reset lines.  For diagnostic runners,
+  keep the serial port open while a test is running and leave DTR=false,
+  RTS=false before cleanup.
+- Enter telnet shell with ESC>> only when telnet is attached to the PDP
+  console.  If already in the management shell, send shell commands directly.
+
+Remaining EKBBF0 failures before switch-7 checkpoint:
+- TEST 014 DIV/condition-code cluster:
+  "CC'S DIDN'T LOAD PROPERLY", GRAJ/R0/R1 mismatch, and "BAD CC'S ON DIV
+  OVERFLOW".  A signed 32-bit DIV dividend fix has been applied and flashed, but
+  the diagnostic still reports the same TEST 014 failures.
+- TEST 032: "TMCC PRIORITY CLEAR DIDN'T GO LOW..." remains after CPUERR timeout
+  fix.
+- TEST 045: one PS04/RTT/honor-T report remains.
+- TEST 047: reduced PIRQ/priority reports remain at 024350 and 025752.
+- Console lights checkpoint: address lights match 032236.  The current lights
+  command reads current PC/current instruction plus the console LED latch; the
+  diagnostic expected data lights 166667, so true 11/70 panel data-light
+  semantics may need separate modeling.
+
+Planned next tests/work:
+1) Continue EKBBF0 by driving switch 7 and subsequent "type a character"
+   prompts from the diagnostic toolkit.
+2) Add focused instrumentation for TEST 014 around DIV inputs/results/PSW at
+   ERRORPC 012110/012202/012546.
+3) Add focused instrumentation for PIR/PIRQ accept/clear timing and CPUERR
+   priority clear around TEST 032/045/047.
+4) After EKBBF0 is clean or classified, continue EK sequence with EKBEE1 and
+   EKBFD1.

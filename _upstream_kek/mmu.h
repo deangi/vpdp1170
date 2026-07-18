@@ -134,6 +134,10 @@ public:
 
 	uint16_t getPIR() const { return PIR; };
 	void     setPIR(const uint16_t v) { PIR = v; }
+	void     clearPIRRequest(const uint8_t level) {
+		if (level > 0 && level < 8)
+			PIR &= ~(uint16_t(1) << (level + 8));
+	}
 
 	uint16_t read_par(const uint32_t a, const int run_mode);
 	uint16_t read_pdr(const uint32_t a, const int run_mode);

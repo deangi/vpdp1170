@@ -436,6 +436,16 @@ static void clear_trace_ring() {
   g_trace_frozen = false;
 }
 
+static void clear_run_state_for_boot() {
+  store_event(EVENT_NONE);
+  g_paused = false;
+  g_trace_remaining = 0;
+  g_last_clock_instr = 0;
+  g_last_wait_clock_ms = 0;
+  g_panic_trace_dumped = false;
+  g_trace_frozen = false;
+}
+
 static bool ensure_trace_ring() {
   if (g_trace_ring) return true;
 
@@ -827,6 +837,35 @@ static bool capture_last_instruction_trace_entry(TraceEntry* entry) {
   return true;
 }
 
+static bool capture_previous_instruction_trace_entry(TraceEntry* entry) {
+  if (!entry || !g_bus || !g_cpu) return false;
+
+  uint16_t actual_pc = 0;
+  uint16_t actual_opcode = 0;
+  if (!g_cpu->get_previous_instruction(&actual_pc, &actual_opcode))
+    return false;
+
+  entry->valid = true;
+  entry->pc = actual_pc;
+  entry->opcode = actual_opcode;
+  entry->phys_pc = 0;
+  g_cpu->get_previous_instruction_physical(&entry->phys_pc);
+  entry->psw = g_cpu->getPSW();
+  for (int i = 0; i < 7; i++) {
+    entry->regs[i] = g_cpu->get_register(i);
+  }
+
+  if (entry->pc & 1) {
+    snprintf(entry->disasm, sizeof(entry->disasm), "ODD-PC");
+    return true;
+  }
+
+  describe_actual_opcode_at(entry->pc, entry->phys_pc, actual_opcode,
+                            entry->disasm, sizeof(entry->disasm));
+
+  return true;
+}
+
 static void print_trace_entry(const char* prefix, const TraceEntry& entry) {
   if (!entry.valid) return;
   LOG("%s PC=%06o P=%08o ins=%06o PS=%06o R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s",
@@ -877,6 +916,12 @@ static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
            current.valid ? (unsigned)current.opcode : 0,
            current.valid ? (unsigned)current.psw : 0,
            current.valid ? current.disasm : "");
+      TraceEntry previous {};
+      if (capture_previous_instruction_trace_entry(&previous))
+        print_trace_entry("kek previous:", previous);
+      TraceEntry last {};
+      if (capture_last_instruction_trace_entry(&last))
+        print_trace_entry("kek last:", last);
       if (current.valid && g_cpu && g_bus) {
         LOGE("kek HALT regs R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o",
              (unsigned)current.regs[0], (unsigned)current.regs[1],
@@ -1049,10 +1094,8 @@ uint32_t target_memory_bytes() {
 
 void reset() {
   if (!g_cpu) return;
-  store_event(EVENT_NONE);
+  clear_run_state_for_boot();
   g_cpu->reset();
-  g_last_clock_instr = 0;
-  g_last_wait_clock_ms = 0;
   kek_kwp::reset();
   clear_trace_ring();
   install_boot_stub();
@@ -1060,11 +1103,11 @@ void reset() {
 
 void cold_boot() {
   if (!g_bus || !g_cpu) return;
-  store_event(EVENT_NONE);
+  clear_run_state_for_boot();
+  if (g_bus->getRAM())
+    g_bus->getRAM()->reset(true);
   g_bus->reset(true);
   g_cpu->reset();
-  g_last_clock_instr = 0;
-  g_last_wait_clock_ms = 0;
   kek_kwp::reset();
   clear_trace_ring();
   install_boot_stub();
@@ -1295,6 +1338,55 @@ bool get_kw11l_summary(uint16_t* csr, uint32_t* us_since_tick,
   *us_since_tick = g_last_clock_instr == 0 ? 0 :
       (uint32_t)(instr_now - g_last_clock_instr);
   *irq_queued = g_cpu->has_queued_interrupt(6, 0100);
+  return true;
+}
+
+bool get_console_switches(uint16_t* value) {
+  if (!g_bus || !value) return false;
+  *value = g_bus->get_console_switches();
+  return true;
+}
+
+bool set_console_switches(uint16_t value) {
+  if (!g_bus) return false;
+  g_bus->set_console_switches(value);
+  return true;
+}
+
+bool set_console_switch(int bit, bool state) {
+  if (!g_bus || bit < 0 || bit > 15) return false;
+  g_bus->set_console_switch(bit, state);
+  return true;
+}
+
+bool get_console_lights(uint16_t* address, uint32_t* physical_address,
+                        uint16_t* data, bool* data_valid,
+                        uint16_t* leds) {
+  if (!g_bus || !g_cpu || !g_bus->getMMU() || !address ||
+      !physical_address || !data || !data_valid || !leds) {
+    return false;
+  }
+
+  *address = g_cpu->getPC();
+  *physical_address = *address;
+  *data = 0;
+  *data_valid = false;
+  *leds = g_bus->get_console_leds();
+
+  try {
+    int run_mode = g_cpu->getPSW_runmode();
+    memory_addresses_t rc =
+        g_bus->getMMU()->calculate_physical_address(run_mode, *address);
+    *physical_address = rc.physical_instruction;
+    auto current_instr = g_bus->peek_word(run_mode, *address);
+    if (current_instr.has_value()) {
+      *data = current_instr.value();
+      *data_valid = true;
+    }
+  } catch (...) {
+    return true;
+  }
+
   return true;
 }
 

@@ -606,6 +606,7 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 	const uint32_t physical_io_addr = mmu_->get_io_base() + ((uint32_t)a - 0160000);
 	DOLOG(log_ss::LS_BUS_IO, "READ-I/O UNHANDLED read %08o/%06o (%c), (base: %o)", physical_io_addr, a, word_mode == wm_byte ? 'B' : ' ', mmu_->get_io_base());
 
+	mmu_->setCPUERRBit(4);  // CPUE_TMO = 0020
 	c->trap(004, -1, true);  // no-such-I/O probes must resume after the faulting instruction
 	throw 1;
 
@@ -798,6 +799,7 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 		DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O set PIR: %06o", value);
 
 		value &= 0177000;
+		uint16_t request_bits = value;
 
 		int bits = value >> 9;
 
@@ -807,6 +809,11 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 		}
 
 		mmu_->setPIR(value);
+		for (uint8_t level = 1; level < 8; level++) {
+			c->unqueue_interrupt(level, 0240);
+			if (request_bits & (1u << (level + 8)))
+				c->queue_interrupt(level, 0240);
+		}
 
 		return false;
 	}
@@ -922,6 +929,7 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 		throw 8;
 	}
 
+	mmu_->setCPUERRBit(4);  // CPUE_TMO = 0020
 	c->trap(004, -1, true);  // no-such-I/O probes must resume after the faulting instruction
 
 	throw 9;

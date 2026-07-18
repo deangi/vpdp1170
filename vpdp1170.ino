@@ -125,6 +125,28 @@ static void tft_status(int row, const char* label, const char* value, uint16_t c
   tft.print(value);
 }
 
+static void apply_runtime_pdp_config() {
+  dd11::v4b_quirks_enabled = cfg.v4b_quirks;
+  dd11::set_io_trace((uint32_t)(cfg.diag_io_trace < 0
+                                  ? 0 : cfg.diag_io_trace));
+  kw11::set_clock_trace((uint32_t)(cfg.diag_clock_trace < 0
+                                     ? 0 : cfg.diag_clock_trace));
+  kl11::set_console_trace((uint32_t)(cfg.diag_console_trace < 0
+                                      ? 0 : cfg.diag_console_trace));
+#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
+  kek_tty_set_trace((uint32_t)(cfg.diag_console_trace < 0
+                                ? 0 : cfg.diag_console_trace));
+#endif
+  pdp_core::set_dl_trace((uint32_t)(cfg.diag_dl_trace < 0
+                                      ? 0 : cfg.diag_dl_trace));
+  pdp_core::set_rp_trace((uint32_t)(cfg.diag_rp_trace < 0
+                                      ? 0 : cfg.diag_rp_trace));
+  kwp::enabled             = cfg.kwp_enabled;
+  pdp_core::set_trace(cfg.diag_trace);
+  kl11::serial_in_delay_ms = (uint32_t)(cfg.diag_serialdelay_ms < 0 ? 0
+                                      : cfg.diag_serialdelay_ms);
+}
+
 // Row map for the boot status display:
 //   row 0 = PSRAM
 //   row 1 = SD card
@@ -226,28 +248,8 @@ static void sd_and_config_init() {
   dl11_file::set_enabled(cfg.serial1_enabled);
   emu_control::init();
 
-  // Push the V4B-quirks flag down to dd11 so its probe-absorb ranges
-  // honor what pdpconfig.ini said. Must happen before cpu_reset() / any
-  // guest memory access.
-  dd11::v4b_quirks_enabled = cfg.v4b_quirks;
-  dd11::set_io_trace((uint32_t)(cfg.diag_io_trace < 0
-                                  ? 0 : cfg.diag_io_trace));
-  kw11::set_clock_trace((uint32_t)(cfg.diag_clock_trace < 0
-                                     ? 0 : cfg.diag_clock_trace));
-  kl11::set_console_trace((uint32_t)(cfg.diag_console_trace < 0
-                                      ? 0 : cfg.diag_console_trace));
-#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
-  kek_tty_set_trace((uint32_t)(cfg.diag_console_trace < 0
-                                ? 0 : cfg.diag_console_trace));
-#endif
-  pdp_core::set_dl_trace((uint32_t)(cfg.diag_dl_trace < 0
-                                      ? 0 : cfg.diag_dl_trace));
-  pdp_core::set_rp_trace((uint32_t)(cfg.diag_rp_trace < 0
-                                      ? 0 : cfg.diag_rp_trace));
-  kwp::enabled             = cfg.kwp_enabled;
-  pdp_core::set_trace(cfg.diag_trace);
-  kl11::serial_in_delay_ms = (uint32_t)(cfg.diag_serialdelay_ms < 0 ? 0
-                                      : cfg.diag_serialdelay_ms);
+  // Push pdpconfig.ini runtime flags down before cpu_reset() / guest I/O.
+  apply_runtime_pdp_config();
 
   // Show the boot drive's image path (e.g. "Boot DL0:" / "Boot RK0:").
   char boot_label[16];
@@ -422,6 +424,22 @@ static void start_cpu(bool cold) {
   if (cfg.boot_input_len)
     LOG("console: injected %u boot input bytes", (unsigned)cfg.boot_input_len);
   console_force_redraw();   // render_task repaints the whole console + status bar
+}
+
+static bool reload_pdp_config_and_mount(const char* reason) {
+  if (!sd_ok) {
+    LOGE("%s: SD not available; cannot reload /pdpconfig.ini", reason);
+    apply_runtime_pdp_config();
+    return false;
+  }
+
+  bool pdp_existed = config_load_pdp(cfg);
+  LOG("%s: %s /pdpconfig.ini", reason,
+      pdp_existed ? "reloaded" : "wrote default");
+  config_print(cfg);
+  apply_runtime_pdp_config();
+  disks_mount();
+  return true;
 }
 
 // ---- mutex-guarded UI calls (menu state is shared core1 <-> core0) ----
@@ -707,15 +725,15 @@ void loop() {
   emu_control::poll();
   telnet_shell_poll();
   if (emu_control::consume_reboot_request()) {
-    LOG("EMU command: reboot PDP-11");
+    LOG("EMU command: reboot PDP-11 from /pdpconfig.ini");
     dl11_file::disconnect_all();
-    if (disk_reopen_all()) {
+    if (reload_pdp_config_and_mount("EMU reboot")) {
       pdp_core::set_boot_kind(cfg.core_boot_kind());
       start_cpu(true);
       boot_done = false;
       led(0, 0, 32);
     } else {
-      LOGE("EMU reboot cancelled: one or more disk images could not be reopened");
+      LOGE("EMU reboot cancelled: /pdpconfig.ini drives could not be mounted");
     }
   }
 
@@ -732,14 +750,15 @@ void loop() {
 
   // "Reboot PDP-11" from the menu (the menu has already closed itself).
   if (ui_consume_reboot()) {
-    LOG("ui: reboot PDP-11");
-    if (disk_reopen_all()) {
+    LOG("ui: reboot PDP-11 from /pdpconfig.ini");
+    dl11_file::disconnect_all();
+    if (reload_pdp_config_and_mount("ui reboot")) {
       pdp_core::set_boot_kind(cfg.core_boot_kind());
       start_cpu(true);
       boot_done = false;
       led(0, 0, 32);
     } else {
-      LOGE("ui: reboot cancelled: one or more disk images could not be reopened");
+      LOGE("ui: reboot cancelled: /pdpconfig.ini drives could not be mounted");
     }
   }
 

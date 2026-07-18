@@ -116,6 +116,21 @@ inline bool get_kw11l_summary(uint16_t* csr, uint32_t* us_since_tick,
                               bool* irq_queued) {
   return pdp_core_kek::get_kw11l_summary(csr, us_since_tick, irq_queued);
 }
+inline bool get_console_switches(uint16_t* value) {
+  return pdp_core_kek::get_console_switches(value);
+}
+inline bool set_console_switches(uint16_t value) {
+  return pdp_core_kek::set_console_switches(value);
+}
+inline bool set_console_switch(int bit, bool state) {
+  return pdp_core_kek::set_console_switch(bit, state);
+}
+inline bool get_console_lights(uint16_t* address, uint32_t* physical_address,
+                               uint16_t* data, bool* data_valid,
+                               uint16_t* leds) {
+  return pdp_core_kek::get_console_lights(address, physical_address, data,
+                                          data_valid, leds);
+}
 
 inline void set_boot_kind(int kind) { pdp_core_kek::set_boot_kind(kind); }
 inline void set_trace(bool enabled) { pdp_core_kek::set_trace(enabled); }
@@ -182,6 +197,11 @@ inline bool get_interrupt_summary(uint16_t*, bool*, uint8_t[8],
   return false;
 }
 inline bool get_kw11l_summary(uint16_t*, uint32_t*, bool*) { return false; }
+inline bool get_console_switches(uint16_t*) { return false; }
+inline bool set_console_switches(uint16_t) { return false; }
+inline bool set_console_switch(int, bool) { return false; }
+inline bool get_console_lights(uint16_t*, uint32_t*, uint16_t*, bool*,
+                               uint16_t*) { return false; }
 
 inline void set_boot_kind(int) {}
 inline void set_trace(bool) {}
@@ -248,6 +268,11 @@ inline bool get_interrupt_summary(uint16_t*, bool*, uint8_t[8],
   return false;
 }
 inline bool get_kw11l_summary(uint16_t*, uint32_t*, bool*) { return false; }
+inline bool get_console_switches(uint16_t*) { return false; }
+inline bool set_console_switches(uint16_t) { return false; }
+inline bool set_console_switch(int, bool) { return false; }
+inline bool get_console_lights(uint16_t*, uint32_t*, uint16_t*, bool*,
+                               uint16_t*) { return false; }
 
 inline void set_boot_kind(int kind) { cpu_set_boot_kind(kind); }
 inline void set_trace(bool enabled) { cpu_set_trace(enabled); }

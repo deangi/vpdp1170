@@ -39,6 +39,7 @@ typedef struct {
 	};
 
 	uint16_t       value;
+	bool           stack_ref;
 } gam_rc_t;
 
 class cpu
@@ -65,6 +66,10 @@ private:
 	uint16_t last_instruction_pc    { 0     };
 	uint16_t last_instruction_word  { 0     };
 	uint32_t last_instruction_phys  { 0     };
+	bool     previous_instruction_valid { false };
+	uint16_t previous_instruction_pc    { 0     };
+	uint16_t previous_instruction_word  { 0     };
+	uint32_t previous_instruction_phys  { 0     };
 	uint64_t trap_counter       { 0     };
 	std::unordered_map<uint16_t, uint32_t> trap_counts;
 	uint64_t instructions_executed { 0  };
@@ -96,6 +101,7 @@ private:
 
 	uint16_t add_register(const int nr, const uint16_t value);
 	void     add_to_MMR1(const int reg, const int delta);
+	bool     check_stack_limit_write(const gam_rc_t & g);
 
 	gam_rc_t getGAM(const uint8_t mode, const uint8_t reg, const word_mode_t word_mode, const bool read_value = true);
 	gam_rc_t getGAMAddress(const uint8_t mode, const int reg, const word_mode_t word_mode);
@@ -155,6 +161,8 @@ public:
 	bool     step ();
 	bool     get_last_instruction(uint16_t *address, uint16_t *opcode) const;
 	bool     get_last_instruction_physical(uint32_t *address) const;
+	bool     get_previous_instruction(uint16_t *address, uint16_t *opcode) const;
+	bool     get_previous_instruction_physical(uint32_t *address) const;
 
 	uint64_t get_instructions_executed_count() const { return instructions_executed; }
 	bool     is_waiting() const { return waiting; }
