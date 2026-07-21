@@ -286,15 +286,16 @@ memory_addresses_t mmu::calculate_physical_address(const int run_mode, const uin
 		return { a, apf, a, is_psw, a, is_psw };
 	}
 
-	int      page_index           = calc_par_pdr_index(run_mode, d_space, apf);
-	uint32_t physical_instruction = get_physical_memory_offset(page_index + 0);
-	uint32_t physical_data        = get_use_data_space(run_mode) ?
-					get_physical_memory_offset(page_index + 8) : physical_instruction;
-
 	uint16_t p_offset = a & 8191;  // page offset
+	// I-space PAR for instruction stream; D-space PAR only when that mode's
+	// split I/D is enabled in MMR3 (else data uses I-space, matching bus::read).
+	const int i_index = calc_par_pdr_index(run_mode, i_space, apf);
+	const int d_index = calc_par_pdr_index(run_mode, d_space, apf);
 
-	physical_instruction += p_offset;
-	physical_data        += p_offset;
+	uint32_t physical_instruction = get_physical_memory_offset(i_index) + p_offset;
+	uint32_t physical_data        = get_use_data_space(run_mode) ?
+					get_physical_memory_offset(d_index) + p_offset :
+					physical_instruction;
 
 	if ((getMMR3() & 16) == 0) {  // offset is 18bit
 		physical_instruction &= 0x3ffff;

@@ -42,7 +42,586 @@ EMU Status PDP 11/40
 - rsts7       - fail - rl does not interrupt
 - unix7       - runs to # prompt   "boot, rl(0,0)rl2unix"
 - 211bsd      - fails - "just hit enter to boot at : prompt" Boot: bootdev=03400 bootcsr=0174400 abort() was called at PC 0x420b11c3 on core 1
-- mp46 rl02   - fail - boots, but crashes in startup.cmd
+- mp46 rl02   - PASS past BE.NCT (2026-07-21 iter53): boots MOU/@STARTUP
+    through Mentec startup to **Time and date :** after FP11 mode-0 fix
+    (STF AC1,AC5 no longer clobbers general R5). Prior fail was
+    FACILITY=000314 BF.ACC / ERROR=000211 BE.NCT ("No Current Task") —
+    ACC reporter after switcher left no current task; root cause was
+    kek fp_write_operand mode 0 writing CPU Rn. Soft delta remains:
+    ACTHD pool slot 060320 vs SIMH 060350.
+    2026-07-21: RSX watch instrumentation stripped (PC gates / R5zero /
+    CLRT0 / ACTHD twin / preselect trails) for full-speed progress past
+    the date/time prompt; FP11 fix retained in _upstream_kek/cpu.cpp.
+    Official (AA-FD11A-TC CDA Ref Manual App. D): BE.NCT=000211
+    "No current task" under Internal Inconsistency (code class 2);
+    BF.ACC=000314 "System resource accounting" under Executive
+    facility codes (class 3). Matches our FACILITY/ERROR pair.
+  Investigation (2026-07-13, resumed 2026-07-17):
+  Rejected:
+    - KW11-P / KW11-L wall-clock storm (gate-on still faulted; now
+      emulator-time 11667 instr/tick).
+    - Terminal inquire / ESC Z / dumb KL11 (not causal).
+    - $TKTCB CLR→0 / MMU alias of VA 001060 (mismatches=0; never CLR→0).
+    - Mode-7 "CLR @001060" clearing $TKTCB — actually CLR @$TKTCB peals
+      to Null TCB@051100 T.LNK, not the pointer cell.
+  Settled layout (this RL02SY image): $TKTCB@001060, $ACTHD@001032.
+  Finding: switch aborts at 007040 BPL after map load. PS after TSTB has
+    Z=1 (byte looked zero) while old peeks showed ST2=005726 T2.HLT=1 —
+    peek_word used D-space PARs even with kernel D disabled (MMR3=000060);
+    guest data uses I-space. Fixed calculate_physical_address (2-arg) +
+    peek_kernel_word to match bus::read.
+  2026-07-17: run broke on CLR @$TKTCB with MMR0=100025 / KDSA2 fail /
+    stop PC=040064 — false lead. Watch broke mid-switch on CLR (normal),
+    then peek via calculate_physical_address(D) called verify_page_access
+    on empty KDSA → trap(0250) + MMR0 non-resident encoding. Fixed:
+    side-effect-free PAR peek; break only on 007040→abort or empty MOV
+    peal (R5=0), not CLR.
+  Real hit after flash: switch-BPL at 007040→007054, R5=SAVT0@057210,
+    ST2I=000000 (KISA PA=057244 honest), T2.HLT=0, MMR0 clean.
+    Arm dump (2026-07-17):
+      BPL @007054: JMP → 004646 (shared epilogue; no $TKTCB→R5)
+      BMI @007042: MOV @#001046,@#172354 ; JSR 045630 (finish-switch)
+    ST2 crumbs: after 005172 ST2=000001 (WFR); after 005460/005466 →0.
+    Ring also shows ATL-head short path: 005524 CMP R5,$ACTHD equal →
+    005532 JMP 006420, skipping 005534..; then TCB+116=0 and R4=0
+    (CLR'd at 005474) → fall into 007034 with ST2=0 → BPL abort.
+    Crumbs confirm: 005176→005200 (no HLT); 005532→006420 short path;
+    TCB+116=0 R4=0 → 007034 abort. Skip @005534 starts 000662 BR→005702
+    then MOV 72(R3),R2 / MOV (R1)+,(R2)+ APR copy — map load when
+    R5!=ACTHD. Skipping it for ATL head is intentional; it is NOT where
+    T2.HLT is set. Success for this entry needs T2.HLT after DEC, or
+    nonzero R4 / TCB+116 to avoid 007034. SAVT0 had only T2.WFR (set at
+    043572 BIS #1) + STAT=000000 — wait-for without blocking STAT bits.
+    2026-07-18 flash (full crumbs):
+      WFR-BIS @043572: STAT=0 ST2=000001 WFR=1 SEF=0 HLT=0
+        TCB+066=000001 (EF mask) TCB+070=057232  $TKTCB=Null $ACTHD=SAVT0
+      map-body @005702 starts 000046 / touches TCB+116 (skipped for ATL head)
+      R4nz @006464 (when R4!=0): MOV R5,R0; ADD #16; JSR — real install
+        path we never reach because 005474 CLR R4 + short-path skip.
+      Conclusion (superseded in part by WFR-code dump): wait left WFR-only.
+      2026-07-18 WFR-code dump:
+        @043520..043550 is a different RTS validator (TST/CMP #12000x), NOT
+        the wait body — no missing SEF there. Real body is ring 043566:
+        BIC #1,R1; BIS #1,T.ST2; MOV R0,TCB+066; MOV R1,TCB+070; JMP.
+        That matches $DRWSE/WSIG (T2.WFR only; T2.SEF is for WTSE/STSE).
+        Rejected: "forgot to BIS #T2.SEF in wait prologue".
+      New focus: switcher @005200 tests via TCB+066 then BNE→005404 (same
+        sink as HLT BMI). After WSIG, TCB+066=000001 always — if that test
+        means "nonzero → wake", pealing SAVT0 always clears WFR then ATL-head
+        short path aborts (R4=0, TCB+116=0, HLT=0). Either (a) false wake
+        because waiting task should not be ATL-head/pealable, or (b) wake
+        is correct (SE already posted) but install state incomplete.
+        Next: dump WFR-body @043566; log wake066 at 005200 (066/070/next PC).
+      Flag/CC note (2026-07-18): at abort, TSTB T.ST2 with ST2=0 leaves
+        PS=030004 (Z=1,N=0) and BPL is correct — not a mis-set N at 007040.
+        Suspicion is earlier: 005200 opcode 036575 is BIT (ring says MFPI);
+        005200→005206 implies two index words. If BIT wrongly NZ, wake/DEC
+        runs without HLT → same abort. Probe dumps BIT operands + post CC.
+      2026-07-18 WFR-body + wake066 capture:
+        @043566 words: BIC #1,R1; BIS #1,34(R5); MOV R0,66; MOV R1,70;
+          JMP →030446 (compare R5 vs $TKTCB/Null, RTS) — no ATL unlink.
+        wake066: 005200→005206 PS=030000 Z=0 → BNE wake; DEC clears WFR.
+        Next: op@005200 dump on 005176 crumb (index words at 005202/204).
+      2026-07-18 op@005200 + wake066 full decode:
+        036575 000066 000070 001076 = BIT 66(R5),@70(R5) then BNE.
+        src=TCB+066=000001, dst via TCB+070→057232 (=TCB+022)=000001,
+        res=000001 → Z=0 → wake. NOT a false BIT/CC bug — EF bit0 already
+        set in TCB+022, so switcher correctly treats wait as satisfied.
+        Rejected: "005200 mis-emulated flags". Wake is real; abort is still
+        ATL-head install after DEC (no HLT/R4/116).
+        Next fork: (a) TCB+022 already 1 at WSIG → missed immediate-complete
+        (should not leave WFR on ATL); (b) EF set later → need HLT on wake
+        short path. Probe WFR-EF dumps TCB+022 at BIS time.
+      2026-07-18 WFR-EF settles fork (b):
+        At BIS: TCB+022=000000. At peal BIT: dst@057232=000001.
+        SE posted between WSIG and Null peal; wake is correct.
+        After wake: DEC WFR→0, CLR R4, ATL-head skips map, TCB+116=0,
+        HLT=0 → 007040 BPL abort. Structural: ATL-head + WFR-only wake
+        cannot finish install (needs HLT so DEC leaves bit7, or R4/116).
+        Hypothesis: SE poster should also set T2.HLT (or WSIG should have
+        set HLT|WFR). EF-watch logs first write to TCB+070 VA + ST2 then.
+      2026-07-18 EF-write #1 caught:
+        @057232 0→1 at PC=030622→030624 PS=030000
+        R0=1 R1=057232 R5=SAVT0 ST2=000001 T2.HLT=0 T2.WFR=1
+        Happens before banner — early SE/EF set, not late I/O.
+        Confirms: poster sets EF only, leaves WFR without HLT.
+        Next: dump code @030622 / @030600; find skipped BIS #200 / unblock.
+      2026-07-18 EF-body decode @030602:
+        CLR -(SP); MOV R1,-(SP); BIC #1,R1;
+        BIT #300,34(R5); BNE +1;   ; if HLT|100 → skip store
+        BIS R0,(R1) @030622         ; EF store (taken: ST2=WFR only)
+        MOV R5,R0; TST R1; BEQ ...
+        So WFR-only correctly takes the BIS path. Unblock/HLT must be
+        AFTER 030624 — dump EF-after @030624 / EF-pre @030560 next.
+      2026-07-18 EF-after @030624 decode (from capture):
+        MOV R5,R0; TST R1; BEQ;
+        CMP R1,#050246; BHI →030740   ; op 020127 = CMP R1,#imm (NOT R0!)
+        @030640: SUB R5,R1; SUB #024,R1; BEQ → SEF unblk; else BR 030740
+      2026-07-18 BHI live result OVERTURNS prior hypothesis:
+        EF-BHI-branch: 030636→030640 fall-through (BHI NOT taken). Correct:
+        R1=057232 > #050246 → CMP gives C=1 → BHI clear. Static "TCB>bound"
+        prediction was wrong (compared R0/TCB, real CMP uses R1=EF VA).
+        T.EFLG is .BLKW 2 at +022/+024. SEF unblk only if offset==024.
+        WSIG used TCB+022 (flag 1) → expect skip SEF, no HLT from SE.
+        $TKTCB never written to SAVT0 (only Null@051100); SAVT0 is ATL
+        head with WFR but was never halted/current → peal DEC WFR→0, no
+        HLT → 007040 abort. Next: confirm EF-offset=022 + BEQ skip; find
+        who should BIS #200 (HLT) when leaving/waiting a task.
+      2026-07-18 same log re-sent (still old EF-bound text / no EF-offset):
+        Rebuild+flash required. Analysis without that probe:
+        ATL-head @007040 always needs T2.HLT for BMI success. Ready
+        tasks (TCB+066=0) skip wake@005404 and use a different install
+        setup; WFR+EF takes wake→CLR R4→ST2=0→abort. Ring shows after
+        WSIG, 004702 BPL (HLT=0) → RTI without switch. Armed: new-head
+        ST2 dump, HLT-set rising edge, dir-exit@004702.
+      2026-07-19 capture rsx-watch-pcgated-5/6:
+        SEF clear -> TSTB 65(R0)=0 Z=1 -> BEQ to 030746 (not 030740).
+        At BEQ: @SP=057232 (EF) @2(SP)=000000 (refcount).
+        Skip epilogue would DEC 2(SP) then BR 030740; 030740 ends with
+        same tail as 030746: JSR; MOV (SP)+,R1; INC (SP); RTS.
+        Taking 030746 skips DEC but still INCs -> net refcount 0->1.
+        Skip+join would DEC+INC -> net 0. dir-BPL -> RTI (HLT=0);
+        later wake066 + switch-BPL abort. Hyp: BLE/offset-022 takes
+        alt epilogue that imbalances the SE stack counter / skips join.
+      2026-07-19 iter7 (rsx-watch-pcgated-7): SEF-alt confirmed.
+        @030746: JSR 030422; MOV (SP)+,R1; INC (SP)+; RTS.
+        Opcode 005226 is INC (SP)+ (autoinc), NOT INC (SP).
+        After INC: SP=760 @SP=030514 (return PC); cnt lived at prior
+        SP-2. Stack at BEQ: [EF=057232, cnt=0, ret=030514,...].
+        Skip@030652: DEC 2(SP); BR 030740. Join@030740: JSR 043552;
+        BR 030752 (skips 030422); same MOV/INC+/RTS. Alt skips both
+        DEC and JSR 043552 -> nest cnt 0->1 and misses first JSR.
+        RTS -> 030514. Still dir-BPL/no HLT, wake066, switch-BPL abort.
+      2026-07-19 iter8 (rsx-watch-pcgated-8): PROVED.
+        BEQ stack [EF, cnt=0, ret=030514, 015532]. MOV leaves cnt=0.
+        INC (SP)+: cnt=000001. RTS->030514. SEF-cont: BNE taken
+        ->030574 (skips 030516 fall-through); ST2 still WFR-only.
+        join-JSR@043552 NOT on alt epilogue (later hit R5=051656 only).
+        Root hyp: skip does DEC+INC => INC result 0 => Z=1 => fall into
+        030516 wait/HLT setup; alt INC 0->1 => Z=0 => BNE skips HLT.
+        Join-JSR@043552 is short (RTS@043564); WSIG body follows@043566.
+      2026-07-19 iter9 (rsx-watch-pcgated-9): PROVED CC gate.
+        SEF-INC PS=030000 N=0 Z=0; SEF-cont BNE->030574 (RTS), skips
+        Z1-arm@030516. TCB+064=0 at WFR and at cont. Z1-arm dump:
+        105365=DECB (not TSTB) 64(R5); R1 adjust; BITB; JSR x2; RTS.
+      2026-07-19 iter10 (rsx-watch-pcgated-10): DIAG force-skip ran.
+        DEC+INC => cnt=0 Z=1; entered Z1@030516 (DECB 0->377, N=1).
+        Still NO HLT-set; dir-BPL RTI; wake066; switch-BPL abort.
+        Force-skip proves CC gate only — Z1 arm is not the HLT setter
+        for this WSIG (or exits before BIS #200). HLT never observed.
+      2026-07-19 next (iter11): force-skip disabled; dump WSIG JMP
+        @030446 + dir BMI @004710; scan for BIS #200,34(R5).
+        HLT must be set at wait-entry, not by EF-post epilogue.
+      2026-07-19 iter11 (rsx-watch-pcgated-11): HLT-BIS-scan hits=0 in
+        004600-5k/043400-44k/030400-31k for 0527x5 #200,34(R5).
+        WSIG-JMP@030446: CMP R5 vs @#150404 / RTS — no HLT.
+        dir-BMI@004710: JMP/TSTB/BIT #140000 — no HLT BIS.
+        Official T2.HLT=200 "being halted"; wake clears WFR leaving
+        HLT for install — but nothing in image sets #200 near wait.
+      2026-07-19 next (iter12): wider scan BIS/MOV #*200*,34(R5)
+        across 004000-010000, 030000-032000, 040000-050000.
+        NOTE: iter12 firmware flashed; COM18 Access Denied — capture
+        blocked (port held). Re-run capture when COM18 free.
+      2026-07-19 iter12 (rsx-watch-pcgated-12): HLT-BIS-scan hits=0 even
+        on wide ranges — no imm BIS/MOV #*200*,34(R5) in exec image.
+        Same failure chain. Next: DIAG force T2.HLT|=0200 at WFR-BIS;
+        also scan BIS Rn,34(R5) forms.
+      2026-07-19 iter13 (rsx-watch-pcgated-13): ROOT CONFIRMED.
+        DIAG force-HLT 000001->000201; dir-exit N=1; BPL NOT taken ->
+        switch arm @004710; $ACTHD 057210->0 (wait unlink). No
+        switch-BPL abort in window. imm_hits=0 reg_hits=0. Missing
+        T2.HLT at WSIG is causal for BE.NCT.
+      2026-07-19 iter15 (rsx-watch-pcgated-15): force-HLT@wake works.
+        Banner OK; wake clears WFR leaving ST2=000200; SAVT0 peal
+        proceeds. Next abort is MCR@117304 ST2=020000 (no low HLT).
+        Next: no pause on switch-BPL; log switch-BMI; see if MCR is
+        fatal or boot continues.
+      2026-07-19 iter16 (rsx-watch-pcgated-16): SAVT0 FIXED.
+        switch-BMI install SAVT0 ST2=000200. Then ACTHD=MCR
+        ST2=020000; switch-BPL skip; acct-peal empty $TKTCB while
+        MCR owns ACTHD -> watch break (BE.NCT precursor). Original
+        SAVT0/BE.NCT root was missing T2.HLT after WSIG; workaround
+        force-HLT@wake. Next fault is MCR/$TKTCB not current.
+      2026-07-19 next (iter17): dump BMI/finish-sw @007042/@045624;
+        no pause on acct-peal; log whether $TKTCB ever <- SAVT0.
+      2026-07-19 iter17 (rsx-watch-pcgated-17): BMI-body dump OK;
+        finish-sw-enter @045624 NEVER fired (wrong JSR target).
+        Decode: @007050 JSR 004767 036554 -> 045630 (not 045624).
+        No $TKTCB write after BMI; ACTHD SAVT0->0->MCR->0;
+        acct-peal empty; sw-epilogue@004646 with TKTCB still Null.
+      2026-07-19 next (iter18): probe finish-sw @045630 + scan for
+        store to @#001060; latch BMI-JSR@007050; flash/capture.
+      2026-07-19 iter18 (rsx-watch-pcgated-18): BMI-JSR->045630 confirmed;
+        finish-sw-enter OK. Dump starts MOV;JMP — no $TKTCB store in
+        045630..046200 (dead after JMP). Decode: JMP ->127720.
+        Still no $TKTCB write; ACTHD SAVT0->0->MCR; acct-peal empty.
+      2026-07-19 next (iter19): dump @127720; DIAG force $TKTCB<-R5 at
+        finish-sw-enter; see if BE.NCT clears.
+      2026-07-19 iter19 (rsx-watch-pcgated-19): finish-jmp@127720 dumped
+        (JSR/JSR/...); no TKTCB-store-cand. DIAG $TKTCB<-SAVT0 ran, but
+        acct-peal still R5=0 (peals SAVT0.LNK). finish-JMP latched late
+        with R5=MCR — SAVT0 may not have executed JMP@045636. Root for
+        peal is empty Null.T.LNK, not empty $TKTCB pointer.
+      2026-07-19 next (iter20): DIAG Null.LNK<-R5 (keep $TKTCB=Null);
+        flash/capture.
+      2026-07-19 iter20 (rsx-watch-pcgated-20): Null.LNK force + finish-JMP
+        sequence OK for SAVT0, but acct-peal still LNK=0 — finish-sw@127720
+        tears the link back down. BMI path = halt teardown, not install.
+        force-HLT@wake steers into the wrong arm.
+      2026-07-19 next (iter21): disable force-HLT + finish-sw Null.LNK;
+        on switch-BPL abort requeue Null.LNK<-R5; dump @004646.
+      2026-07-19 iter21 (rsx-watch-pcgated-21): no force-HLT; switch-BPL
+        SAVT0 ST2=0; BPL-requeue ran but acct-peal still LNK=0 (epi clears
+        it). Boot continued (MCR/LDR/REDT0); natural HLT-set@030422; later
+        BMI R5=0; SYSTEM FAULT 314/211. abort-epi starts MOVB #340,@#177776.
+        BMI/force-HLT path is halt teardown — BPL abort is the wake path.
+      2026-07-19 next (iter22): watch Null.LNK writes; requeue at @004646
+        enter; longer abort-epi dump.
+      2026-07-19 iter22 (rsx-watch-pcgated-22): Null.LNK CLR @005172 (wake);
+        BPL-requeue verify OK; then Null.LNK CLR again @005524 (re-peal/CLR
+        loop). Requeue is wrong. Root: after wake, 007040 BPL abort instead
+        of running SAVT0. Missing condition for non-abort switch.
+      2026-07-19 next (iter23): DIAG force PC 007054->007042 (BMI body)
+        on first SAVT0 BPL abort; no Null.LNK requeue.
+      2026-07-19 iter23 (rsx-watch-pcgated-23): force-BMI-body ran; SAVT0
+        still unlinked (finish-sw teardown). abort-epi@004706 is BMI
+        100025; ST2 bit7 clear falls into JMP->007042 finish-sw. So BPL
+        abort naturally reaches finish-sw. dir@004706 BMI: HLT->RTI,
+        WFR-only->switch. force-HLT@wake is too late (after dir-exit).
+      2026-07-19 next (iter24): DIAG force dir-exit to RTI@004762 when
+        WFR&&!HLT; see if banner continues without BE.NCT.
+      2026-07-19 iter24 (rsx-watch-pcgated-24): force-dir-RTI NEVER ran
+        (dir-BPL@004706 not sampled). Still Null.LNK peal/CLR loop; got
+        "RED DL:=" then FAULT. Finish-sw later with R5=0.
+      2026-07-19 next (iter25): force RTI at dir-exit when post=004706.
+      2026-07-19 iter25 (rsx-watch-pcgated-25): force-dir-RTI ran but still
+        Null.LNK CLR@005172 + switch-BPL + RED DL:= + FAULT. setPC@004762
+        did not prevent scheduler re-entry.
+      2026-07-19 next (iter26): force T2.HLT@dir-exit so BMI naturally
+        takes 004762; compare.
+      2026-07-19 iter26 (rsx-watch-pcgated-26): force-HLT@dir — no banner;
+        finish-sw unlinks SAVT0 immediately. TSTB CCs already latched
+        before poke so BMI still falls into switch; HLT then makes
+        finish-sw tear down. iter25 RTI got banner but WFR lingered.
+      2026-07-19 next (iter27): force RTI@004762 + clear WFR at dir-exit.
+      2026-07-19 iter27 (rsx-watch-pcgated-27): RTI+clrWFR same as iter25 —
+        banner + RED DL:= + peal/CLR loop + FAULT. setPC(004762) does not
+        divert control (still reaches switch-BPL@007040).
+      2026-07-19 next (iter28): patch BMI@004706 to BR 004762 + clr WFR.
+      2026-07-19 iter28 (rsx-watch-pcgated-28): patch applied (@004706=000425)
+        but still peal/CLR/switch-BPL/FAULT. Skipping dir-switch leaves
+        Null.LNK=SAVT0; later dispatcher peals again with ST2=0. Need to
+        divert AFTER peal/CLR at switch-BPL, not at dir-exit.
+      2026-07-19 next (iter29): switch-BPL -> setPC 004762 (post-wake).
+      2026-07-19 iter29 (rsx-watch-pcgated-29): setPC(004762) ignored —
+        abort-enter@004646 still followed. Need to patch JMP@007054 offset.
+      2026-07-19 next (iter30): patch @007056 ->175702 (JMP to 004762).
+      2026-07-19 iter30 (rsx-watch-pcgated-30): poke wrote 127126 — C++
+        175702 was DECIMAL, truncated to 16-bit. Fix: use 0175702 octal.
+      2026-07-19 next (iter31): re-flash with octal JMP offset patch.
+      2026-07-19 iter31 (rsx-watch-pcgated-31): patch @007056 175566->175702
+        OK. First switch-BPL no longer immediately abort-enters with
+        SAVT0 (divert may work). Still Null.LNK peal/CLR loop, RED DL:=,
+        later abort-enter R5=116474, FAULT 314/211. 004762 RTI alone is
+        not sufficient after wake peal/CLR — need real "make current"
+        (maps/$TKTCB) or find why dispatcher re-peals SAVT0.
+      NEXT: dump @004762; check whether wake should set $TKTCB<-R5
+        (direct current) vs RTI; disable noisy DIAG patches when probing.
+      2026-07-19 next (iter32): dump @004762; DIAG force map-load@005702
+        (ATL-head currently skips via JMP 006420); disable abort-JMP patch.
+      2026-07-19 iter32 (rsx-watch-pcgated-32): force-map-load fired
+        (@005534 000662->000144 JMP->005702). map702-enter next=037766
+        (word@005702=000046 RTT) then FAULT FACILITY=000300 ERROR=000110
+        PC=040536 — NOT BE.NCT. Misdecode: 000662 is PC-rel JMP offset to
+        006420 (not BR->005702). Real map-load fall-through is @005536
+        (MOV 72(R3),R2 / APR copy). RTI762=@004762: POP R0-R3; INC @#001030;
+        POP R4-R5; RTI.
+      2026-07-19 next (iter33): redirect JMP@005532 to @005536 (offset 0);
+        dump map536-enter; see if ATL-head map-load installs current.
+      2026-07-19 iter33 (rsx-watch-pcgated-33): JMP->005536 OK; map-body
+        confirmed MOV 72(R3),R2 / APR copy. Still reached 006420/006454
+        with R4=0 TCB+116=0 ST2=0 → switch-BPL → peal/CLR loop → RED DL:=
+        SY/LB/SP → FAULT 314/211. Reject: forcing ATL-head map-load does
+        not install current / avoid abort. Map-load is for non-head only.
+      2026-07-19 next (iter34): disable force-map-load; NOP CLR R4@005474
+        so R4=140000 reaches R4nz install@006464.
+      2026-07-19 iter34 (rsx-watch-pcgated-34): keep-R4 fired; R4=140000
+        through 006454 (PS N=1) into R4nz@006464 — then guest HALT.
+        prior PC=007104 ins=000174; R4 became 177700 R5=SAVT0. Reject:
+        wake-path R4=140000 is not a valid R4nz cookie (likely STAT bit).
+        CLR R4@005474 is intentional for ATL-head WFR wake.
+        NOTE: dir@004706 word 100025 is BPL (not BMI): N=0 ->004762 RTI;
+        N=1 (HLT) falls into switch. Matches HLT=0 -> RTI observed.
+      2026-07-19 next (iter35): dump R4nz body@006464 + short-path@006420
+        from memory at 006454 (no keep-R4); decode expected R4/TCB+116.
+      2026-07-19 iter35 (rsx-watch-pcgated-35): R4nz-body = MOV R5,R0;
+        ADD #16; JSR; MOVB 2(R4),... — R4 is a POINTER. short-path:
+        TST TCB+116; BNE; middle; TST R4; BNE->006464. At abort R4=0
+        R3=140000 R0=000046. Still RED DL:= + FAULT 314/211.
+      2026-07-19 next (iter36): crumb short-mid @006426/434/450 — see if
+        middle should load R4 and why it leaves 0 for SAVT0 WFR wake.
+      2026-07-19 iter36 (rsx-watch-pcgated-36): short-mid NEVER fired —
+        006420->006424 then 006454 (BNE@006424 taken) despite peek
+        TCB+116=0 / crumb PS Z=1. Suspected: trace-ring log_ps is
+        PRE-instr; real post-TST Z may be 0 (TCB+116 nonzero to CPU, or
+        peek mismatch). Or BNE taken for another reason.
+      2026-07-19 next (iter37): short-mid @006424 with postPS vs ringPS;
+        confirm BNE Z and whether middle is intentionally skipped.
+      2026-07-19 iter37 (rsx-watch-pcgated-37): PROVED — 006424->006454
+        with postPS Z=1. Opcode 001413 is BEQ (0014xx), NOT BNE (0010xx).
+        TCB+116==0 correctly skips middle; middle runs only when TCB+116
+        nonzero (to build R4 pointer). SAVT0 WFR wake: TCB+116=0 + CLR R4
+        → TST R4 fail → 007034/007040 abort. By design for this path.
+      2026-07-19 next (iter38): DIAG poke TCB+116 nonzero before short-path
+        to force middle; see if R4 gets a valid pointer and install works.
+      2026-07-19 iter38 (rsx-watch-pcgated-38): force-t116=PCB(057330)
+        entered middle (006424->006426). Middle TSTB/BEQ@001410 ran MOVs
+        but R4 stayed 0 → still switch-BPL abort; later FAULT 300/100.
+        Reject: poking PCB into TCB+116 is not enough; middle does not
+        derive R4 from that cookie alone. Structural: ATL-head WFR wake
+        with TCB+116=0 and CLR'd R4 cannot reach R4nz install — needs
+        proper wait/map setup of TCB+116 (or non-zero R4) upstream.
+      NEXT: who should set TCB+116 for SAVT0? (map-load fall-through for
+        non-head; or wait body). Revisit SEF-alt / missing setup before
+        peal. Disable force-t116.
+      2026-07-19 next (iter39): watch TCB+116 writes on ACTHD; dump middle
+        MOV absolute VAs + map536 scan for 116(R5) stores.
+      2026-07-19 iter39 (rsx-watch-pcgated-39): no T116-write/seed on SAVT0
+        (stays 0). mid-abs: TSTB@001705; MOV 050236->002500, 050234->002476;
+        CLRB@001705 — middle does NOT set R4. map536-ext = APR copy then
+        MOV (R3),46(R5). Later map536-enter R5=117304 non-head. Still
+        FAULT 314/211.
+      2026-07-19 next (iter40): log non-head map536 R4/TCB+116; map-rejoin
+        + R4nz-LIVE; extend map scan for R4/116 stores.
+      2026-07-19 iter40 (rsx-watch-pcgated-40): first SAVT0 wake R4=0 abort.
+        Later re-peals: R4=000001 → R4nz-LIVE; boot reaches MOU DL0 /
+        RED DL before FAULT 314/211. TCB+116 stays 0. map536 non-head
+        R5=117304 also TCB+116=0 R4=0. R4=1 (peal-entry before wake sets
+        140000 then CLR) appears sufficient to enter install.
+      2026-07-19 next (iter41): DIAG force R4=1 after CLR@005474 on first
+        SAVT0 wake; see if banner continues without early abort.
+      2026-07-19 iter41 (rsx-watch-pcgated-41): force-R4=1 fired; entered
+        R4nz-LIVE then HALT (R4→177700 PC=000002) — same death as
+        keep-R4=140000. Reject forcing R4=1 on first WFR wake. Later
+        natural R4=1 (iter40) is a different post-abort context.
+      NEXT: dump R4nz JSR target @+(017552) and compare first-wake vs
+        later R4nz-LIVE regs/stack; or return to SEF-alt (why peal runs
+        before install state exists). Disable force-R4=1.
+      2026-07-19 next (iter42): dump R4nz JSR body + stack at LIVE entry;
+        R4nz-step after JSR; no force patches.
+      2026-07-19 iter42 (rsx-watch-pcgated-42): first wake still R4=0 abort.
+        Later R4nz-LIVE: R1=000025 R2=064234 (first-wake abort had R1=0);
+        step 006504→007060 (JMP after BPL not taken). JSR dump used wrong
+        offset word (read opcode); fix EA=006476+017552. R4 ends 177600.
+        Boot reaches MOU then FAULT 314/211.
+      2026-07-19 next (iter43): fix JSR EA dump; dump @007060; check why
+        first wake has R1=0 vs later R1=025 (MOVB operand).
+      2026-07-20 SIMH lite (sim-becnt-watch-lite.ini): first wake abort
+        identical to ESP (R4 CLR→0 @007054). First R4nz after ~3 aborts:
+        skip @005474, R4=1 R1=025 R2=064234 ST2=1 $TKTCB=Null. Install
+        needs skip-CLR (R1=025 alone insufficient). Divergence vs ESP is
+        post-R4nz recovery (ESP also gets later R4nz then MOU/BE.NCT).
+      2026-07-20 next (iter43): log sawCLR@5474 on R4nz-LIVE; dump
+        post-R4nz $TKTCB/Null.LNK/@007060; confirm ESP skip-CLR matches
+        SIMH; see if $TKTCB ever becomes R5 after install.
+      2026-07-20 iter43 (rsx-watch-pcgated-43): first wake switch-BPL abort
+        (same as SIMH). Later R4nz-LIVE #1..#6 SAVT0: R1=025 R2=064234
+        R4=1 — matches SIMH install regs. JSR EA=026250 (fixed).
+        @007060 = MOV #004646,-(SP) ...; post-R4nz $TKTCB stays Null
+        (curr=other); R4 ends 177600 after step. Boot: RED DL / MOU then
+        FAULT 314/211. sawCLR=UNEXPECTED was sticky across peals (fixed
+        clear at 004750). Divergence is post-@007060 / $TKTCB never
+        becomes current — not missing R4nz.
+      2026-07-20 next (iter44): extend R4nz-step through @007064..7104;
+        SIMH lite stops at @007060 for compare; watch if finish-sw/BMI
+        or abort-epi@004646 runs after install.
+      2026-07-20 iter44 (rsx-watch-pcgated-44): post-R4nz path:
+        007060→064→066→070→074→010174 (JSR)→007100→007502.
+        $TKTCB stays Null through all SAVT0 R4nz. Null.LNK requeue at
+        @004646 after RED DL. Later switch-BMI finish-sw with R5=000000
+        $ACTHD=060320 then FAULT 314/211. sawCLR still 1 on R4nz (hits
+        @005474 in-peal yet R4=1 at install — R4 restored after CLR, or
+        need gen-counter; not sticky-004750 alone).
+      NEXT: SIMH stop @007060 compare; dump who sets R4 after CLR;
+        probe @007502 / @010174; finish-sw R5=0 root cause.
+      2026-07-20 next (iter45): R4-after-CLR at 005524/532/6420; dump
+        @010174/@007502/@007166; BMI-R5zero stack before early-return.
+      2026-07-20 iter45 (rsx-watch-pcgated-45): no R4-after-CLR (sawCLR
+        tracking was dead inside exhausted ST2-crumb budget — false
+        UNEXPECTED). Post-R4nz: 007502→003224 with R5=057210→007506
+        (TCB pointer clobbered!). BMI-R5zero @007042 SP=@0,131574…
+        $ACTHD=060320 then FAULT. post-install dumps burned on pre-banner
+        @010174 hits.
+      2026-07-20 next (iter46): move peal-CLR outside crumb gate; gate
+        post-install on R4nz; dump @007502/@003224 after install.
+      2026-07-20 iter46 (rsx-watch-pcgated-46): R4nz sawCLR=0 skip-CLR-ok
+        — matches SIMH. @007502 = JSR R5,X(PC)→003224 with R5→007506
+        (link, not TCB clobber). Stack has SAVT0@057210 under link.
+        @003224 = MOV R4/R5,-(SP); MOV 4(R5),R5; … RTS. BMI-R5zero
+        still precedes FAULT. Next: SIMH stop @007502 stack compare;
+        trace R5 restore after 003224 RTS; who clears R5 before BMI.
+      2026-07-20 SIMH @007502: regs match ESP (R0/R1=064234 R2=057226
+        R4=177400 R5=057210 still TCB; $TKTCB=Null). Code 004567 173516.
+        `ex sp/10` invalid — fixed ini to ex -v sp+N. SIMH continues to
+        STARTUP/RED DL after CONTINUE. Divergence still post-003224.
+      2026-07-20 SIMH @007502+stack (15:21): FIRST STACK MISMATCH.
+        SIMH SP=000774 @SP=010260 002562; under=000340 052002.
+        ESP  SP=000772 @SP=057210 010260 002562 (extra SAVT0 push).
+        Regs still match. Next: who pushes R5 on ESP before JSR R5.
+      2026-07-20 next (iter47): SP-path crumbs @007060..007502 first R4nz;
+        find push that leaves TOS=SAVT0 (SIMH lacks it).
+      2026-07-20 iter47 (rsx-watch-pcgated-47): STACK MISMATCH WAS A FALSE
+        ALARM. SIMH dumps @007502 pre-JSR (SP=774 @SP=010260 R5=SAVT0).
+        ESP post-install logged post-JSR: JSR R5 pushes old R5 → SP=772
+        @SP=057210 R5=007506. Pre-JSR ESP matches SIMH exactly
+        (SP-path #5: 007100→007502 SP=774 @SP=010260). Divergence still
+        after 003224 / BMI-R5zero — not stack at install entry.
+      2026-07-20 SIMH lite @007506: R5=057210 SP=766 stack
+        003236/177400/057210/010260/002562 — matches pre-JSR regs.
+      2026-07-20 iter48 (rsx-watch-pcgated-48): @007506 MATCHES SIMH
+        exactly (R5=057210 SP=766 stack+code). R5-trail through
+        007516→034304 still R5=057210. BMI-R5zero later with
+        $ACTHD=060320 R5=0 SP=1010 then FAULT BE.NCT. Divergence is
+        AFTER successful install return — later switch with new ACTHD.
+      2026-07-20 SIMH post (@007506+) capture becnt-simh-post.txt:
+        First @007506 matches ESP. STARTUP reached; no FAULT.
+        @007042 finish-sw NEVER fires on SIMH (all @007040 → BPL abort).
+        ACTHD set: 057210/117304/117504/057060/… later **060350** (not
+        ESP's **060320**). R5=0 only normal at peal @004750 pre-MOV.
+        Next: ESP dump TCB@060320 vs SIMH@060350; probe @007040 R5/ST2
+        when BMI taken; why ESP takes finish-sw with null R5.
+      2026-07-20 iter49 (rsx-watch-pcgated-49): ACTHD-060320 FIRST at
+        PC=006062 from 117304, R5=060320, name="CLRT0", ST2=020000.
+        Many @007040 BPL aborts with R5=ACTHD=060320 ST2=020000.
+        Later write #93: ACTHD<-060320 with **R5=000000** then BMI-R5zero.
+        BMI-R5zero-ACTHD @060320 CLRT0. No ACTHD-060350 on ESP.
+        SIMH post.ini quieted (drop 4750/7040). Next: SIMH dump CLRT0
+        slot — is it @060350? Trace who clears R5 before write #93/BMI.
+      2026-07-20 SIMH quiet post to Time/date prompt (becnt-simh-post.log
+        20:22, 38KB): STARTUP + Time and date OK; @007042 still 0;
+        ACTHD **060320 never**; **060350-5** (first PC=005704 R5=057060).
+        ESP parks SETT0/CLRT0 at **060320**; SIMH uses **060350** for a
+        late ATL head. Allocation/slot skew is now a hard delta.
+      2026-07-21 iter50 (rsx-watch-pcgated-50): exact per-instruction
+        scheduler sampling corrected stale-PC reports. ESP obtains 060320
+        at PC=005360, opcode `016505 000052` = `MOV 52(R5),R5`: it follows
+        the predecessor T.ACTL link. PC=005704 then executes `MOV R5,$ACTHD`.
+        Thus 060320 is a normal ATL link target, not an arithmetic +030 or
+        malformed TCB-size calculation. Later PC=004750 (`MOV @$TKTCB,R5`)
+        reads Null.T.LNK=0 and makes R5=0. The remaining SIMH delta is the
+        branch at 007040: SIMH BPL-aborts with null R5, while ESP falls into
+        007042 finish-sw. Next compare byte @000034 read by `TSTB 34(R5)`
+        when R5=0; likely N-bit/low-memory divergence.
+      2026-07-21 iter51 (rsx-watch-pcgated-51): Flash OK; 240s capture
+        recovered after serial PermissionError reconnect. Twelve prior
+        @007040 hits with R5->0 (SETT0@060320 / once 057060) all
+        BPL→007054. Then R5zero-TSTB: PC=007034→007040, PS=030010,
+        N=1 Z=0, word@000034=045642 / low byte 242!= (sign=1). BMI-R5zero
+        with ACTHD=060320 name=CLRT0 → SYSTEM FAULT FACILITY=000314
+        ERROR=000211 BE.NCT. Immediate mechanism confirmed: empty peal
+        (R5=0) + TSTB 34(R5) hits TRAP-vector low byte with N=1 → BMI
+        finish-sw. Structural delta vs SIMH remains ACTHD=060320 never
+        seen on SIMH (SIMH late head 060350; quiet post never @007042).
+        Next: dump SIMH @000034 at comparable point; if same vector,
+        chase why ESP peals empty into finish-sw under CLRT0 head.
+      2026-07-21 SIMH @000034 watch (sim-becnt-watch-000034.ini,
+        becnt-simh-000034.txt): through STARTUP + Time and date; no FAULT.
+        277 parsed @007034 hits; **R5=0 never** (R5 always == ACTHD:
+        057060/060350/117304/…). Absolute word `@000034` always **045642!=**
+        (low byte **242!=**, sign=1) — **matches ESP iter51**. Runtime
+        @007042 BMI = 0; all decisions **BPL→007054**. Null.LNK@051100=0;
+        late ACTHD includes **060350** (not ESP's 060320). So vector data
+        at @000034 is not the divergence: if SIMH ever pealed R5=0 into
+        TSTB 34(R5) it would also see N=1→BMI. Next: why ESP empties R5
+        (Null.T.LNK peal) under CLRT0@060320 while SIMH never reaches
+        finish-sw with R5=0.
+      2026-07-21 peal/ATL analysis (captures only; no flash):
+        Proven:
+          - Both sides install late ATL head via PC=005704 after
+            MOV 52(R5),R5 @005360 from predecessor **117304**.
+          - ESP target = **060320** (5- ACTHD writes; names SETT0-4 then
+            CLRT0-1). SIMH target = **060350** (never 060320; ESP never
+            060350). Delta **+030!=**; ESP dump @060350 is interior of
+            ESP TCB@060320 — pool-slot skew, not a second twin TCB.
+          - SIMH @007034: R5==ACTHD always (0- R5=0); Null.LNK often 0;
+            empty peal @004750 is normal (post: 100- R5=0 incl. under
+            060350) but R5 is restored before TSTB. @007042 runtime=0.
+          - ESP under SETT0@060320: many @007040 BPL with R5=ACTHD;
+            peals to R5=0 then restores (060320-R5 trail). Under
+            CLRT0@060320 write #93 (R5=060320 @005704) the next switch
+            sample is R5zero-TSTB → BMI finish-sw → BE.NCT. No successful
+            @007040 with R5=CLRT0.
+          - 060320-R5 trail budget hit 48 during SETT0; fatal R5→0 before
+            007034 was not logged. ACTHD-060320 NULL-R5 never fired
+            (gated on ACTHD-write path only, where R5 was nonzero).
+        Open:
+          - Exact insn that leaves R5=0 into @007034 after CLRT0 install
+            (trail exhausted).
+          - Whether SIMH@060350 is SETT0/CLRT0/other (no name in captures).
+          - Whether CLRT0 ATL membership is “wrong” vs merely the slot that
+            exposes the R5-reload miss (SETT0 at same slot was OK at TSTB).
+        Hypotheses (evidence rank):
+          1. Pool skew: 117304.T.ACTL → ESP 060320 / SIMH 060350 (HARD).
+          2. Immediate BE.NCT: ESP reaches @007034 with R5=0 while
+             ACTHD=CLRT0; SIMH never (HARD symptom; insn open).
+          3. Post-005704 / post-empty-peal fails to present ACTHD in R5
+             before TSTB (STRONG; SIMH recovers, ESP SETT0 recovered,
+             ESP CLRT0 did not).
+          4. CLRT0 incorrectly on ATL (WEAK — same link path as SETT0).
+          5. Nested ISR clobbers R5 mid 005704→007034 (PLAUSIBLE, no
+             ring evidence yet).
+        Best next experiment: uncap/re-arm R5-change + dump_recent_trace
+          on first R5→0 while ACTHDin {060320,060350} after write #93-class
+          install (or when name=CLRT0); log PC/op/R0–R5/Null.LNK for the
+          clearing insn and the following path into @007034. Optional
+          SIMH: RAD50 name @060350 + ex 117304+52 at first W@ACTHD 060350.
+      2026-07-21 iter52 (rsx-watch-pcgated-52): CLRT0 R5→0 re-arm +
+        twin NULL-R5 (not ACTHD-write-gated). Flash OK; capture ~423KB.
+        Pre-CLRT0: R5to0 at 004750 (op=017705 MOV @$TKTCB,R5) with
+        Null.LNK=0 under SETT0 — recovers. Then:
+          $ACTHD write #93 @005704: 117304→060320 R5=060320 name=CLRT0
+          CLRT0-arm (budget reset)
+          R5to0 #1 CLRT0: PC=006356→006360 op=174105 (next=172520)
+            R5=060320→0 Null.LNK=0 SP=001010 PS=030004 (Z=1)
+          R5zero-TSTB @007034→007040 N=1 @000034=242
+          BMI-R5zero →007050 finish-sw; ACTHD still CLRT0@060320
+        Verdict: **not ISR clobber** (SP=001010, PCs in switcher/map
+        006xxx). **not** fatal empty peal @004750 (that only under
+        SETT0 and recovers). Fatal edge = **post-CLRT0 switcher clear
+        at 006356 without reload before TSTB** (hyp.3). Opcode 174105
+        encodes FP11 STF AC1,R5 — effect matches CLR/XOR R5 (Z=1);
+        dump_recent_trace unavailable (ring off). Next: identify real
+        insn @006356 (listing/I-fetch) and why R5 not restored to ACTHD.
+      2026-07-21 iter53 (no ESP flash): real I-fetch @006356 confirmed.
+        SIMH `ex 6350-6370` (becnt-simh-6356.txt) matches ESP logged ops:
+          6350:172520 LDF AC0,(R0)+
+          6352:174104 STF AC1,AC4   (mode0 → FP AC4)
+          6354:172520 LDF AC0,(R0)+
+          **6356:174105 STF AC1,AC5** (mode0 → FP AC5)  next 6360:172520
+          6362:172620  6364:172720  6366:170172  6370:000042
+        FP11 decode was **not** a red herring — word is really 174105 on
+        both ESP and SIMH. SIMH hits PC=006356 (late ACTHD=060350) but
+        **does not clear general R5** through 006360; ESP CLRT0 path did
+        R5 060320→0. Root cause: kek `fp_read/write_operand` mode 0 wrote
+        CPU Rn instead of FP AC0–AC5, so STF AC1,R5 clobbered R5 (and
+        174104 clobbered R4 — matches iter52 R4=0 at the clear). Fixed in
+        `_upstream_kek/cpu.cpp`. Next: flash + capture — expect no R5→0
+        at 006356; BE.NCT should clear if this was the sole fatal edge
+        (pool skew 060320 vs 060350 may still remain as a soft delta).
+      2026-07-21 iter53 flash (rsx-watch-pcgated-53): FP11 mode-0 fix
+        confirmed in build — `kek_src_cpu.cpp` → `_upstream_kek/cpu.cpp`
+        (`VPDP1170_USE_KEK_CORE=1`); map links `cpu::fp_write_operand`
+        from `kek_src_cpu.cpp.o`. Compile+upload COM18 OK.
+        Capture ~865KB / 240s. **BE.NCT PASS**:
+          - no PC=006356 / op=174105 R5→0
+          - BMI-R5zero=0, R5zero-TSTB=0
+          - SYSTEM FAULT / FACILITY=000314 / ERROR=000211 / BE.NCT = 0
+        Boot progress: banner → RED/MOU → @DL:[1,2]STARTUP → Mentec
+        startup procedure → **Time and date :** prompt (and date entry
+        chars visible). CLRT0-arm still fires (ACTHD write #93 → 060320);
+        post-CLRT0 R5to0 only at recoverable empty-peal PCs (004750-49,
+        005054-3, …) — not fatal. Soft delta remains: ACTHD=060320 vs
+        SIMH 060350 (pool skew; not blocking past BE.NCT).
 - mp30 rp06   - fail - home block not found - problem with addresses
 - mp87 rp06   - fail - SAV -- Booted device not in system - DB 176700
 - mp4687 rp06 - fail - SAV -- Booted device not in system - DB 176700
