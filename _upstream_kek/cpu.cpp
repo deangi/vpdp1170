@@ -1050,8 +1050,13 @@ bool cpu::fp_read_operand(const uint8_t mode, const uint8_t reg, uint16_t *words
 	for(int i=0; i<count; i++)
 		words[i] = 0;
 
+	// FP11 mode 0 addresses floating accumulators AC0–AC5, not CPU Rn.
+	// (Integer-format FP ops like STEXP/STCFI handle mode-0 Rn separately.)
 	if (mode == 0) {
-		words[0] = get_register(reg);
+		if (reg > 5)
+			return false;
+		for (int i = 0; i < count && i < 4; i++)
+			words[i] = fp_ac[reg][i];
 		return true;
 	}
 
@@ -1070,8 +1075,16 @@ bool cpu::fp_write_operand(const uint8_t mode, const uint8_t reg, const uint16_t
 	if (words == nullptr || count <= 0)
 		return false;
 
+	// FP11 mode 0 stores into AC0–AC5 (see fp_read_operand). Writing CPU
+	// general registers here made STF AC1,R5 clobber R5 and break RSX
+	// switcher (BE.NCT) while SIMH left R5 intact on the same opcode.
 	if (mode == 0) {
-		set_register(reg, words[0]);
+		if (reg > 5)
+			return false;
+		for (int i = 0; i < count && i < 4; i++)
+			fp_ac[reg][i] = words[i];
+		for (int i = count; i < 4; i++)
+			fp_ac[reg][i] = 0;
 		return true;
 	}
 
