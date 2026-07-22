@@ -645,7 +645,16 @@ void bus::verify_pointer_bounds(const uint32_t m_offset, const int page_index)
 uint16_t bus::read(const uint16_t addr_in, const word_mode_t word_mode, const int run_mode, const d_i_space_t space_in)
 {
 	auto     space    = mmu_->get_use_data_space(run_mode) ? space_in : i_space;
-	const auto [ m_offset, page_index ] = mmu_->calculate_physical_address(run_mode, addr_in, false, space);
+	uint32_t m_offset;
+	int page_index;
+	if (!mmu_->is_enabled()) {
+		m_offset = addr_in;
+		page_index = addr_in >> 13;
+	}
+	else if (!mmu_->try_calculate_physical_address_fast(run_mode, addr_in, false,
+			space, &m_offset, &page_index)) {
+		std::tie(m_offset, page_index) = mmu_->calculate_physical_address(run_mode, addr_in, false, space);
+	}
 
 	uint32_t io_base  = mmu_->get_io_base();
 	bool     is_io    = m_offset >= io_base;
@@ -939,7 +948,16 @@ bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, const uint1
 {
 	const uint8_t apf        = addr_in >> 13; // active page field
 	auto          space      = mmu_->get_use_data_space(run_mode) ? space_in : i_space;
-	const auto [ m_offset, page_index ] = mmu_->calculate_physical_address(run_mode, addr_in, true, space);
+	uint32_t      m_offset;
+	int           page_index;
+	if (!mmu_->is_enabled() && (mmu_->getMMR0() & 0000400) == 0) {
+		m_offset = addr_in;
+		page_index = addr_in >> 13;
+	}
+	else if (!mmu_->try_calculate_physical_address_fast(run_mode, addr_in, true,
+			space, &m_offset, &page_index)) {
+		std::tie(m_offset, page_index) = mmu_->calculate_physical_address(run_mode, addr_in, true, space);
+	}
 
 	uint32_t      io_base    = mmu_->get_io_base();
 	bool          is_io      = m_offset >= io_base;

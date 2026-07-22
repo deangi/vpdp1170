@@ -105,6 +105,32 @@ public:
 	bool     get_use_data_space(const int run_mode) const;
 	uint32_t get_io_base() const { return io_base; }
 
+	// Inline common-case translation for mapped RAM accesses. Faulting and
+	// maintenance-mode cases retain the existing full MMR/trap path.
+	bool try_calculate_physical_address_fast(const int run_mode,
+			const uint16_t a, const bool is_write, const d_i_space_t space,
+			uint32_t *const physical, int *const page_index) const {
+		if ((MMR0 & 1) == 0)
+			return false;
+		const int index = calc_par_pdr_index(run_mode, space, a >> 13);
+		const uint16_t pdr = pages[index].pdr;
+		const int access = pdr & 7;
+		if (is_write ? access != 6 : !(access == 2 || access == 5 || access == 6))
+			return false;
+
+		const uint16_t block = (a >> 6) & 127;
+		const uint16_t length = (pdr >> 8) & 127;
+		const bool down = (pdr & 8) != 0;
+		if (down ? block < length : block > length)
+			return false;
+
+		uint32_t offset = pages[index].par_preshifted + (a & 8191);
+		offset &= (MMR3 & 16) ? 017777777u : 0x3ffffu;
+		*physical = offset;
+		*page_index = index;
+		return true;
+	}
+
 	memory_addresses_t            calculate_physical_address(const int run_mode, const uint16_t a) const;
 	std::pair<trap_action_t, int> get_trap_action(const int page_index, const bool is_write);
 	std::pair<uint32_t, int>      calculate_physical_address(const int run_mode, const uint16_t a, const bool is_write, const d_i_space_t space);
