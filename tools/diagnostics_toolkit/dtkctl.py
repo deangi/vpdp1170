@@ -25,6 +25,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # Windows consoles are often cp1252; serial logs may include UTF-8.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     args = build_parser().parse_args()
     cfg = load_config(args.config)
     service_cfg = cfg.serial if args.service == "serial" else cfg.telnet
