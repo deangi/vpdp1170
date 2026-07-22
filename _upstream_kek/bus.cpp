@@ -1076,6 +1076,41 @@ bool bus::clear_physical_block(const uint32_t a, const uint32_t n)
 	return m->clear_block(a, n);
 }
 
+uint16_t bus::fetch_instruction_word(const uint16_t a, const int run_mode,
+		uint32_t *const physical)
+{
+	uint32_t m_offset;
+	int page_index;
+	if (!mmu_->is_enabled()) {
+		m_offset = a;
+		page_index = a >> 13;
+	}
+	else if (!mmu_->try_calculate_physical_address_fast(run_mode, a, false,
+			i_space, &m_offset, &page_index)) {
+		std::tie(m_offset, page_index) =
+			mmu_->calculate_physical_address(run_mode, a, false, i_space);
+	}
+
+	const uint32_t io_base = mmu_->get_io_base();
+	if (m_offset >= io_base) {
+		if (physical) *physical = m_offset;
+		const uint16_t io_addr = m_offset - io_base + 0160000;
+		return read_IO(io_addr, wm_word, run_mode, i_space, a >> 13,
+				page_index);
+	}
+
+	verify_pointer_bounds(m_offset, page_index);
+	if (mmu_->is_enabled())
+		mmu_->set_page_accessed(page_index);
+	if (m_offset & 1) [[unlikely]] {
+		mmu_->trap_if_odd(page_index);
+		throw 2;
+	}
+
+	if (physical) *physical = m_offset;
+	return m->read_word(m_offset);
+}
+
 uint16_t bus::read_word(const uint16_t a, const d_i_space_t s)
 {
 	return read(a, wm_word, c->getPSW_runmode(), s);

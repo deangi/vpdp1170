@@ -33,6 +33,7 @@ void mmu::reset(const bool hard)
 		memset(pages, 0x00, sizeof pages);
 		CPUERR = MMR0 = MMR1 = MMR2 = MMR3 = PIR = CSR = 0;
 	}
+	refresh_translation_cache();
 	update_io_base();
 }
 
@@ -175,6 +176,7 @@ void mmu::write_pdr(const uint32_t a, const int run_mode, const uint16_t value, 
 	}
 
 	pages[page_index].pdr &= ~(32768 + 128 /*A*/ + 64 /*W*/ + 32 + 16);  // set bit 4, 5 & 15 to 0 as they are unused and A/W are set to 0 by writes
+	refresh_translation_cache_entry(page_index);
 
 	DOLOG(log_ss::LS_MMU, "mmu WRITE-I/O PDR run-mode %d: %c for %d: %o [%d]", run_mode, d == d_space ? 'D' : 'I', page, value, word_mode);
 }
@@ -195,6 +197,7 @@ void mmu::write_par(const uint32_t a, const int run_mode, const uint16_t value, 
 	}
 
 	pages[page_index].pdr &= ~(128 /*A*/ + 64 /*W*/);  // reset PDR A/W when PAR is written to
+	refresh_translation_cache_entry(page_index);
 
 	DOLOG(log_ss::LS_MMU, "mmu WRITE-I/O PAR run-mode %d: %c for %d: %o (%07o)", run_mode, d == d_space ? 'D' : 'I', page, word_mode == wm_byte ? value & 0xff : value, pages[page_index].par_preshifted);
 }
@@ -500,6 +503,7 @@ void mmu::set_par_pdr(const JsonVariantConst j_in, const int run_mode, const d_i
 		int page_index = calc_par_pdr_index(run_mode, d, i_pdr++);
 		pages[page_index].pdr = v;
 	}
+	refresh_translation_cache();
 }
 
 mmu *mmu::deserialize(const JsonVariantConst j, memory *const mem, cpu *const c)

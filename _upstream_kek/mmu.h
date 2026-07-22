@@ -48,6 +48,22 @@ class mmu : public device
 private:
 	// 8 pages, D/I, 3 modes and 1 invalid mode
 	page_t   pages[64];
+	struct translation_cache_t {
+		uint32_t base;
+		uint8_t length;
+		uint8_t access_and_direction;
+	};
+	translation_cache_t translation_cache[64];
+
+	void refresh_translation_cache_entry(const int index) {
+		translation_cache[index].base = pages[index].par_preshifted;
+		translation_cache[index].length = (pages[index].pdr >> 8) & 127;
+		translation_cache[index].access_and_direction = pages[index].pdr & 15;
+	}
+	void refresh_translation_cache() {
+		for (int index = 0; index < 64; index++)
+			refresh_translation_cache_entry(index);
+	}
 
 	uint16_t MMR0    { 0 };
 	uint16_t MMR1    { 0 };
@@ -113,18 +129,16 @@ public:
 		if ((MMR0 & 1) == 0)
 			return false;
 		const int index = calc_par_pdr_index(run_mode, space, a >> 13);
-		const uint16_t pdr = pages[index].pdr;
-		const int access = pdr & 7;
+		const translation_cache_t &cached = translation_cache[index];
+		const int access = cached.access_and_direction & 7;
 		if (is_write ? access != 6 : !(access == 2 || access == 5 || access == 6))
 			return false;
 
 		const uint16_t block = (a >> 6) & 127;
-		const uint16_t length = (pdr >> 8) & 127;
-		const bool down = (pdr & 8) != 0;
-		if (down ? block < length : block > length)
+		if ((cached.access_and_direction & 8) ? block < cached.length : block > cached.length)
 			return false;
 
-		uint32_t offset = pages[index].par_preshifted + (a & 8191);
+		uint32_t offset = cached.base + (a & 8191);
 		offset &= (MMR3 & 16) ? 017777777u : 0x3ffffu;
 		*physical = offset;
 		*page_index = index;

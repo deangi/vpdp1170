@@ -3557,8 +3557,8 @@ bool cpu::step()
 		instruction_pc = pc;
 		instruction_active = true;
 		mmu_->MMRStartInstruction(instruction_pc);
-		auto instruction_meta = mmu_->calculate_physical_address(getPSW_runmode(), pc);
-		uint16_t instr = b->read_word(pc);
+		uint32_t instruction_physical = 0;
+		uint16_t instr = b->fetch_instruction_word(pc, getPSW_runmode(), &instruction_physical);
 		previous_instruction_valid = last_instruction_valid;
 		previous_instruction_pc = last_instruction_pc;
 		previous_instruction_word = last_instruction_word;
@@ -3566,7 +3566,7 @@ bool cpu::step()
 		last_instruction_valid = true;
 		last_instruction_pc = instruction_pc;
 		last_instruction_word = instr;
-		last_instruction_phys = instruction_meta.physical_instruction;
+		last_instruction_phys = instruction_physical;
 		add_register(7, 2);
 
 		// JSR is in the 004xxx opcode block. Handle it before the broad
