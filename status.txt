@@ -1,9 +1,13 @@
 TODO:
-1) speedup
-2) fixed - pdp reboot from halt doesn't working
-3) assign pills by mounted drives, not fixed positions
+1) fixed 7/22 speedup
+2) fixed - pdp reboot from halt doesn't work
+3) fixed 7/22 - assign pills by mounted drives, not fixed positions
 4) Big display version
 5) Telnet is laggy
+6) fixed 7/22 - emulator reset mode
+7) Investigate m+4.6 - halt
+8) Echo to telnet emulator reset configuration
+9) Echo to telnet HALT dump
 
 EMU Status PDP 11/70
 - 7/12/2026 V1.3

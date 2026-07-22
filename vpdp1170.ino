@@ -310,6 +310,26 @@ static void disks_mount() {
 
 // Status bar drawn in the 40 px strip below the 80x25 console: drive activity
 // indicators, IP address, telnet state and emulation speed.
+static int boot_drive_slot() {
+  if (cfg.boot_kind == AppConfig::BK_RK) return DRIVE_RK0;
+  if (cfg.boot_kind == AppConfig::BK_RP) return DRIVE_RP0;
+  if (cfg.boot_drive >= 'a' && cfg.boot_drive <= 'd')
+    return cfg.boot_drive - 'a';
+  return DRIVE_A;
+}
+
+static const char* status_drive_label(int slot) {
+  switch (slot) {
+    case DRIVE_A:   return "DL0";
+    case DRIVE_B:   return "DL1";
+    case DRIVE_C:   return "DL2";
+    case DRIVE_D:   return "DL3";
+    case DRIVE_RK0: return "RK0";
+    case DRIVE_RP0: return "RP0";
+    default:        return "?";
+  }
+}
+
 static void draw_status_bar() {
   static uint32_t prev_io[DRIVE_COUNT] = {0};
   static uint32_t prev_inst = 0;
@@ -318,17 +338,22 @@ static void draw_status_bar() {
 
   tft.drawFastHLine(0, sy, TFT_W, TFT_DARKGREY);
 
-  // Drive indicators: boot unit in slot 0 when RK/RP, else DL0..DL3.
-  const char* unit_labels[4] = { "DL0", "DL1", "DL2", "DL3" };
-  int visible_slots[4] = { DRIVE_A, DRIVE_B, DRIVE_C, DRIVE_D };
-  if (cfg.boot_kind == AppConfig::BK_RK) {
-    unit_labels[0] = "RK0";
-    visible_slots[0] = DRIVE_RK0;
-  } else if (cfg.boot_kind == AppConfig::BK_RP) {
-    unit_labels[0] = "RP0";
-    visible_slots[0] = DRIVE_RP0;
+  // Drive pills: leftmost is always the boot unit; remaining up to 3 are
+  // other currently mounted drives (scan DL0..DL3, RK0, RP0). Rebuilds from
+  // live mount state so GUI/emulator remounts update automatically.
+  int visible_slots[4];
+  int pill_count = 0;
+  const int boot_slot = boot_drive_slot();
+  visible_slots[pill_count++] = boot_slot;
+  for (int s = 0; s < DRIVE_COUNT && pill_count < 4; s++) {
+    if (s == boot_slot) continue;
+    if (!disk_is_mounted(s)) continue;
+    visible_slots[pill_count++] = s;
   }
-  for (int i = 0; i < 4; i++) {
+
+  // Clear the whole pill strip so omitted drives leave no stale labels.
+  tft.fillRect(0, sy + 1, 156, 20, TFT_BLACK);
+  for (int i = 0; i < pill_count; i++) {
     int s = visible_slots[i];
     uint32_t r = 0, w = 0;
     disk_stats(s, &r, &w);
@@ -341,7 +366,7 @@ static void draw_status_bar() {
     tft.fillRoundRect(bx, sy + 5, 32, 16, 2, col);
     tft.setTextColor(TFT_BLACK, col);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString(unit_labels[i], bx + 16, sy + 13, 1);
+    tft.drawString(status_drive_label(s), bx + 16, sy + 13, 1);
   }
   tft.setTextDatum(TL_DATUM);
 
@@ -393,8 +418,8 @@ static void draw_status_bar() {
   tft.setTextDatum(TL_DATUM);   // restore for the title row below
 
   // [system] title from pdpconfig.ini, drawn below the drive indicators
-  // (left half, the empty strip under the DL0..DL3 boxes). Falls
-  // back to APP_TITLE if the user left the field blank.
+  // (left half, under the activity pills). Falls back to APP_TITLE if
+  // the user left the field blank.
   tft.fillRect(0, sy + 22, 156, TFT_H - sy - 22, TFT_BLACK);
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
   tft.setTextDatum(TL_DATUM);
