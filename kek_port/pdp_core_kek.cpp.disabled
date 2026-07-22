@@ -1146,7 +1146,8 @@ static void service_instruction_deferred_devices() {
   if (g_tty) g_tty->service_deferred();
 }
 
-uint32_t run(uint32_t max_cycles) {
+template <bool Diagnostic>
+static uint32_t run_loop(uint32_t max_cycles) {
   // Disk completion delays are only 2-6 guest instructions, so an 8-step
   // batch preserves prompt completion while removing four virtual calls from
   // seven out of every eight instructions.
@@ -1163,19 +1164,21 @@ uint32_t run(uint32_t max_cycles) {
 
   while (ran < max_cycles) {
     if (g_cpu->getPC() & 1) {
-      record_trace_entry();
+      if constexpr (Diagnostic) record_trace_entry();
       dump_panic_trace("odd PC before instruction fetch");
       g_paused = true;
       break;
     }
     if (!g_cpu->step()) {
-      record_trace_entry();
+      if constexpr (Diagnostic) record_trace_entry();
       dump_panic_trace("cpu step returned false");
       g_paused = true;
       break;
     }
-    record_trace_entry();
-    if (g_trace_remaining) trace_next_instruction();
+    if constexpr (Diagnostic) {
+      record_trace_entry();
+      if (g_trace_remaining) trace_next_instruction();
+    }
     ran++;
     if ((ran & (kDeferredServiceBatch - 1)) == 0)
       service_instruction_deferred_devices();
@@ -1185,12 +1188,33 @@ uint32_t run(uint32_t max_cycles) {
       store_event(EVENT_NONE);
       break;
     }
-    if (g_trace_remaining) g_trace_remaining--;
+    if constexpr (Diagnostic) {
+      if (g_trace_remaining) g_trace_remaining--;
+    }
     if (g_cpu->is_waiting()) break;
   }
   if (ran && (ran & (kDeferredServiceBatch - 1)) != 0)
     service_instruction_deferred_devices();
   return ran;
+}
+
+static uint32_t run_clean(uint32_t max_cycles) {
+  return run_loop<false>(max_cycles);
+}
+
+static uint32_t run_diagnostic(uint32_t max_cycles) {
+  return run_loop<true>(max_cycles);
+}
+
+static bool diagnostic_run_required() {
+  return g_trace_enabled || g_rp_trace_history_active || g_trace_remaining;
+}
+
+uint32_t run(uint32_t max_cycles) {
+  // Select once per host slice; run_clean has no per-instruction diagnostic
+  // operations or branches after template specialization.
+  return diagnostic_run_required() ? run_diagnostic(max_cycles)
+                                   : run_clean(max_cycles);
 }
 
 bool selftest() {
@@ -1299,7 +1323,7 @@ static bool run_benchmark_sample(const char* name, bool memory_operand,
 bool benchmark() {
   if (!init()) return false;
 
-  LOG("BENCH begin samples=4 instructions_per_sample=%u",
+  LOG("BENCH begin samples=5 instructions_per_sample=%u",
       (unsigned)kBenchmarkInstructions);
   bool ok = true;
   ok &= run_benchmark_sample("register", false, false,
@@ -1315,6 +1339,10 @@ bool benchmark() {
   set_trace(false);
   ok &= run_benchmark_sample("adapter-unmapped", true, false,
                              BenchmarkRunner::AdapterRun);
+  set_trace(true);
+  ok &= run_benchmark_sample("adapter-diagnostic", true, false,
+                             BenchmarkRunner::AdapterRun);
+  set_trace(false);
   LOG("BENCH end status=%s", ok ? "PASS" : "FAIL");
 
   // setup() subsequently calls reset()/cold_boot() before guest execution;
