@@ -15,6 +15,11 @@
 #define VPDP1170_BUILD_KEK_ADAPTER 1
 #define VPDP1170_TARGET_RAM_BYTES 0x400000u   // PDP-11/70 22-bit, 4 MB
 
+// Run the deterministic kek microbenchmark suite once during setup, before
+// the selected guest is booted. Disable after performance characterization
+// if the extra startup delay is undesirable.
+#define VPDP1170_STARTUP_BENCHMARK 1
+
 // Mounted disk images, FTP, TT1, and shell file commands may all hold files open.
 #define SD_MAX_OPEN_FILES 16
 

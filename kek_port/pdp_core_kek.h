@@ -16,6 +16,7 @@ void reset();
 void cold_boot();
 uint32_t run(uint32_t max_cycles);
 bool selftest();
+bool benchmark();
 
 uint8_t* memory();
 uint32_t memory_size();

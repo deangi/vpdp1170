@@ -586,6 +586,18 @@ void setup() {
                selftest_ok ? TFT_GREEN : TFT_RED);
   }
 
+
+#if VPDP1170_STARTUP_BENCHMARK
+  if (cpu_ok && selftest_ok) {
+    tft_status(ROW_CPU, "CPU:   ", "benchmark...", TFT_YELLOW);
+    bool benchmark_ok = pdp_core::benchmark();
+    LOG("PDP core benchmark: %s", benchmark_ok ? "PASS" : "FAIL");
+    tft_status(ROW_CPU, "CPU:   ",
+               benchmark_ok ? "benchmark PASS" : "benchmark FAIL",
+               benchmark_ok ? TFT_GREEN : TFT_RED);
+  }
+#endif
+
   wifi_connect();
 
   // ---- boot/services: mount drives and start the selected PDP core.

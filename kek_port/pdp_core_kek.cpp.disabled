@@ -98,6 +98,7 @@ static TraceEntry* g_trace_ring = nullptr;
 static uint32_t g_trace_ring_next = 0;
 static bool g_trace_ring_wrapped = false;
 static bool g_trace_enabled = false;
+static bool g_rp_trace_history_active = false;
 static bool g_panic_trace_dumped = false;
 static bool g_trace_frozen = false;
 
@@ -460,6 +461,15 @@ static bool ensure_trace_ring() {
   }
   clear_trace_ring();
   return true;
+}
+
+static void release_trace_ring() {
+  if (g_trace_ring) free(g_trace_ring);
+  g_trace_ring = nullptr;
+  g_trace_ring_next = 0;
+  g_trace_ring_wrapped = false;
+  g_panic_trace_dumped = false;
+  g_trace_frozen = false;
 }
 
 static bool disassemble_at(uint16_t address, char* buffer, size_t size) {
@@ -884,10 +894,19 @@ static void print_trace_entry(const char* prefix, const TraceEntry& entry) {
       entry.disasm);
 }
 
+static bool trace_history_active() {
+  if (g_trace_enabled) return true;
+  if (!g_rp_trace_history_active) return false;
+  if (g_rp_host_trace_left > 0 || rp06_trace_remaining() > 0) return true;
+  g_rp_trace_history_active = false;
+  // RP trace completed: retire the history buffer unless diagnostic trace
+  // was enabled concurrently.
+  if (!g_trace_enabled) release_trace_ring();
+  return false;
+}
 static void record_trace_entry() {
-  // Keep a ring whenever it is allocated (trace=on or rp_trace>0), so panics
-  // still show recent instructions even if verbose trace printing is off.
-  if (!g_trace_ring || g_trace_frozen) return;
+  // Allocation and recording are separate so trace=false restores fast mode.
+  if (!g_trace_ring || g_trace_frozen || !trace_history_active()) return;
   if (capture_last_instruction_trace_entry(&g_trace_ring[g_trace_ring_next])) {
     g_trace_ring_next++;
     if (g_trace_ring_next >= kTraceRingSize) {
@@ -1128,8 +1147,20 @@ static void service_instruction_deferred_devices() {
 }
 
 uint32_t run(uint32_t max_cycles) {
+  // Disk completion delays are only 2-6 guest instructions, so an 8-step
+  // batch preserves prompt completion while removing four virtual calls from
+  // seven out of every eight instructions.
+  static constexpr uint32_t kDeferredServiceBatch = 8;
   if (!g_cpu || g_paused) return 0;
   uint32_t ran = 0;
+  // A PDP-11 WAIT is guest idle state, not another retired instruction.
+  // Service devices once so a newly-ready TTY can raise its interrupt, then
+  // return immediately if nothing can wake the CPU yet.
+  if (g_cpu->is_waiting()) {
+    service_instruction_deferred_devices();
+    if (!g_cpu->check_if_interrupts_pending()) return 0;
+  }
+
   while (ran < max_cycles) {
     if (g_cpu->getPC() & 1) {
       record_trace_entry();
@@ -1145,8 +1176,9 @@ uint32_t run(uint32_t max_cycles) {
     }
     record_trace_entry();
     if (g_trace_remaining) trace_next_instruction();
-    service_instruction_deferred_devices();
     ran++;
+    if ((ran & (kDeferredServiceBatch - 1)) == 0)
+      service_instruction_deferred_devices();
     if (load_event() == EVENT_HALT) {
       dump_panic_trace("guest HALT instruction");
       g_paused = true;
@@ -1154,7 +1186,10 @@ uint32_t run(uint32_t max_cycles) {
       break;
     }
     if (g_trace_remaining) g_trace_remaining--;
+    if (g_cpu->is_waiting()) break;
   }
+  if (ran && (ran & (kDeferredServiceBatch - 1)) != 0)
+    service_instruction_deferred_devices();
   return ran;
 }
 
@@ -1178,6 +1213,117 @@ bool selftest() {
          g_cpu->get_register(1) == 0000014;
 }
 
+
+namespace {
+
+static constexpr uint32_t kBenchmarkInstructions = 100000;
+static constexpr uint16_t kBenchmarkCode = 01000;
+static constexpr uint16_t kBenchmarkData = 02000;
+
+enum class BenchmarkRunner {
+  CpuStep,
+  AdapterRun,
+};
+
+static bool prepare_benchmark(bool memory_operand, bool mapped) {
+  if (!g_bus || !g_cpu || !g_bus->getMMU()) return false;
+
+  clear_run_state_for_boot();
+  g_bus->reset(true);
+  g_cpu->reset();
+
+  // Two-instruction loops keep the sample deterministic while separating
+  // register-only execution from an additional guest data-memory operation.
+  g_bus->write_physical(kBenchmarkCode,
+                        memory_operand ? 0005211 : 0005200); // INC (R1) / INC R0
+  g_bus->write_physical(kBenchmarkCode + 2, 0000776);       // BR back two words
+  g_bus->write_physical(kBenchmarkData, 0);
+  g_cpu->set_register(0, 0);
+  g_cpu->set_register(1, kBenchmarkData);
+  g_cpu->setPC(kBenchmarkCode);
+
+  if (mapped) {
+    // Map kernel I-space page zero to physical page zero. Split I/D remains
+    // disabled, so data references use the same map, matching normal PDP-11
+    // operation before an OS enables separate I/D space.
+    mmu* m = g_bus->getMMU();
+    m->write_par(ADDR_PAR_K_START, 0, 0, wm_word);
+    m->write_pdr(ADDR_PDR_K_START, 0, 077406, wm_word);
+    m->setMMR3(020);  // 22-bit mapping, no split I/D or Unibus map
+    m->setMMR0(1);    // enable relocation
+  }
+  return true;
+}
+
+static bool run_benchmark_sample(const char* name, bool memory_operand,
+                                 bool mapped, BenchmarkRunner runner) {
+  if (!prepare_benchmark(memory_operand, mapped)) return false;
+
+  const uint32_t before = (uint32_t)g_cpu->get_instructions_executed_count();
+  const uint32_t start_us = micros();
+  uint32_t executed = 0;
+  if (runner == BenchmarkRunner::CpuStep) {
+    while (executed < kBenchmarkInstructions) {
+      if (!g_cpu->step()) return false;
+      executed++;
+    }
+  } else {
+    while (executed < kBenchmarkInstructions) {
+      uint32_t slice = std::min<uint32_t>(1000,
+          kBenchmarkInstructions - executed);
+      uint32_t ran = run(slice);
+      if (!ran) return false;
+      executed += ran;
+    }
+  }
+  const uint32_t elapsed_us = micros() - start_us;
+  const uint32_t counted =
+      (uint32_t)g_cpu->get_instructions_executed_count() - before;
+  const double mips = elapsed_us ? (double)counted / (double)elapsed_us : 0.0;
+
+  LOG("BENCH trace name=%s ring=%s history=%s", name,
+      g_trace_ring ? "allocated" : "none",
+      trace_history_active() ? "active" : "dormant");
+
+  LOG("BENCH name=%s instructions=%u elapsed_us=%u mips=%.4f "
+      "mmu=%u runner=%s trace_ring=%s",
+      name, (unsigned)counted, (unsigned)elapsed_us, mips,
+      mapped ? 1u : 0u,
+      runner == BenchmarkRunner::CpuStep ? "cpu-step" : "adapter-run",
+      g_trace_ring ? "allocated" : "none");
+  return counted == kBenchmarkInstructions;
+}
+
+}  // namespace
+
+bool benchmark() {
+  if (!init()) return false;
+
+  LOG("BENCH begin samples=4 instructions_per_sample=%u",
+      (unsigned)kBenchmarkInstructions);
+  bool ok = true;
+  ok &= run_benchmark_sample("register", false, false,
+                             BenchmarkRunner::CpuStep);
+  ok &= run_benchmark_sample("memory-unmapped", true, false,
+                             BenchmarkRunner::CpuStep);
+  ok &= run_benchmark_sample("memory-mapped", true, true,
+                             BenchmarkRunner::CpuStep);
+  // Allocate, then leave the ring dormant before the adapter sample. This
+  // directly guards against the historical trace=false performance leak.
+  set_rp_trace(0);
+  set_trace(true);
+  set_trace(false);
+  ok &= run_benchmark_sample("adapter-unmapped", true, false,
+                             BenchmarkRunner::AdapterRun);
+  LOG("BENCH end status=%s", ok ? "PASS" : "FAIL");
+
+  // setup() subsequently calls reset()/cold_boot() before guest execution;
+  // leave a conventional reset state in case benchmark() is reused elsewhere.
+  clear_run_state_for_boot();
+  g_bus->reset(true);
+  g_cpu->reset();
+  return ok;
+}
 uint8_t* memory() {
   return nullptr;  // kek memory owns its buffer; expose examine/deposit instead.
 }
@@ -1413,6 +1559,9 @@ void set_trace(bool enabled) {
         (unsigned)kTraceRingSize);
   } else {
     g_trace_enabled = false;
+    if (!g_rp_trace_history_active && g_rp_host_trace_left <= 0 &&
+        rp06_trace_remaining() <= 0)
+      release_trace_ring();
   }
 }
 
@@ -1435,12 +1584,15 @@ void set_rp_trace(uint32_t count) {
   uint32_t limited = count > 1000000 ? 1000000 : count;
   g_rp_host_trace_left = (int)limited;
   rp06_set_trace((int)limited);
+  g_rp_trace_history_active = limited > 0;
   if (limited > 0) {
     // Allocate the panic instruction ring so a later HALT dumps history
     // even when diag trace=false.
     ensure_trace_ring();
     clear_trace_ring();
     LOG("kek RP/DP trace=%u (panic instruction ring armed)", (unsigned)limited);
+  } else if (!g_trace_enabled) {
+    release_trace_ring();
   }
 }
 

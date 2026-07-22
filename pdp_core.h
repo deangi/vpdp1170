@@ -52,6 +52,7 @@ inline void reset() { pdp_core_kek::reset(); }
 inline void cold_boot() { pdp_core_kek::cold_boot(); }
 inline uint32_t run(uint32_t max_cycles) { return pdp_core_kek::run(max_cycles); }
 inline bool selftest() { return pdp_core_kek::selftest(); }
+inline bool benchmark() { return pdp_core_kek::benchmark(); }
 
 inline uint8_t* memory() { return pdp_core_kek::memory(); }
 inline uint32_t memory_size() { return pdp_core_kek::memory_size(); }
@@ -158,6 +159,7 @@ inline void reset() {}
 inline void cold_boot() {}
 inline uint32_t run(uint32_t) { return 0; }
 inline bool selftest() { return false; }
+inline bool benchmark() { return false; }
 
 inline uint8_t* memory() { return nullptr; }
 inline uint32_t memory_size() { return 0; }
@@ -229,6 +231,7 @@ inline void reset() { cpu_reset(); }
 inline void cold_boot() { cpu_cold_boot(); }
 inline uint32_t run(uint32_t max_cycles) { return cpu_run(max_cycles); }
 inline bool selftest() { return cpu_selftest(); }
+inline bool benchmark() { return false; }
 
 // Guest state.
 inline uint8_t* memory() { return cpu_mem(); }
