@@ -2276,7 +2276,10 @@ bool cpu::misc_operations(const uint16_t instr)
 
 		case 0b0000000000000101: // RESET
 			if (getPSW_runmode() == 0) {  // only in kernel mode
-				b->reset(true);
+				// Soft BUS INIT: peripherals + MMR0/3 clear, PARs/PDRs kept.
+				// hard=true wiped the MMU map and broke RSX M+4.6 device probe
+				// (RESET @700, MMR3←060, MMR0←1 → abort storm → SP=4 → HALT).
+				b->reset(false);
 				init_interrupt_queue();
 			}
 			return true;

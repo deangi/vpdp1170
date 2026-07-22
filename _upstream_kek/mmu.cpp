@@ -29,10 +29,13 @@ void mmu::begin(memory *const m, cpu *const c)
 
 void mmu::reset(const bool hard)
 {
-	if (hard) {
+	// Power-up / hard reset clears PARs and PDRs. BUS INIT from the RESET
+	// instruction must not: DEC KT11 docs state PAR/PDR are not cleared by
+	// INIT. RSX-11M+ V4.6 Step 7 relies on that — RESET, then MMR3/MMR0
+	// enable with the previously programmed map still in place.
+	if (hard)
 		memset(pages, 0x00, sizeof pages);
-		CPUERR = MMR0 = MMR1 = MMR2 = MMR3 = PIR = CSR = 0;
-	}
+	CPUERR = MMR0 = MMR1 = MMR2 = MMR3 = PIR = CSR = 0;
 	refresh_translation_cache();
 	update_io_base();
 }

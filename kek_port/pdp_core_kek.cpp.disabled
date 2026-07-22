@@ -29,6 +29,10 @@
 #include "../appconfig.h"
 #include "../kek_kwp.h"
 #include "../platform.h"
+#include "../telnet.h"
+
+#include <stdarg.h>
+#include <stdio.h>
 
 namespace pdp_core_kek {
 
@@ -876,9 +880,29 @@ static bool capture_previous_instruction_trace_entry(TraceEntry* entry) {
   return true;
 }
 
+static bool g_halt_diag_mirror = false;
+
+static void emit_halt_diag(const char* text) {
+  if (!text) return;
+  if (!g_serial_silenced) Serial.print(text);
+  if (g_halt_diag_mirror) telnet_diag_text(text);
+}
+
+static void emit_halt_diagf(const char* fmt, ...) {
+  char buffer[512];
+  va_list args;
+  va_start(args, fmt);
+  int written = vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  if (written <= 0) return;
+  emit_halt_diag(buffer);
+}
+
 static void print_trace_entry(const char* prefix, const TraceEntry& entry) {
   if (!entry.valid) return;
-  LOG("%s PC=%06o P=%08o ins=%06o PS=%06o R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s",
+  emit_halt_diagf(
+      "[vpdp1170] %s PC=%06o P=%08o ins=%06o PS=%06o "
+      "R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s\r\n",
       prefix ? prefix : "kek trace:",
       (unsigned)entry.pc,
       (unsigned)entry.phys_pc,
@@ -929,12 +953,13 @@ static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
 
   if (!g_trace_ring) {
     if (honor_panic_latch) {
-      LOGE("kek PDP-11/70 stopped: %s PC=%06o ins=%06o PS=%06o %s",
-           reason ? reason : "unknown",
-           current.valid ? (unsigned)current.pc : 0,
-           current.valid ? (unsigned)current.opcode : 0,
-           current.valid ? (unsigned)current.psw : 0,
-           current.valid ? current.disasm : "");
+      emit_halt_diagf(
+          "[vpdp1170 ERR] kek PDP-11/70 stopped: %s PC=%06o ins=%06o PS=%06o %s\r\n",
+          reason ? reason : "unknown",
+          current.valid ? (unsigned)current.pc : 0,
+          current.valid ? (unsigned)current.opcode : 0,
+          current.valid ? (unsigned)current.psw : 0,
+          current.valid ? current.disasm : "");
       TraceEntry previous {};
       if (capture_previous_instruction_trace_entry(&previous))
         print_trace_entry("kek previous:", previous);
@@ -942,11 +967,13 @@ static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
       if (capture_last_instruction_trace_entry(&last))
         print_trace_entry("kek last:", last);
       if (current.valid && g_cpu && g_bus) {
-        LOGE("kek HALT regs R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o",
-             (unsigned)current.regs[0], (unsigned)current.regs[1],
-             (unsigned)current.regs[2], (unsigned)current.regs[3],
-             (unsigned)current.regs[4], (unsigned)current.regs[5],
-             (unsigned)current.regs[6]);
+        emit_halt_diagf(
+            "[vpdp1170 ERR] kek HALT regs R0=%06o R1=%06o R2=%06o R3=%06o "
+            "R4=%06o R5=%06o SP=%06o\r\n",
+            (unsigned)current.regs[0], (unsigned)current.regs[1],
+            (unsigned)current.regs[2], (unsigned)current.regs[3],
+            (unsigned)current.regs[4], (unsigned)current.regs[5],
+            (unsigned)current.regs[6]);
       }
       return;
     }
@@ -960,10 +987,11 @@ static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
   }
 
   if (honor_panic_latch) {
-    LOGE("kek PDP-11/70 stopped: %s PC=%06o PS=%06o",
-         reason ? reason : "unknown",
-         current.valid ? (unsigned)current.pc : 0,
-         current.valid ? (unsigned)current.psw : 0);
+    emit_halt_diagf(
+        "[vpdp1170 ERR] kek PDP-11/70 stopped: %s PC=%06o PS=%06o\r\n",
+        reason ? reason : "unknown",
+        current.valid ? (unsigned)current.pc : 0,
+        current.valid ? (unsigned)current.psw : 0);
   } else {
     LOG("kek trace history: %s PC=%06o PS=%06o",
         reason ? reason : "manual dump",
@@ -972,52 +1000,54 @@ static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
   }
 
   uint32_t count = g_trace_ring_wrapped ? kTraceRingSize : g_trace_ring_next;
-  Serial.printf("[vpdp1170]   --- last %u kek instructions %s ---\r\n",
-                (unsigned)count,
-                honor_panic_latch ? "before stop" : "in history");
+  emit_halt_diagf("[vpdp1170]   --- last %u kek instructions %s ---\r\n",
+                  (unsigned)count,
+                  honor_panic_latch ? "before stop" : "in history");
   uint32_t start = g_trace_ring_wrapped ? g_trace_ring_next : 0;
   for (uint32_t i = 0; i < count; i++) {
     const TraceEntry& entry = g_trace_ring[(start + i) % kTraceRingSize];
     if (!entry.valid) continue;
-    Serial.printf("[vpdp1170]   PC=%06o P=%08o ins=%06o PS=%06o "
-                  "R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s\r\n",
-                  (unsigned)entry.pc,
-                  (unsigned)entry.phys_pc,
-                  (unsigned)entry.opcode,
-                  (unsigned)entry.psw,
-                  (unsigned)entry.regs[0],
-                  (unsigned)entry.regs[1],
-                  (unsigned)entry.regs[2],
-                  (unsigned)entry.regs[3],
-                  (unsigned)entry.regs[4],
-                  (unsigned)entry.regs[5],
-                  (unsigned)entry.regs[6],
-                  entry.disasm);
+    emit_halt_diagf("[vpdp1170]   PC=%06o P=%08o ins=%06o PS=%06o "
+                    "R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s\r\n",
+                    (unsigned)entry.pc,
+                    (unsigned)entry.phys_pc,
+                    (unsigned)entry.opcode,
+                    (unsigned)entry.psw,
+                    (unsigned)entry.regs[0],
+                    (unsigned)entry.regs[1],
+                    (unsigned)entry.regs[2],
+                    (unsigned)entry.regs[3],
+                    (unsigned)entry.regs[4],
+                    (unsigned)entry.regs[5],
+                    (unsigned)entry.regs[6],
+                    entry.disasm);
   }
   if (current.valid) {
-    Serial.printf("[vpdp1170]   --- current kek state %s ---\r\n",
-                  honor_panic_latch ? "after stop" : "at history dump");
-    Serial.printf("[vpdp1170]   PC=%06o P=%08o ins=%06o PS=%06o "
-                  "R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s\r\n",
-                  (unsigned)current.pc,
-                  (unsigned)current.phys_pc,
-                  (unsigned)current.opcode,
-                  (unsigned)current.psw,
-                  (unsigned)current.regs[0],
-                  (unsigned)current.regs[1],
-                  (unsigned)current.regs[2],
-                  (unsigned)current.regs[3],
-                  (unsigned)current.regs[4],
-                  (unsigned)current.regs[5],
-                  (unsigned)current.regs[6],
-                  current.disasm);
+    emit_halt_diagf("[vpdp1170]   --- current kek state %s ---\r\n",
+                    honor_panic_latch ? "after stop" : "at history dump");
+    emit_halt_diagf("[vpdp1170]   PC=%06o P=%08o ins=%06o PS=%06o "
+                    "R0=%06o R1=%06o R2=%06o R3=%06o R4=%06o R5=%06o SP=%06o %s\r\n",
+                    (unsigned)current.pc,
+                    (unsigned)current.phys_pc,
+                    (unsigned)current.opcode,
+                    (unsigned)current.psw,
+                    (unsigned)current.regs[0],
+                    (unsigned)current.regs[1],
+                    (unsigned)current.regs[2],
+                    (unsigned)current.regs[3],
+                    (unsigned)current.regs[4],
+                    (unsigned)current.regs[5],
+                    (unsigned)current.regs[6],
+                    current.disasm);
   }
-  Serial.printf("[vpdp1170]   --- end kek %s trace ---\r\n",
-                honor_panic_latch ? "panic" : "history");
+  emit_halt_diagf("[vpdp1170]   --- end kek %s trace ---\r\n",
+                  honor_panic_latch ? "panic" : "history");
 }
 
 static void dump_panic_trace(const char* reason) {
+  g_halt_diag_mirror = true;
   dump_trace_ring(reason, true);
+  g_halt_diag_mirror = false;
 }
 
 static uint64_t guest_instruction_count_for_kwp() {
@@ -1207,14 +1237,27 @@ static uint32_t run_diagnostic(uint32_t max_cycles) {
 }
 
 static bool diagnostic_run_required() {
+  // Any of these must take the Diagnostic specialization so the ring (and
+  // live T-stream) actually record. Clean is for the nominal hot path only.
   return g_trace_enabled || g_rp_trace_history_active || g_trace_remaining;
 }
 
 uint32_t run(uint32_t max_cycles) {
   // Select once per host slice; run_clean has no per-instruction diagnostic
   // operations or branches after template specialization.
-  return diagnostic_run_required() ? run_diagnostic(max_cycles)
-                                   : run_clean(max_cycles);
+  const bool diagnostic = diagnostic_run_required();
+  static bool last_diagnostic = false;
+  static bool logged_path = false;
+  if (!logged_path || diagnostic != last_diagnostic) {
+    LOG("kek run path: %s (trace=%d rp_hist=%d live=%u)",
+        diagnostic ? "diagnostic" : "clean",
+        g_trace_enabled ? 1 : 0,
+        g_rp_trace_history_active ? 1 : 0,
+        (unsigned)g_trace_remaining);
+    last_diagnostic = diagnostic;
+    logged_path = true;
+  }
+  return diagnostic ? run_diagnostic(max_cycles) : run_clean(max_cycles);
 }
 
 bool selftest() {
@@ -1323,6 +1366,12 @@ static bool run_benchmark_sample(const char* name, bool memory_operand,
 bool benchmark() {
   if (!init()) return false;
 
+  // Preserve host diagnostic trace across the bench samples. The samples
+  // deliberately toggle the ring to measure clean vs diagnostic run cost;
+  // without restore, setup()'s earlier set_trace(cfg.diag_trace) is lost and
+  // a later guest HALT dumps only previous/last instead of the ring.
+  const bool restore_trace = g_trace_enabled;
+
   LOG("BENCH begin samples=5 instructions_per_sample=%u",
       (unsigned)kBenchmarkInstructions);
   bool ok = true;
@@ -1350,6 +1399,7 @@ bool benchmark() {
   clear_run_state_for_boot();
   g_bus->reset(true);
   g_cpu->reset();
+  set_trace(restore_trace);
   return ok;
 }
 uint8_t* memory() {
@@ -1583,7 +1633,10 @@ void set_trace(bool enabled) {
     }
     g_trace_enabled = true;
     clear_trace_ring();
-    LOG("kek panic trace enabled (%u instruction ring)",
+    // g_trace_enabled is what run() uses to pick run_diagnostic over
+    // run_clean; without it the host stays on the no-record hot path.
+    LOG("kek panic trace enabled (%u instruction ring); "
+        "run path will be diagnostic",
         (unsigned)kTraceRingSize);
   } else {
     g_trace_enabled = false;

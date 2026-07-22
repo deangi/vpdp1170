@@ -256,14 +256,15 @@ void telnet_poll() {
       telnet_shell_output_consume(written);
       if (written < shell_bytes) break;
     }
-    // Flush queued console output in contiguous chunks from the FIFO.
-    // peek() returns the largest run that doesn't wrap, so at most two
-    // calls are needed to drain the ring. We stop early if write() can't
-    // take everything we offered (socket buffer full); the rest stays
-    // queued for the next telnet_poll().
+    // Flush queued console/diagnostic output in contiguous chunks from the
+    // FIFO. peek() returns the largest run that doesn't wrap, so at most
+    // two calls are needed to drain the ring. Diagnostics may arrive while
+    // the management shell is active, so this drain is not shell-gated.
+    // We stop early if write() can't take everything we offered (socket
+    // buffer full); the rest stays queued for the next telnet_poll().
     const uint8_t* p;
     size_t n;
-    while (!telnet_shell_active() && (n = g_telnet_out.peek(&p)) > 0) {
+    while ((n = g_telnet_out.peek(&p)) > 0) {
       size_t w = g_client.write(p, n);
       if (w == 0) break;
       g_telnet_out.consume(w);
@@ -288,11 +289,25 @@ void telnet_write(uint8_t c) {
   // drop bytes at the source. When enabled but no client is connected
   // we still buffer; telnet_poll() then clears the FIFO each iteration
   // so it never accumulates stale bytes a future client would see.
-  // IAC bytes in the data stream are escaped by emitting them twice
-  // (RFC 854). A full FIFO drops new bytes silently.
+  // Guest console output is suppressed while the management shell owns
+  // the session. IAC bytes in the data stream are escaped by emitting
+  // them twice (RFC 854). A full FIFO drops new bytes silently.
   if (!g_started || telnet_shell_active()) return;
   g_telnet_out.push(c);
   if (c == T_IAC) g_telnet_out.push(T_IAC);
+}
+
+void telnet_diag_write(uint8_t c) {
+  // Same FIFO as console output, but allowed during the management shell
+  // so HALT/reset diagnostics remain visible on an active Telnet session.
+  if (!g_started) return;
+  g_telnet_out.push(c);
+  if (c == T_IAC) g_telnet_out.push(T_IAC);
+}
+
+void telnet_diag_text(const char* text) {
+  if (!text) return;
+  while (*text) telnet_diag_write((uint8_t)*text++);
 }
 
 bool        telnet_connected() { return g_client && g_client.connected(); }

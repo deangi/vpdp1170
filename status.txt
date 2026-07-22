@@ -5,9 +5,12 @@ TODO:
 4) Big display version
 5) Telnet is laggy
 6) fixed 7/22 - emulator reset mode
-7) Investigate m+4.6 - halt
-8) Echo to telnet emulator reset configuration
-9) Echo to telnet HALT dump
+7) fixed 7/22 - Investigate m+4.6 - halt - fixed reset instruction - M+4.6 now boots from rl02
+8) fixed 7/22 - Echo to telnet emulator reset configuration
+9) fixed 7/22 - Echo to telnet HALT dump
+10) works Investigate shortening delays for dl, dk, rp, console 
+11) works Investigate removing dead 11/40 code 
+12) works - Boot M+4.6 with full memory (not 2044, 1920 max)
 
 EMU Status PDP 11/70
 - 7/12/2026 V1.3
@@ -716,9 +719,7 @@ Planned next tests/work:
 - rsts7       - fail
 - unix7       - runs to @ prompt   "boot, rl(0,0)rl2unix" then a bunch of "fset specification"
 - 211bsd      - fails - "just hit enter to boot at : prompt" - bunch of errors rl(0,0,0) err cy=13, hd=0, sc=12, rlcs=112275, rlmp=177000
-- mp46 rl02   - runs thru startup, I think hits halt probing some devices. [vpdp1170 ERR] kek PDP-11/70 stopped: guest HALT instruction PC=000714 ins=010437 PS=030340 MOV R4,@#172516
-[vpdp1170] kek previous: PC=000702 P=00000702 ins=010437 PS=030340 R0=131134 R1=000722 R2=122430 R3=000000 R4=000060 R5=131134 SP=000004 MOV R4,@#172516
-[vpdp1170] kek last: PC=000706 P=00000706 ins=012737 PS=030340 R0=131134 R1=000722 R2=122430 R3=000000 R4=000060 R5=131134 SP=000004 MOV #000001,@#177572
-[vpdp1170 ERR] kek HALT regs R0=131134 R1=000722 R2=122430 R3=000000 R4=000060 R5=131134 SP=000004
-
+- mp46 rl02   - CONFIRMED: boots and logs in after RESET soft-init fix
+  (guest RESET no longer wipes PARs/PDRs; was Step 7 HALT @000714).
+- 211bsd      - fails - "just hit enter to boot at : prompt" - bunch of errors rl(0,0,0) err cy=13, hd=0, sc=12, rlcs=112275, rlmp=177000
 

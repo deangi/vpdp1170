@@ -66,6 +66,7 @@
 #include "ui.h"
 #include "dl11_file.h"
 #include "emu_control.h"
+#include "host_diag.h"
 
 static TFT_eSPI tft;
 static Freenove_ESP32_WS2812 strip(LED_COUNT, LED_PIN, LED_CHANNEL, TYPE_GRB);
@@ -464,6 +465,17 @@ static bool reload_pdp_config_and_mount(const char* reason) {
   config_print(cfg);
   apply_runtime_pdp_config();
   disks_mount();
+
+  // Serial + Telnet banner naming the active config (always /pdpconfig.ini
+  // after a variant copy) plus the loaded title/boot/memory summary.
+  host_diag_printf(
+      "[vpdp1170] emulator reset: config=%s title=\"%s\" boot=%s "
+      "mem=%dKW (%s)\r\n",
+      PDP_CFG_PATH,
+      cfg.title.c_str(),
+      cfg.boot_unit_label(),
+      cfg.mem_size_kw,
+      reason ? reason : "reset");
   return true;
 }
 
@@ -620,6 +632,9 @@ void setup() {
     tft_status(ROW_CPU, "CPU:   ",
                benchmark_ok ? "benchmark PASS" : "benchmark FAIL",
                benchmark_ok ? TFT_GREEN : TFT_RED);
+    // Benchmark samples toggle the panic-trace ring; re-apply config so
+    // diag_trace=true survives into the guest boot.
+    apply_runtime_pdp_config();
   }
 #endif
 
