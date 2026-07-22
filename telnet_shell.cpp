@@ -541,7 +541,9 @@ static void command_help() {
       "  switches [octal|bit=0|1]    show or set console switch register\r\n"
       "  tty                         show console TTY counters\r\n"
       "  monitor                     enter PDP-11 front-panel monitor\r\n"
-      "  reboot                      cold reboot the PDP-11\r\n"
+      "  reset                       restart emulator (reload config, remount,\r\n"
+      "                              zero RAM, cold boot; keep WiFi/Telnet/FTP)\r\n"
+      "  reboot                      alias for reset\r\n"
       "  exit                        reconnect Telnet to the PDP console\r\n");
 }
 
@@ -1559,9 +1561,14 @@ static void execute_command(char* line) {
     output_printf("PDP-11 monitor; CPU is currently %s.\r\n",
                   pdp_core::monitor_paused() ? "paused" : "running");
     monitor_help();
-  } else if (!strcasecmp(words[0], "reboot")) {
+  } else if (!strcasecmp(words[0], "reset") ||
+             !strcasecmp(words[0], "restart") ||
+             !strcasecmp(words[0], "reboot")) {
+    // Same path as UI "Reboot PDP-11": reload /pdpconfig.ini, remount
+    // drives, zero guest RAM, cold-boot. WiFi/Telnet/FTP stay up.
     if (emu_control::submit("PDP;REBOOT"))
-      output_text("PDP-11 cold reboot scheduled\r\n");
+      output_text("emulator reset scheduled "
+                  "(reload config, remount, zero RAM, cold boot)\r\n");
     else
       output_text("error: emulator command queue full\r\n");
   } else if (!strcasecmp(words[0], "exit")) {

@@ -50,6 +50,9 @@ static bool     g_dirty  = false;
 static bool     g_reboot = false;
 static bool     g_boot_change = false;
 static bool     g_esp_restart = false;   // m15: full ESP32 hardware reset requested
+// SC_CONFIRM_RESET dual-use: true = ESP.restart(), false = emulator restart
+// (reload /pdpconfig.ini, remount, zero RAM, cold boot; keep WiFi/Telnet/FTP).
+static bool     g_confirm_esp_reset = true;
 static int      g_sel    = 0;          // drive index for SC_DRIVE / SC_PICKER
 static int      g_scroll = 0;
 static uint8_t  g_bright = 255;
@@ -185,7 +188,7 @@ static void rebuild() {
       strcpy(g_items[g_count++], "PDP Config");
       strcpy(g_items[g_count++], "System Info");
       strcpy(g_items[g_count++], "Brightness");
-      strcpy(g_items[g_count++], "Reboot PDP-11");
+      strcpy(g_items[g_count++], "Restart Emulator");
       strcpy(g_items[g_count++], "Reset ESP32");
       break;
     case SC_DRIVES:
@@ -269,9 +272,15 @@ static void rebuild() {
       strcpy(g_items[g_count++], "Cancel");
       break;
     case SC_CONFIRM_RESET:
-      strcpy(g_title, "Reset ESP32 now?");
-      strcpy(g_items[g_count++], "Yes, reset now");
-      strcpy(g_items[g_count++], "Not yet");
+      if (g_confirm_esp_reset) {
+        strcpy(g_title, "Reset ESP32 now?");
+        strcpy(g_items[g_count++], "Yes, reset now");
+        strcpy(g_items[g_count++], "Not yet");
+      } else {
+        strcpy(g_title, "Restart Emulator now?");
+        strcpy(g_items[g_count++], "Yes, restart now");
+        strcpy(g_items[g_count++], "Not yet");
+      }
       break;
     default: break;
   }
@@ -333,7 +342,10 @@ static void activate(int idx) {        // idx = absolute item index
       else if (idx == 3) go(SC_INFO);
       else if (idx == 4) go(SC_BRIGHT);
       else if (idx == 5) { g_reboot = true; g_screen = SC_CLOSED; }
-      else if (idx == 6) go(SC_CONFIRM_RESET);
+      else if (idx == 6) {
+        g_confirm_esp_reset = true;
+        go(SC_CONFIRM_RESET);
+      }
       break;
     case SC_DRIVES:
       if (idx == 0) {
@@ -462,16 +474,18 @@ static void activate(int idx) {        // idx = absolute item index
       if (g_variant_count == 0) break;       // "(no variants found)" placeholder
       if (idx >= g_variant_count) break;
       // Build the full source path and remember the active filename to copy to.
-      const char* prefix = (g_screen == SC_WIFI_PICKER) ? WIFI_CFG_PREFIX
-                                                        : PDP_CFG_PREFIX;
-      const char* dst    = (g_screen == SC_WIFI_PICKER) ? WIFI_CFG_PATH
-                                                        : PDP_CFG_PATH;
+      const bool wifi = (g_screen == SC_WIFI_PICKER);
+      const char* prefix = wifi ? WIFI_CFG_PREFIX : PDP_CFG_PREFIX;
+      const char* dst    = wifi ? WIFI_CFG_PATH   : PDP_CFG_PATH;
       snprintf(g_pending_src, sizeof(g_pending_src),
                "/%s%s.ini", prefix, g_variants[idx]);
       strncpy(g_pending_dst, dst, sizeof(g_pending_dst) - 1);
       g_pending_dst[sizeof(g_pending_dst) - 1] = 0;
       strncpy(g_pending_label, g_variants[idx], sizeof(g_pending_label) - 1);
       g_pending_label[sizeof(g_pending_label) - 1] = 0;
+      // WiFi changes need a full chip reset; PDP config only needs an
+      // emulator restart so Telnet/FTP stay connected.
+      g_confirm_esp_reset = wifi;
       go(SC_CONFIRM_COPY);
       break;
     }
@@ -489,12 +503,14 @@ static void activate(int idx) {        // idx = absolute item index
       if (idx == 0) {
         // No LOG here: this handler runs with g_ui_mutex held, and
         // Serial.printf on USB-CDC can block indefinitely when no host
-        // is reading the port. Set a one-shot flag and let loop() do
-        // the reset after the mutex is released; loop() also skips all
-        // serial activity for the same reason.
-        g_esp_restart = true;
-        g_screen      = SC_CLOSED;   // close menu so loop() resumes
-        g_dirty       = false;
+        // is reading the port. Set a one-shot flag and let loop() act
+        // after the mutex is released.
+        if (g_confirm_esp_reset)
+          g_esp_restart = true;
+        else
+          g_reboot = true;   // reload pdpconfig, remount, cold boot
+        g_screen = SC_CLOSED;   // close menu so loop() resumes
+        g_dirty  = false;
       } else {
         go(SC_MAIN);
       }
@@ -559,7 +575,7 @@ static void draw_list() {
     if (g_screen == SC_DRIVES && idx == 4 &&
         (cfg.disk_rp0.length() || disk_is_mounted(DRIVE_RP0))) bg = COL_ITEM_HI;
     if (g_screen == SC_DRIVES && idx >= 5 && idx < 9 && slot_has_image(idx - 5)) bg = COL_ITEM_HI;
-    // SC_MAIN items 5 (Reboot PDP-11) and 6 (Reset ESP32) are destructive.
+    // SC_MAIN items 5 (Restart Emulator) and 6 (Reset ESP32) are destructive.
     if (g_screen == SC_MAIN && (idx == 5 || idx == 6)) bg = COL_DANGER;
     if (g_screen == SC_DRIVE && idx == 1) bg = COL_DANGER;
     if (g_screen == SC_PICKER && idx == 0) bg = COL_ITEM_HI;   // create-new
