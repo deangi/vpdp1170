@@ -2,7 +2,8 @@ TODO:
 1) fixed 7/22 speedup
 2) fixed - pdp reboot from halt doesn't work
 3) fixed 7/22 - assign pills by mounted drives, not fixed positions
-4) Big display version
+4) in work - 7/23 - Big display version CrowPanel Advance 7" dual-board: Phase0 bring-up sketch in
+    CrowPanelBringup/ (display/fonts/touch). Prefer #ifdef board profiles.
 5) Telnet is laggy
 6) fixed 7/22 - emulator reset mode
 7) fixed 7/22 - Investigate m+4.6 - halt - fixed reset instruction - M+4.6 now boots from rl02
@@ -11,6 +12,11 @@ TODO:
 10) works Investigate shortening delays for dl, dk, rp, console 
 11) works Investigate removing dead 11/40 code 
 12) works - Boot M+4.6 with full memory (not 2044, 1920 max)
+13) obe - 11M+3.0 - SIMH 11/84 OK, SIMH 11/70 red stack trap (not 11/70
+    sysgen). HB instrumentation removed; clean run path.
+
+
+
 
 EMU Status PDP 11/70
 - 7/12/2026 V1.3
@@ -25,7 +31,8 @@ EMU Status PDP 11/70
 - RSTSV7 - Device RL does not interrupt, unexpected trap at 04, HALT
 - UNIXV7 - comes up with @ prompt, type boot, then rl(0,0)rl2unix
 - 211bsd - just hit enter, rl(0,0,0)unix - then runs a long time and prints boot banner
-- RSX11M-PLUS - still fails SAV home block on RP06 (separate from 4.8 RL fix)
+- RSX11M-PLUS mp30 RP - CLOSED: image boots on SIMH 11/84, red stack trap
+  on SIMH 11/70 — not sysgened for 11/70 (not a kek RH70 HB/DMA bug)
 
 7/7 - investigate base rsx11m boot.   The CPU is in an infinite loop, doing an INC on a word that is an odd address.   It takes the trap 004, but then returns to the offending instruction, which traps again
     - the pushed PC should be the address AFTER the offending instruction, unless the instruction fetch itself was from an odd address.
@@ -636,7 +643,8 @@ EMU Status PDP 11/40
         post-CLRT0 R5to0 only at recoverable empty-peal PCs (004750-49,
         005054-3, …) — not fatal. Soft delta remains: ACTHD=060320 vs
         SIMH 060350 (pool skew; not blocking past BE.NCT).
-- mp30 rp06   - fail - home block not found - problem with addresses
+- mp30 rp06   - CLOSED - RP image, not 11/70: SIMH 11/84 OK, SIMH 11/70
+  red stack trap. kek HB chase (Q.IOPL vs BA, mirror) abandoned as OBE.
 - mp87 rp06   - fail - SAV -- Booted device not in system - DB 176700
 - mp4687 rp06 - fail - SAV -- Booted device not in system - DB 176700
 - m70 rp06    - fail - not a real boot image?

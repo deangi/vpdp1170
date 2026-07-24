@@ -553,6 +553,9 @@ static void monitor_help() {
       "  P                  pause after the current instruction\r\n"
       "  S                  execute one instruction and remain paused\r\n"
       "  C                  continue execution\r\n"
+      "  B                  show breakpoint\r\n"
+      "  B012340            break when PC equals 012340\r\n"
+      "  B clear            clear breakpoint\r\n"
       "  D00100             dump 16 words starting at 00100\r\n"
       "  D00100:00200       dump an inclusive address range\r\n"
       "  M00100             dump 16 MMU/logical words starting at 00100\r\n"
@@ -999,6 +1002,31 @@ static void execute_monitor_command(char* line) {
   } else if (!strcasecmp(command, "C")) {
     pdp_core::monitor_continue();
     output_text("CPU running\r\n");
+  } else if (command[0] == 'B' || command[0] == 'b') {
+    char* arg = trim_in_place(command + 1);
+    if (!arg || !*arg) {
+      if (!pdp_core::monitor_break_active()) {
+        output_text("no breakpoint set (B<octal-pc>; B clear)\r\n");
+      } else {
+        output_printf("armed: PC=%06o\r\n",
+                      (unsigned)pdp_core::monitor_break_pc());
+      }
+    } else if (!strcasecmp(arg, "clear") || !strcasecmp(arg, "-") ||
+               !strcasecmp(arg, "off")) {
+      pdp_core::monitor_break_clear();
+      output_text("breakpoint cleared\r\n");
+    } else {
+      char* end = nullptr;
+      unsigned long pc = strtoul(arg, &end, 8);
+      while (end && (*end == ' ' || *end == '\t')) end++;
+      if (!end || *end || (pc & 1UL) || pc > 0177777UL) {
+        output_text("usage: B<octal-pc> | B clear\r\n");
+      } else if (pdp_core::monitor_break_set_pc((uint16_t)pc)) {
+        output_printf("breakpoint: PC=%06lo\r\n", pc);
+      } else {
+        output_text("error: could not arm PC breakpoint\r\n");
+      }
+    }
   } else if (!strcasecmp(command, "H")) {
     pdp_core::monitor_dump_history();
     output_text("trace history requested; output goes to USB serial\r\n");

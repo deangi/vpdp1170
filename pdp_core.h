@@ -146,6 +146,12 @@ inline uint32_t monitor_step() { return pdp_core_kek::monitor_step(); }
 inline void monitor_trace_next(uint32_t count) { pdp_core_kek::monitor_trace_next(count); }
 inline uint32_t monitor_trace_remaining() { return pdp_core_kek::monitor_trace_remaining(); }
 inline void monitor_dump_history() { pdp_core_kek::monitor_dump_history(); }
+inline void monitor_break_clear() { pdp_core_kek::monitor_break_clear(); }
+inline bool monitor_break_set_pc(uint16_t pc) {
+  return pdp_core_kek::monitor_break_set_pc(pc);
+}
+inline bool monitor_break_active() { return pdp_core_kek::monitor_break_active(); }
+inline uint16_t monitor_break_pc() { return pdp_core_kek::monitor_break_pc(); }
 
 #else
 
@@ -218,6 +224,10 @@ inline uint32_t monitor_step() { return 0; }
 inline void monitor_trace_next(uint32_t) {}
 inline uint32_t monitor_trace_remaining() { return 0; }
 inline void monitor_dump_history() {}
+inline void monitor_break_clear() {}
+inline bool monitor_break_set_pc(uint16_t) { return false; }
+inline bool monitor_break_active() { return false; }
+inline uint16_t monitor_break_pc() { return 0; }
 
 #endif
 
@@ -290,6 +300,10 @@ inline uint32_t monitor_step() { return cpu_monitor_step(); }
 inline void monitor_trace_next(uint32_t count) { cpu_monitor_trace_next(count); }
 inline uint32_t monitor_trace_remaining() { return cpu_monitor_trace_remaining(); }
 inline void monitor_dump_history() { cpu_dump_trace(512); }
+inline void monitor_break_clear() {}
+inline bool monitor_break_set_pc(uint16_t) { return false; }
+inline bool monitor_break_active() { return false; }
+inline uint16_t monitor_break_pc() { return 0; }
 
 #endif
 

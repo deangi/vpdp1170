@@ -69,4 +69,12 @@ void monitor_trace_next(uint32_t count);
 uint32_t monitor_trace_remaining();
 void monitor_dump_history();
 
+// Instruction breakpoints for the telnet monitor (ESP32 run loop).
+// B <octal>  — break when PC equals that virtual address
+// B          — show status / B clear
+void monitor_break_clear();
+bool monitor_break_set_pc(uint16_t pc);
+bool monitor_break_active();
+uint16_t monitor_break_pc();
+
 }  // namespace pdp_core_kek

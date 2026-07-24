@@ -13,6 +13,7 @@
 #include "error.h"
 #include "gen.h"
 #include "log.h"
+#include "mmu.h"
 #include "rp06.h"
 #include "utils.h"
 
@@ -134,11 +135,18 @@ static void rp06_trace_dev(bus *const b, const char *fmt, ...)
 #endif
 }
 
-// RH70 DMA address: BA+BAE is a 22-bit *physical* address (SIMH mba_rdbufW:
-// pa = ba when not RH11). Unibus map is NOT used. Do not MMU-translate BA.
-static uint32_t rp06_rh70_dma_pa(const uint32_t ba_reg)
+// RH70: CSR access is Unibus; DMA is Massbus → 22-bit *physical* main-memory
+// (SIMH mba_rdbuf / 11/70 handbook). Do NOT Unibus-map or MMU-translate BA:
+// BA+BAE (and CS1 A16/A17 when BAE==0) are physical.
+static uint32_t rp06_rh70_dma_pa(bus *const /*b*/, const uint32_t ba_reg,
+				 const uint16_t /*bae*/)
 {
 	return ba_reg & 017777777u;
+}
+
+static uint16_t rp06_le_word(const uint8_t *const p)
+{
+	return uint16_t(p[0] | (uint16_t(p[1]) << 8));
 }
 
 
@@ -269,8 +277,8 @@ static bool rp06_valid_address(const bool is_rp07, const uint16_t dc,
 			       const uint16_t da)
 {
 	const uint32_t cyl  = dc & 01777;
-	const uint32_t head = (da >> 8) & 0377;
-	const uint32_t sec  = da & 0377;
+	const uint32_t head = (da >> 8) & 077;
+	const uint32_t sec  = da & 077;
 	return cyl < rp06_cylinders(is_rp07) && head < NTRAC && sec < NSECT;
 }
 
@@ -278,15 +286,10 @@ static bool rp06_last_block(const bool is_rp07, const uint16_t dc,
 			    const uint16_t da)
 {
 	const uint32_t cyl  = dc & 01777;
-	const uint32_t head = (da >> 8) & 0377;
-	const uint32_t sec  = da & 0377;
+	const uint32_t head = (da >> 8) & 077;
+	const uint32_t sec  = da & 077;
 	return cyl == rp06_cylinders(is_rp07) - 1u &&
 	       head == NTRAC - 1u && sec == NSECT - 1u;
-}
-
-static uint16_t rp06_le_word(const uint8_t *const p)
-{
-	return uint16_t(p[0] | (uint16_t(p[1]) << 8));
 }
 
 rp06::rp06(bus *const b, abool *const disk_read_activity, abool *const disk_write_activity, const bool is_rp07) :
@@ -621,9 +624,12 @@ uint32_t rp06::compute_offset() const
 
 uint32_t rp06::compute_offset_from(uint16_t dc, uint16_t da) const
 {
-	uint16_t cn = dc;
-	uint16_t tn = (da >> 8) & 0377;
-	uint16_t sn = da & 0377;
+	// Match SIMH GET_DA / hardware RPDA: sector and track are 6-bit fields
+	// (bits 0-5 and 8-13). Using 0377 treated reserved DA bits as address
+	// and could send home-block searches to the wrong LBN.
+	uint16_t cn = dc & 01777;
+	uint16_t tn = (da >> 8) & 077;
+	uint16_t sn = da & 077;
 	uint32_t offs = cn * NSECT * NTRAC;
 	offs += tn * NSECT;
 	offs += sn;
@@ -636,7 +642,7 @@ uint32_t rp06::compute_offset_from(uint16_t dc, uint16_t da) const
 static void rp06_advance_disk_address(uint16_t &dc, uint16_t &da, uint32_t sectors)
 {
 	uint32_t cyl  = dc & 01777;
-	uint32_t head = (da >> 8) & 037;
+	uint32_t head = (da >> 8) & 077;
 	uint32_t sec  = da & 077;
 	sec += sectors;
 	while (sec >= NSECT) {
@@ -751,11 +757,11 @@ void rp06::complete_deferred_data_command()
 	}
 
 	uint32_t offs = compute_offset_from(deferred_dc, deferred_da);
-	// RH70: BA+BAE increments as the 22-bit physical DMA address (not Unibus map).
+	// BA+BAE increments in register space; DMA PA may be Unibus-mapped (18-bit).
 	uint32_t ba_reg = getphysaddr_from(deferred_cs1, deferred_ba, deferred_bae);
 	uint32_t nw = 65536u - deferred_wc;
 	uint32_t nb = nw * 2u;
-	const uint32_t dma_pa0 = rp06_rh70_dma_pa(ba_reg);
+	const uint32_t dma_pa0 = rp06_rh70_dma_pa(b, ba_reg, deferred_bae);
 	const bool header_command = (fnc == 031 || fnc == 035);
 	const bool header_mismatch =
 		bad_header_valid &&
@@ -769,9 +775,9 @@ void rp06::complete_deferred_data_command()
 	rp06_trace_dev(b, "%s-DATA bytes=%u disk_off=%u ba=%08o pa=%08o cyl=%u trk=%u sec=%u",
 		   is_read ? "READ" : "WRITE",
 		   (unsigned)nb, (unsigned)offs, (unsigned)ba_reg, (unsigned)dma_pa0,
-		   (unsigned)deferred_dc,
-		   (unsigned)((deferred_da >> 8) & 0377),
-		   (unsigned)(deferred_da & 0377));
+		   (unsigned)(deferred_dc & 01777),
+		   (unsigned)((deferred_da >> 8) & 077),
+		   (unsigned)(deferred_da & 077));
 
 	uint8_t xfer_buffer[SECTOR_SIZE] { };
 	uint32_t end_offset = offs + nb;
@@ -781,15 +787,15 @@ void rp06::complete_deferred_data_command()
 		registers[reg_num(RP06_CS2)] |= CS2_IR;
 		rp06_trace_dev(b, "ADDR-ERR fnc=%02o cyl=%u trk=%u sec=%u header_mismatch=%d",
 			       fnc, (unsigned)(deferred_dc & 01777),
-			       (unsigned)((deferred_da >> 8) & 0377),
-			       (unsigned)(deferred_da & 0377),
+			       (unsigned)((deferred_da >> 8) & 077),
+			       (unsigned)(deferred_da & 077),
 			       header_mismatch ? 1 : 0);
 	}
 	for (uint32_t cur_offset = offs; cur_offset < end_offset; cur_offset += SECTOR_SIZE) {
 		if (!xfer_ok)
 			break;
 		uint32_t cur_n = std::min(end_offset - cur_offset, uint32_t(SECTOR_SIZE));
-		const uint32_t pa = rp06_rh70_dma_pa(ba_reg);
+		const uint32_t pa = rp06_rh70_dma_pa(b, ba_reg, deferred_bae);
 		if (is_read) {
 			if (fhs.empty() || !fhs.at(0)->read(cur_offset, cur_n, xfer_buffer, SECTOR_SIZE)) {
 				rp06_trace_dev(b, "READ-ERR disk_off=%u len=%u", (unsigned)cur_offset, (unsigned)cur_n);
@@ -919,13 +925,21 @@ void rp06::complete_deferred_data_command()
 	if (!xfer_ok)
 		cs1 |= uint16_t(rp06::cs1_bits::TRE);
 	registers[reg_num(RP06_CS1)] = cs1;
-	registers[reg_num(RP06_AS)] |= rp06_selected_drive_bit(registers[reg_num(RP06_CS2)]);
-	rp06_trace_dev(b, "%s-DONE ok=%d CS1=%06o BA=%06o BAE=%06o DA=%06o DC=%06o",
+	// SIMH: successful data xfers do mba_set_don + rp_update_ds(0) — no ATA.
+	// Only errors (and seek-class cmds) raise attention.
+	if (!xfer_ok)
+		registers[reg_num(RP06_AS)] |= rp06_selected_drive_bit(registers[reg_num(RP06_CS2)]);
+	// Drop sticky ER1.RMR after a successful xfer; real fault bits stay until DCLR.
+	if (xfer_ok)
+		registers[reg_num(RP06_ERRREG1)] &= uint16_t(~ER1_RMR);
+	rp06_trace_dev(b, "%s-DONE ok=%d CS1=%06o BA=%06o BAE=%06o DA=%06o DC=%06o AS=%06o ER1=%06o",
 		   is_read ? "READ" : "WRITE",
 		   xfer_ok ? 1 : 0, cs1,
 		   registers[reg_num(RP06_UBA)],
 		   registers[reg_num(RP06_BAE)],
-		   da, dc);
+		   da, dc,
+		   registers[reg_num(RP06_AS)],
+		   registers[reg_num(RP06_ERRREG1)]);
 	if (is_read && deferred_ba < 010000 && rp06_trace_left > 0) {
 		// Dump a few words of what landed in low memory for boot diagnosis.
 		auto word_at = [&](uint16_t addr) -> uint16_t {

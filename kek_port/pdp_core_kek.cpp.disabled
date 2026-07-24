@@ -44,6 +44,9 @@ static rk05* g_rk05 = nullptr;
 static rl02* g_rl02 = nullptr;
 static rp06* g_rp06 = nullptr;
 static bool g_paused = false;
+static bool g_bp_pc_enabled = false;
+static bool g_bp_skip_once = false;
+static uint16_t g_bp_pc = 0;
 static int g_boot_kind = 0;
 static uint32_t g_trace_remaining = 0;
 static uint64_t g_last_clock_instr = 0;
@@ -1199,6 +1202,26 @@ static uint32_t run_loop(uint32_t max_cycles) {
       g_paused = true;
       break;
     }
+    if (g_bp_pc_enabled) {
+      if (g_bp_skip_once) {
+        g_bp_skip_once = false;
+      } else if (g_cpu->getPC() == g_bp_pc) {
+        if constexpr (Diagnostic) record_trace_entry();
+        const uint16_t pc_now = g_cpu->getPC();
+        LOG("kek BREAK pc=%06o PS=%06o R0=%06o R1=%06o R2=%06o R3=%06o "
+            "R4=%06o R5=%06o SP=%06o",
+            (unsigned)pc_now, (unsigned)g_cpu->getPSW(),
+            (unsigned)g_cpu->get_register(0),
+            (unsigned)g_cpu->get_register(1),
+            (unsigned)g_cpu->get_register(2),
+            (unsigned)g_cpu->get_register(3),
+            (unsigned)g_cpu->get_register(4),
+            (unsigned)g_cpu->get_register(5),
+            (unsigned)g_cpu->get_register(6));
+        g_paused = true;
+        break;
+      }
+    }
     if (!g_cpu->step()) {
       if constexpr (Diagnostic) record_trace_entry();
       dump_panic_trace("cpu step returned false");
@@ -1689,6 +1712,10 @@ void monitor_pause() {
 }
 void monitor_continue() {
   g_trace_frozen = false;
+  // If we stopped on a breakpoint, allow one instruction so C does not
+  // immediately re-hit the same PC.
+  if (g_bp_pc_enabled)
+    g_bp_skip_once = true;
   g_paused = false;
 }
 bool monitor_paused() { return g_paused; }
@@ -1728,6 +1755,28 @@ uint32_t monitor_trace_remaining() {
 
 void monitor_dump_history() {
   dump_trace_ring("monitor history", false);
+}
+
+void monitor_break_clear() {
+  g_bp_pc_enabled = false;
+  g_bp_skip_once = false;
+  g_bp_pc = 0;
+}
+
+bool monitor_break_set_pc(uint16_t pc) {
+  if (pc & 1) return false;
+  g_bp_pc_enabled = true;
+  g_bp_pc = pc;
+  g_bp_skip_once = false;
+  return true;
+}
+
+bool monitor_break_active() {
+  return g_bp_pc_enabled;
+}
+
+uint16_t monitor_break_pc() {
+  return g_bp_pc;
 }
 
 }  // namespace pdp_core_kek
