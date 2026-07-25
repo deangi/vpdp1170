@@ -14,6 +14,9 @@
 #include <WiFi.h>
 #include "sd_fs.h"
 #include <string.h>
+#if VPDP_BOARD == VPDP_BOARD_CROWPANEL_7
+#include "driver/i2c.h"
+#endif
 
 #ifndef TFT_BL
 #define TFT_BL 45
@@ -80,6 +83,34 @@ static char g_title[40];
 static char g_items[MAX_ITEMS][44];
 static int  g_count = 0;
 
+// Apply backlight. Freenove: LEDC PWM on TFT_BL. CrowPanel: STC8H @ 0x30
+// where 0=max, 244=min, 245=off. After gfx.init Lovyan owns I2C_NUM_0 for
+// GT911 — go through lgfx::i2c (the same path Touch_GT911 uses) so the bus
+// is shared cleanly. Do NOT use the legacy IDF i2c driver here: mixing
+// i2c_master_write_to_device with Lovyan's bus aborts ("CONFLICT" panic)
+// and bootloops the board.
+static void apply_brightness(uint8_t level) {
+#if VPDP_BOARD == VPDP_BOARD_FREENOVE_28
+  ledcWrite(TFT_BL, level);
+#elif VPDP_BOARD == VPDP_BOARD_CROWPANEL_7
+  // Map our 8..255 UI scale onto STC 244..0 (brighter = lower cmd).
+  uint8_t cmd;
+  if (level <= 8)
+    cmd = 244;
+  else if (level >= 255)
+    cmd = 0;
+  else
+    cmd = (uint8_t)(((255u - (uint32_t)level) * 244u) / 255u);
+  auto res = lgfx::i2c::transactionWrite(I2C_NUM_0, CROW_STC8H_ADDR,
+                                         &cmd, 1, 400000);
+  if (res.has_error())
+    LOGE("ui: STC8H brightness cmd=%u failed (lgfx i2c err %d)",
+         cmd, (int)res.error());
+#else
+  (void)level;
+#endif
+}
+
 // -------------------------------------------------------------------------
 void ui_init() {
   g_screen = SC_CLOSED;
@@ -90,8 +121,8 @@ void ui_init() {
 #if VPDP_BOARD == VPDP_BOARD_FREENOVE_28
   // Freenove TFT backlight on GPIO45 via LEDC.
   ledcAttach(TFT_BL, 5000, 8);
-  ledcWrite(TFT_BL, g_bright);
 #endif
+  apply_brightness(g_bright);
 }
 
 bool ui_is_open()             { return g_screen != SC_CLOSED; }
@@ -469,9 +500,7 @@ static void activate(int idx) {        // idx = absolute item index
     case SC_BRIGHT:
       if (idx == 0) g_bright = (g_bright > 40) ? g_bright - 40 : 8;
       else          g_bright = (g_bright < 215) ? g_bright + 40 : 255;
-#if VPDP_BOARD == VPDP_BOARD_FREENOVE_28
-      ledcWrite(TFT_BL, g_bright);
-#endif
+      apply_brightness(g_bright);
       rebuild(); g_dirty = true;
       break;
     case SC_WIFI_PICKER:
@@ -599,21 +628,32 @@ static void draw_info() {
   T->setTextDatum(ML_DATUM);
   T->drawString(g_title, 6, 12, 2);
   T->setTextDatum(TL_DATUM);
-  T->setTextColor(COL_TEXT, COL_BG);
 
   char line[64];
-  int y = 30;
+  int y = 28;
+  const int line_h = 15;
+  // Leave a clear gap above the Back button so the last text line is not
+  // painted under / over the nav control.
+  const int y_max = NAV_Y - 2;
+
+  auto put = [&](const char* s, uint16_t fg = COL_TEXT) {
+    if (y + line_h > y_max) return false;
+    T->setTextColor(fg, COL_BG);
+    T->drawString(s, 10, y, 2);
+    y += line_h;
+    return true;
+  };
+
   const char* title = cfg.title.length() ? cfg.title.c_str() : APP_TITLE;
-  snprintf(line, sizeof(line), "%s", title);
-  T->drawString(line, 10, y, 2); y += 18;
+  put(title);
   snprintf(line, sizeof(line), "SW %s  build %s", APP_VERSION, APP_BUILD_DATE);
-  T->drawString(line, 10, y, 2); y += 18;
+  put(line);
   snprintf(line, sizeof(line), "Core: %s", pdp_core::engine_name());
-  T->drawString(line, 10, y, 2); y += 18;
+  put(line);
   snprintf(line, sizeof(line), "RAM: %uKW active / %uKW config",
            (unsigned)(pdp_core::memory_size() / 2048),
            (unsigned)(pdp_core::target_memory_bytes() / 2048));
-  T->drawString(line, 10, y, 2); y += 18;
+  put(line);
 
   {
     const char* boot_dev = cfg.boot_unit_label();
@@ -635,10 +675,10 @@ static void draw_info() {
         boot_img = cfg.disk_a.c_str();
     }
     snprintf(line, sizeof(line), "Boot: %s", boot_dev);
-    T->drawString(line, 10, y, 2); y += 18;
+    put(line);
     snprintf(line, sizeof(line), "Image: %s",
              (boot_img && boot_img[0]) ? boot_img : "(none)");
-    T->drawString(line, 10, y, 2); y += 18;
+    put(line);
   }
 
   if (cfg.boot_kind != AppConfig::BK_RP) {
@@ -649,22 +689,18 @@ static void draw_info() {
       rp_img = cfg.disk_rp0.c_str();
     snprintf(line, sizeof(line), "RP0: %s",
              (rp_img && rp_img[0]) ? rp_img : "(none)");
-    T->drawString(line, 10, y, 2); y += 20;
-  } else {
-    y += 2;
+    put(line);
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    snprintf(line, sizeof(line), "WiFi: %s", WiFi.SSID().c_str());
-    T->setTextColor(COL_ACCENT, COL_BG); T->drawString(line, 10, y, 2); y += 18;
-    snprintf(line, sizeof(line), "IP:   %s", WiFi.localIP().toString().c_str());
-    T->drawString(line, 10, y, 2); y += 20;
+    // One line for SSID + IP so Telnet/FTP still fit above Back.
+    snprintf(line, sizeof(line), "WiFi: %s  %s",
+             WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    put(line, COL_ACCENT);
   } else {
-    T->setTextColor(COL_DANGER, COL_BG);
-    T->drawString("WiFi: disconnected", 10, y, 2); y += 20;
+    put("WiFi: disconnected", COL_DANGER);
   }
 
-  T->setTextColor(COL_TEXT, COL_BG);
   if (!telnet_enabled())
     snprintf(line, sizeof(line), "Telnet: disabled");
   else if (telnet_connected())
@@ -672,7 +708,7 @@ static void draw_info() {
              telnet_port(), telnet_client_ip());
   else
     snprintf(line, sizeof(line), "Telnet %u: no client", telnet_port());
-  T->drawString(line, 10, y, 2); y += 18;
+  put(line);
 
   if (!ftp_enabled())
     snprintf(line, sizeof(line), "FTP: disabled");
@@ -682,7 +718,7 @@ static void draw_info() {
     snprintf(line, sizeof(line), "FTP %u: listening", ftp_port());
   else
     snprintf(line, sizeof(line), "FTP %u: not listening", ftp_port());
-  T->drawString(line, 10, y, 2);
+  put(line);
 
   draw_nav();
 }

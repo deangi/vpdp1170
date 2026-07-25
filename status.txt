@@ -2,7 +2,7 @@ TODO:
 1) fixed 7/22 speedup
 2) fixed - pdp reboot from halt doesn't work
 3) fixed 7/22 - assign pills by mounted drives, not fixed positions
-4) in work - 7/24 - CrowPanel Advance 7" dual-board: Phase0 bring-up local only;
+4) fixed - 7/24 - CrowPanel Advance 7" dual-board: Phase0 bring-up local only;
     Phase1 board profiles (board_freenove.h / board_crowpanel.h + VPDP_BOARD).
     Checkpoint aa439c9 on origin/main before Phase1.  Phase0 complete, bring up display
 	bring up touch, bring up SD card, bring up WiFi - successful 7/24
@@ -16,6 +16,13 @@ TODO:
 12) works - Boot M+4.6 with full memory (not 2044, 1920 max)
 13) obe - 11M+3.0 - SIMH 11/84 OK, SIMH 11/70 red stack trap (not 11/70
     sysgen). HB instrumentation removed; clean run path.
+14) works - dim/brightness for Elecrow panel working
+
+Ideas:
+7/24 
+- stuff time/date fields
+- fix dim of tft for elecrow
+
 1:00 1-JAN-88
 vpdp1170 status 7/24 - prior to Elecrow board support:
 - 11Mark      - runs RSX-11M V4.8 BL70

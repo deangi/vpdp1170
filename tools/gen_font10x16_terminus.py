@@ -98,13 +98,37 @@ def main() -> int:
     lines.append("static const uint16_t font10x16[256][16] PROGMEM = {")
 
     present = 0
+    # Hand-crafted VT100 special-graphics box drawing (ESC ( 0). Matches the
+    # GLYPH_* slots in console.cpp (0x80..0x8A). Stem on bits 4+5; H on rows 7-8.
+    V = 0x030
+    H = 0x3FF
+    HR = 0x3F0  # center through right
+    HL = 0x03F  # left through center
+    vt100 = {
+        0x80: [0]*7 + [H, H] + [0]*7,                          # HLINE
+        0x81: [V] * 16,                                         # VLINE
+        0x82: [0]*7 + [HR, HR] + [V]*7,                         # UL
+        0x83: [0]*7 + [HL, HL] + [V]*7,                         # UR
+        0x84: [V]*7 + [HR, HR] + [0]*7,                         # LL
+        0x85: [V]*7 + [HL, HL] + [0]*7,                         # LR
+        0x86: [V]*7 + [HR, HR] + [V]*7,                         # LTEE
+        0x87: [V]*7 + [HL, HL] + [V]*7,                         # RTEE
+        0x88: [V]*7 + [H, H] + [0]*7,                           # BTEE
+        0x89: [0]*7 + [H, H] + [V]*7,                           # TTEE
+        0x8A: [V]*7 + [H, H] + [V]*7,                           # CROSS
+    }
+
     for cp in range(256):
-        src = glyphs.get(cp)
-        if src is None:
-            cell = [0] * CELL_H
-        else:
-            cell = [bdf_row_to_cell(r) for r in src]
+        if cp in vt100:
+            cell = vt100[cp]
             present += 1
+        else:
+            src = glyphs.get(cp)
+            if src is None:
+                cell = [0] * CELL_H
+            else:
+                cell = [bdf_row_to_cell(r) for r in src]
+                present += 1
         body = ",".join(f"0x{v:03X}" for v in cell)
         lines.append(f"  {{{body}}},  // 0x{cp:02X}")
 

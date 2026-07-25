@@ -369,13 +369,24 @@ static void draw_status_bar() {
   static uint32_t prev_io[DRIVE_COUNT] = {0};
   static uint32_t prev_inst = 0;
   static uint32_t prev_ms   = 0;
-  const int sy = CON_ROWS * CELL_H;          // 200
+  const int sy = CON_ROWS * CELL_H;
+  const int band = TFT_H - sy;
+  const int rule_h = 3;
+  // Larger pills on the CrowPanel 80 px band; Freenove's 40 px band stays
+  // compact but still uses font 2 inside the pills.
+  const bool tall = (band >= 60);
+  const int pill_w = tall ? 52 : 40;
+  const int pill_h = tall ? 28 : 18;
+  const int pill_font = 2;
+  const int pill_gap = tall ? 8 : 4;
+  const int pill_y = sy + rule_h + (tall ? 6 : 2);
 
-  tft.drawFastHLine(0, sy, TFT_W, TFT_DARKGREY);
+  // 3 px rule separating console from status chrome.
+  tft.fillRect(0, sy, TFT_W, rule_h, TFT_DARKGREY);
+  tft.fillRect(0, sy + rule_h, TFT_W, band - rule_h, TFT_BLACK);
 
   // Drive pills: leftmost is always the boot unit; remaining up to 3 are
-  // other currently mounted drives (scan DL0..DL3, RK0, RP0). Rebuilds from
-  // live mount state so GUI/emulator remounts update automatically.
+  // other currently mounted drives (scan DL0..DL3, RK0, RP0).
   int visible_slots[4];
   int pill_count = 0;
   const int boot_slot = boot_drive_slot();
@@ -386,8 +397,6 @@ static void draw_status_bar() {
     visible_slots[pill_count++] = s;
   }
 
-  // Clear the whole pill strip so omitted drives leave no stale labels.
-  tft.fillRect(0, sy + 1, 156, 20, TFT_BLACK);
   for (int i = 0; i < pill_count; i++) {
     int s = visible_slots[i];
     uint32_t r = 0, w = 0;
@@ -397,11 +406,12 @@ static void draw_status_bar() {
     uint16_t col = !disk_is_mounted(s) ? 0x2945
                  : active             ? TFT_YELLOW
                                       : TFT_GREEN;
-    int bx = 6 + i * 36;
-    tft.fillRoundRect(bx, sy + 5, 32, 16, 2, col);
+    int bx = 6 + i * (pill_w + pill_gap);
+    tft.fillRoundRect(bx, pill_y, pill_w, pill_h, 4, col);
     tft.setTextColor(TFT_BLACK, col);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString(status_drive_label(s), bx + 16, sy + 13, 1);
+    tft.drawString(status_drive_label(s), bx + pill_w / 2, pill_y + pill_h / 2,
+                   pill_font);
   }
   tft.setTextDatum(TL_DATUM);
 
@@ -414,21 +424,25 @@ static void draw_status_bar() {
   prev_inst = inst;
   prev_ms   = now;
 
-  tft.fillRect(156, sy + 1, TFT_W - 156, TFT_H - sy - 1, TFT_BLACK);
-  // IP + MIPS use font 2 (larger) on the top status row — readable on both
-  // the Freenove 40 px band and the CrowPanel 80 px band.
-  tft.setTextColor(WiFi.status() == WL_CONNECTED ? TFT_WHITE : TFT_RED, TFT_BLACK);
-  tft.setTextDatum(TL_DATUM);
-  tft.drawString(WiFi.status() == WL_CONNECTED
-                   ? WiFi.localIP().toString().c_str() : "WiFi down",
-                 158, sy + 4, 2);
-  // TEL/FTP pills match vApple2: dim when unavailable, green when listening,
-  // yellow when a client is connected.
+  char mips_str[16];
+  if (pdp_core::monitor_paused())
+    snprintf(mips_str, sizeof(mips_str), "PAUSED");
+  else if (mips > 0.0f && mips < 0.01f)
+    snprintf(mips_str, sizeof(mips_str), "%.1f KIPS", mips * 1000.0f);
+  else
+    snprintf(mips_str, sizeof(mips_str), "%.2f MIPS", mips);
+
+  // TEL/FTP share the drive-pill row (same size/y). IP sits under them.
+  // MIPS stays bottom-right.
+  const int mips_reserve = tall ? 110 : 90;   // room for "12.34 MIPS"
+  const int ftp_bx = TFT_W - 4 - mips_reserve - pill_w;
+  const int tel_bx = ftp_bx - pill_gap - pill_w;
+
   auto draw_net_pill = [&](int bx, const char* label, uint16_t col) {
-    tft.fillRoundRect(bx, sy + 24, 26, 15, 2, col);
+    tft.fillRoundRect(bx, pill_y, pill_w, pill_h, 4, col);
     tft.setTextColor(TFT_BLACK, col);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString(label, bx + 13, sy + 31, 1);
+    tft.drawString(label, bx + pill_w / 2, pill_y + pill_h / 2, pill_font);
   };
   const uint16_t COL_NET_OFF    = 0x2945;
   const uint16_t COL_NET_IDLE   = TFT_GREEN;
@@ -439,34 +453,38 @@ static void draw_status_bar() {
   uint16_t ftp_col = !ftp_listening() ? COL_NET_OFF
                   : ftp_connected()   ? COL_NET_ACTIVE
                                       : COL_NET_IDLE;
-  draw_net_pill(158, "TEL", tel_col);
-  draw_net_pill(188, "FTP", ftp_col);
+  draw_net_pill(tel_bx, "TEL", tel_col);
+  draw_net_pill(ftp_bx, "FTP", ftp_col);
 
-  // MIPS gets right-aligned to the screen edge via TR_DATUM so it's
-  // always at the rightmost column regardless of how many digits.
-  char mips_str[16];
-  if (pdp_core::monitor_paused())
-    snprintf(mips_str, sizeof(mips_str), "PAUSED");
-  else if (mips > 0.0f && mips < 0.01f)
-    snprintf(mips_str, sizeof(mips_str), "%.1f KIPS", mips * 1000.0f);
-  else
-    snprintf(mips_str, sizeof(mips_str), "%.2f MIPS", mips);
-  tft.setTextDatum(TR_DATUM);
+  // IP centered under the TEL/FTP pair.
+  tft.setTextDatum(TC_DATUM);
+  tft.setTextColor(WiFi.status() == WL_CONNECTED ? TFT_WHITE : TFT_RED, TFT_BLACK);
+  const int ip_cx = tel_bx + (ftp_bx + pill_w - tel_bx) / 2;
+  const int ip_y = pill_y + pill_h + (tall ? 4 : 1);
+  tft.drawString(WiFi.status() == WL_CONNECTED
+                   ? WiFi.localIP().toString().c_str() : "WiFi down",
+                 ip_cx, ip_y, 2);
+
+  tft.setTextDatum(BR_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString(mips_str, TFT_W - 4, sy + 4, 2);
-  tft.setTextDatum(TL_DATUM);   // restore for the title row below
-
-  // [system] title from pdpconfig.ini, drawn below the drive indicators
-  // (left half, under the activity pills). Falls back to APP_TITLE if
-  // the user left the field blank.
-  tft.fillRect(0, sy + 22, 156, TFT_H - sy - 22, TFT_BLACK);
-  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.drawString(mips_str, TFT_W - 4, TFT_H - (tall ? 6 : 2), 2);
   tft.setTextDatum(TL_DATUM);
-  const char* title = cfg.title.length() ? cfg.title.c_str() : APP_TITLE;
-  tft.drawString(title, 6, sy + 24, 2);
 
-  // Flush the status band to PSRAM for the RGB scanout (no-op on SPI panels).
-  gfx_writeback(tft, 0, sy, TFT_W, TFT_H - sy);
+  // [system] title under the drive pills (left side).
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  const char* title = cfg.title.length() ? cfg.title.c_str() : APP_TITLE;
+  const int title_y = tall ? (pill_y + pill_h + 6) : (sy + rule_h + 20);
+  // On the short Freenove band the title shares the row with drive pills —
+  // only draw it when there is vertical room (CrowPanel) or shift right.
+  if (tall) {
+    tft.drawString(title, 6, title_y, 2);
+  } else {
+    const int title_x = 6 + pill_count * (pill_w + pill_gap) + 4;
+    if (title_x < tel_bx - 8)
+      tft.drawString(title, title_x, sy + rule_h + 2, 2);
+  }
+
+  gfx_writeback(tft, 0, sy, TFT_W, band);
 }
 
 // Boot (or reboot) the PDP-11 with the currently-mounted drives. cold=true

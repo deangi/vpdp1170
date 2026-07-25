@@ -73,6 +73,36 @@ not in the `.ino`, so every `.cpp` sees the same value):
   (DIP S1/S0 must be TF), STC8H backlight, 8 MB OPI PSRAM. The settings menu
   still lays out in the Freenove 320×240 top-left region on this panel.
 
+## Dual-core split
+
+The ESP32-S3 dual cores are pinned so display work never stalls the PDP-11
+(and guest disk I/O never stalls the TFT).
+
+### Core 0 — display and lightweight network
+
+| Task / component | Role |
+|------------------|------|
+| `render_task` | Touch poll, console paint (`console_render`), status bar, settings-menu draw |
+| `net_task` | Telnet session poll and WiFi reconnect check |
+
+Core 0 does **not** run the PDP-11 CPU or perform guest SD disk I/O.
+
+### Core 1 — emulator and storage (`loop()`)
+
+| Component | Role |
+|-----------|------|
+| PDP-11 CPU (`pdp_core::run`) | Instruction slices |
+| Disk / SD | RL / RK / RP image I/O for the guest |
+| Console drain | KL11 → ANSI parser → cell grid |
+| USB serial | Host keyboard in; KL11 serial out |
+| FTP | File transfer against the SD root (kept here so it does not race guest disk) |
+| Telnet shell / emu control | Monitor commands, pause / step, etc. |
+| Menu actions | Remount, emulator restart, ESP restart (after UI sets flags on core 0) |
+
+**Hand-off:** core 1 fills the 80×25 cell grid; core 0 takes a coherent
+snapshot under a short spinlock and draws it. Settings-menu state is shared
+under `g_ui_mutex`.
+
 ## Emulated configuration
 
 | Component       | What we emulate                                                   |

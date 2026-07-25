@@ -9,8 +9,9 @@
 //   - SD is SPI MOSI=6 MISO=4 SCK=5; card CS is hard-tied → soft CS = NC.
 //     Stable clock is 20 MHz (40 MHz HS mode fails through the mux).
 //   - RGB FB in PSRAM; PCLK 15 MHz. Call display()/writeback after draws.
-//   - STC8H backlight @ 0x30 only before gfx.init; never reclaim Wire after
-//     (Lovyan owns GT911 on SDA=15 SCL=16).
+//   - STC8H backlight @ 0x30: mute+max before gfx.init. Runtime dim/bright
+//     uses IDF i2c_master_write_to_device on I2C_NUM_0 (0=max .. 244=min) —
+//     do NOT Wire.begin() again after Lovyan owns GT911.
 //   - Panel + touch offset_rotation = 2; do NOT also setRotation().
 //   - Do NOT call initDMA() after Panel_RGB init (framebuffer can end up null).
 //   - Never drive GPIO45 as "TFT_BL" — that pin is RGB data B3 on this panel.
