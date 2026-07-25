@@ -124,10 +124,12 @@ void panic() {
   // bursty output the host drains slower than we write, write() returns
   // a short count, and bytes get silently dropped. Two defenses:
   //   1) bump the TX timeout very high so write() *waits* for room
-  //      instead of giving up
+  //      instead of giving up (USB CDC only — HardwareSerial has no API)
   //   2) flush() + brief sleep after every line so the host always has
   //      a quiet moment to drain before we hit it again
+#if ARDUINO_USB_CDC_ON_BOOT
   Serial.setTxTimeoutMs(5000);
+#endif
   Serial.printf("[vpdp1170]   --- last %d instructions before HALT ---\r\n",
                 TRACE_RING_SIZE);
   Serial.flush();

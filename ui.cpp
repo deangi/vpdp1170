@@ -10,9 +10,9 @@
 #include "ftp.h"
 #include "appconfig.h"
 #include <Arduino.h>
-#include <TFT_eSPI.h>
+#include "gfx.h"
 #include <WiFi.h>
-#include <SD_MMC.h>
+#include "sd_fs.h"
 #include <string.h>
 
 #ifndef TFT_BL
@@ -87,8 +87,11 @@ void ui_init() {
   g_reboot = false;
   g_boot_change = false;
   g_esp_restart = false;
+#if VPDP_BOARD == VPDP_BOARD_FREENOVE_28
+  // Freenove TFT backlight on GPIO45 via LEDC.
   ledcAttach(TFT_BL, 5000, 8);
   ledcWrite(TFT_BL, g_bright);
+#endif
 }
 
 bool ui_is_open()             { return g_screen != SC_CLOSED; }
@@ -100,7 +103,7 @@ bool ui_consume_esp_restart() { bool r = g_esp_restart; g_esp_restart = false; r
 static void scan_files() {
   SD_FTP_StorageGuard guard;
   g_file_count = 0;
-  fs::File root = SD_MMC.open("/");
+  fs::File root = SD_FS.open("/");
   if (!root) return;
   for (fs::File f = root.openNextFile(); f && g_file_count < MAX_FILES;
        f = root.openNextFile()) {
@@ -159,7 +162,7 @@ static bool slot_has_image(int slot) {
 
 static bool valid_rl_file_size(const char* path, uint32_t* size_out = nullptr) {
   SD_FTP_StorageGuard guard;
-  fs::File file = SD_MMC.open(path, "r");
+  fs::File file = SD_FS.open(path, "r");
   if (!file || file.isDirectory()) {
     if (file) file.close();
     if (size_out) *size_out = 0;
@@ -466,7 +469,9 @@ static void activate(int idx) {        // idx = absolute item index
     case SC_BRIGHT:
       if (idx == 0) g_bright = (g_bright > 40) ? g_bright - 40 : 8;
       else          g_bright = (g_bright < 215) ? g_bright + 40 : 255;
+#if VPDP_BOARD == VPDP_BOARD_FREENOVE_28
       ledcWrite(TFT_BL, g_bright);
+#endif
       rebuild(); g_dirty = true;
       break;
     case SC_WIFI_PICKER:
@@ -530,7 +535,7 @@ bool ui_handle_tap(int x, int y) {
 }
 
 // -------------------------------------------------------------------------
-static TFT_eSPI* T = nullptr;
+static GfxDisplay* T = nullptr;
 
 static void draw_button(int x, int y, int w, int hh, const char* label,
                          uint16_t bg, uint16_t fg) {
@@ -682,10 +687,12 @@ static void draw_info() {
   draw_nav();
 }
 
-void ui_draw(TFT_eSPI& tft) {
+void ui_draw(GfxDisplay& tft) {
   if (g_screen == SC_CLOSED || !g_dirty) return;
   T = &tft;
   if (g_screen == SC_INFO) draw_info();
   else                     draw_list();
   g_dirty = false;
+  // Menu overlays the whole screen; flush it for the RGB scanout (no-op SPI).
+  gfx_writeback(tft);
 }

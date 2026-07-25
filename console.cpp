@@ -1,12 +1,18 @@
 #include "console.h"
 #include "config.h"
 #include "platform.h"
-#include "font4x8.h"
+#include "gfx.h"
+#if VPDP_BOARD == VPDP_BOARD_CROWPANEL_7
+#include "font10x16.h"   // Terminus 8x16 in 10x16 cells (80x25 -> 800x400)
+#else
+#include "font4x8.h"     // Freenove 4x8 cells (80x25 -> 320x200)
+#endif
 #include "fifo.h"
 #include <Arduino.h>
-#include <TFT_eSPI.h>
 #include <string.h>
 #include "esp_attr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 #ifndef EXT_RAM_BSS_ATTR
 #define EXT_RAM_BSS_ATTR
 #endif
@@ -49,6 +55,12 @@ static int  prev_cur_r = 0, prev_cur_c = 0;
 static uint8_t cur_attr = DEF_ATTR;
 static int  sr_top = 0, sr_bot = CON_ROWS - 1;
 static int  saved_r = 0, saved_c = 0;
+
+// Cell grid + cursor are written on core 1 (console_drain_tft) and read on
+// core 0 (console_render). Without a coherent snapshot, a cursor advance
+// mid-frame leaves the underline behind, and a scroll mid-pass leaves
+// mismatched shadow cells (artifacts / missing glyphs).
+static portMUX_TYPE g_con_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // ---- ANSI parser ----
 static enum { ST_GROUND, ST_ESC, ST_CSI, ST_CHARSET_DESIGNATE } ansi_st = ST_GROUND;
@@ -304,9 +316,8 @@ static void exec_csi(uint8_t final) {
 }
 
 // -------------------------------------------------------------------------
-// Internal ANSI-parser entrypoint. Runs on core 1 from console_drain_tft().
-// Updates cell_ch/cell_at, which render_task on core 0 reads without a
-// lock (single-byte cells tolerate the race).
+// Internal ANSI-parser entrypoint. Called from console_drain_tft() under
+// g_con_mux so console_render can take a coherent grid+cursor snapshot.
 static void feed_ansi(uint8_t c) {
   g_feed_count++;
   g_last_feed_ms = millis();
@@ -433,8 +444,17 @@ void console_feed(uint8_t c) {
 // Drain pending TFT bytes through the ANSI parser. Called from loop() on
 // core 1 once per slice so the cell grid updates in roughly real time.
 void console_drain_tft() {
-  uint8_t b;
-  while (g_tft_out.pop(&b)) feed_ansi(b);
+  // Apply under the console mux in small batches so render can take a
+  // coherent snapshot between batches without holding a long critical.
+  uint8_t batch[64];
+  for (;;) {
+    size_t n = 0;
+    while (n < sizeof(batch) && g_tft_out.pop(&batch[n])) n++;
+    if (!n) break;
+    portENTER_CRITICAL(&g_con_mux);
+    for (size_t i = 0; i < n; i++) feed_ansi(batch[i]);
+    portEXIT_CRITICAL(&g_con_mux);
+  }
 }
 
 // ---- keyboard (host USB-Serial -> KL11 input FIFO) ----
@@ -445,10 +465,10 @@ uint32_t console_feed_count()   { return g_feed_count; }
 uint32_t console_last_feed_ms() { return g_last_feed_ms; }
 
 // ---- TFT rendering ----
-// Text area is anchored at the top-left: 80*4 = 320 wide, 25*8 = 200 tall.
-static void draw_cell(TFT_eSPI& tft, int r, int c, bool cursor) {
-  uint8_t ch  = cell_ch[r][c];
-  uint8_t at  = cell_at[r][c];
+// Text area is anchored top-left: CON_COLS*CELL_W wide, CON_ROWS*CELL_H tall.
+// Freenove: 4x8 cells (320x200). CrowPanel: 10x16 cells (800x400).
+static void draw_cell(GfxDisplay& tft, int r, int c,
+                      uint8_t ch, uint8_t at, bool cursor) {
   uint16_t fg = kPalette[at & 0x0F];
   uint16_t bg = kPalette[(at >> 4) & 0x07];
   if (at & ATTR_INVERSE) {
@@ -457,36 +477,77 @@ static void draw_cell(TFT_eSPI& tft, int r, int c, bool cursor) {
     bg = tmp;
   }
 
-  uint16_t buf[4 * 8];
-  for (int y = 0; y < 8; y++) {
-    uint8_t bits = pgm_read_byte(&font4x8[ch][y]);
-    for (int x = 0; x < 4; x++)
-      buf[y * 4 + x] = (bits & (1 << x)) ? fg : bg;
+  uint16_t buf[CELL_W * CELL_H];
+#if VPDP_BOARD == VPDP_BOARD_CROWPANEL_7
+  // font10x16[ch][y] is a uint16_t row; bit 0 = leftmost pixel.
+  for (int y = 0; y < CELL_H; y++) {
+    uint16_t bits = pgm_read_word(&font10x16[ch][y]);
+    for (int x = 0; x < CELL_W; x++)
+      buf[y * CELL_W + x] = (bits & (1u << x)) ? fg : bg;
   }
+#else
+  // font4x8[ch][y] is a byte row; bit 0 = leftmost pixel.
+  for (int y = 0; y < CELL_H; y++) {
+    uint8_t bits = pgm_read_byte(&font4x8[ch][y]);
+    for (int x = 0; x < CELL_W; x++)
+      buf[y * CELL_W + x] = (bits & (1 << x)) ? fg : bg;
+  }
+#endif
   if (cursor) {                          // underline on the bottom two rows
-    for (int x = 0; x < 4; x++) { buf[7 * 4 + x] = fg; buf[6 * 4 + x] = fg; }
+    for (int x = 0; x < CELL_W; x++) {
+      buf[(CELL_H - 1) * CELL_W + x] = fg;
+      buf[(CELL_H - 2) * CELL_W + x] = fg;
+    }
   }
   tft.pushImage(c * CELL_W, r * CELL_H, CELL_W, CELL_H, buf);
 }
 
-void console_render(TFT_eSPI& tft) {
+void console_render(GfxDisplay& tft) {
+  // Snapshot the live grid + cursor under the mux, then render unlocked.
+  // Using a frozen cursor for the whole pass (and for prev_cur update) is
+  // what stops the "underline left behind" race; the grid copy is what
+  // stops scroll mid-pass shadow mismatches.
+  static uint8_t snap_ch[CON_ROWS][CON_COLS];
+  static uint8_t snap_at[CON_ROWS][CON_COLS];
+  int snap_r, snap_c;
+  portENTER_CRITICAL(&g_con_mux);
+  memcpy(snap_ch, cell_ch, sizeof snap_ch);
+  memcpy(snap_at, cell_at, sizeof snap_at);
+  snap_r = cur_r;
+  snap_c = cur_c;
+  portEXIT_CRITICAL(&g_con_mux);
+
   bool full = !shad_valid;
+  bool any_changed = false;
+  int dirty_x0 = CON_COLS * CELL_W, dirty_y0 = CON_ROWS * CELL_H;
+  int dirty_x1 = 0, dirty_y1 = 0;
+
   for (int r = 0; r < CON_ROWS; r++) {
     for (int c = 0; c < CON_COLS; c++) {
-      bool is_cur  = (r == cur_r && c == cur_c);
+      bool is_cur  = (r == snap_r && c == snap_c);
       bool was_cur = (r == prev_cur_r && c == prev_cur_c);
       bool changed = full ||
-                     cell_ch[r][c] != shad_ch[r][c] ||
-                     cell_at[r][c] != shad_at[r][c] ||
+                     snap_ch[r][c] != shad_ch[r][c] ||
+                     snap_at[r][c] != shad_at[r][c] ||
                      is_cur != was_cur;
       if (changed) {
-        draw_cell(tft, r, c, is_cur);
-        shad_ch[r][c] = cell_ch[r][c];
-        shad_at[r][c] = cell_at[r][c];
+        draw_cell(tft, r, c, snap_ch[r][c], snap_at[r][c], is_cur);
+        shad_ch[r][c] = snap_ch[r][c];
+        shad_at[r][c] = snap_at[r][c];
+        any_changed = true;
+        const int px = c * CELL_W, py = r * CELL_H;
+        if (px < dirty_x0) dirty_x0 = px;
+        if (py < dirty_y0) dirty_y0 = py;
+        if (px + CELL_W > dirty_x1) dirty_x1 = px + CELL_W;
+        if (py + CELL_H > dirty_y1) dirty_y1 = py + CELL_H;
       }
     }
   }
-  prev_cur_r = cur_r;
-  prev_cur_c = cur_c;
+  prev_cur_r = snap_r;
+  prev_cur_c = snap_c;
   shad_valid = true;
+  // RGB panels: flush only the dirty bbox to PSRAM (no-op on SPI).
+  if (any_changed)
+    gfx_writeback(tft, dirty_x0, dirty_y0,
+                  dirty_x1 - dirty_x0, dirty_y1 - dirty_y0);
 }

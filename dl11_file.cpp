@@ -9,7 +9,7 @@
 #include "SD_FTP_Server/src/SD_FTP_Server.h"
 
 #include <Arduino.h>
-#include <SD_MMC.h>
+#include "sd_fs.h"
 #include "esp_attr.h"
 #include <string.h>
 
@@ -231,7 +231,7 @@ bool open_input(const char* path, int eof_byte, bool notify) {
   init_fifos();
   SD_FTP_StorageGuard guard;
   LOG("VPDP file OPEN attempt path=%s direction=IN", path ? path : "");
-  File replacement = SD_MMC.open(path, "r");
+  File replacement = SD_FS.open(path, "r");
   if (!replacement) {
     LOGE("VPDP file OPEN failed path=%s direction=IN", path ? path : "");
     return false;
@@ -296,7 +296,7 @@ bool open_output(const char* path, bool append) {
     output_file.close();
     output_name[0] = 0;
   }
-  File replacement = SD_MMC.open(path, append ? "a" : "w");
+  File replacement = SD_FS.open(path, append ? "a" : "w");
   if (!replacement) {
     LOGE("VPDP file OPEN failed path=%s direction=OUT mode=%s",
          path ? path : "", append ? "APPEND" : "TRUNCATE");

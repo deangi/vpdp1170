@@ -1,13 +1,12 @@
 #pragma once
 #include <stdint.h>
+#include "gfx.h"
 
 // 80x25 ANSI/VT terminal emulator fed by the 8086tiny BIOS PUTCHAR stream.
 // Renders to the TFT; keyboard input from any source is queued back to the guest.
 
 #define CON_COLS 80
 #define CON_ROWS 25
-
-class TFT_eSPI;
 
 void console_init();
 
@@ -27,7 +26,7 @@ void console_key_push(uint8_t c);
 int  console_key_pop(uint8_t* out);     // returns 1 if a byte was dequeued
 
 // Draw changed cells to the TFT (call from the main loop).
-void console_render(TFT_eSPI& tft);
+void console_render(GfxDisplay& tft);
 void console_force_redraw();             // mark the whole screen dirty
 
 void console_get_cursor(int* row, int* col);

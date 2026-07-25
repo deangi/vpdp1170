@@ -4,7 +4,7 @@
 #include "secrets.h"
 #include "SD_FTP_Server/src/SD_FTP_Server.h"
 
-#include <SD_MMC.h>
+#include "sd_fs.h"
 #include <string.h>    // strrchr, strncmp, strcasecmp for variant discovery
 
 // -------- helpers --------
@@ -161,13 +161,10 @@ String config_escape_bytes(const uint8_t* bytes, size_t len) {
 // -------- SD --------
 
 bool sd_mount() {
-  SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
-  if (!SD_MMC.begin("/sdcard", false /*1bit*/, false /*format*/,
-                    20000 /*freq*/, SD_MAX_OPEN_FILES)) {
-    LOGE("SD_MMC.begin() failed");
-    return false;
-  }
-  uint8_t type = SD_MMC.cardType();
+#if VPDP_SD_BACKEND == VPDP_SD_SPI_IDF
+  // CrowPanel: ESP-IDF SDSPI, CS hard-tied → GPIO_NUM_NC. DIP S1=1 S0=1.
+  if (!crow_sd_mount()) return false;
+  uint8_t type = SD_FS.cardType();
   if (type == CARD_NONE) {
     LOGE("No SD card detected");
     return false;
@@ -176,9 +173,29 @@ bool sd_mount() {
                     : (type == CARD_SD)   ? "SDSC"
                     : (type == CARD_SDHC) ? "SDHC"
                                           : "?";
-  uint64_t mb = SD_MMC.cardSize() / (1024ULL * 1024ULL);
+  uint64_t mb = SD_FS.cardSize() / (1024ULL * 1024ULL);
   LOG("SD mounted: type=%s size=%llu MB", tname, (unsigned long long)mb);
   return true;
+#else
+  SD_FS.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
+  if (!SD_FS.begin("/sdcard", false /*1bit*/, false /*format*/,
+                    20000 /*freq*/, SD_MAX_OPEN_FILES)) {
+    LOGE("SD_FS.begin() failed");
+    return false;
+  }
+  uint8_t type = SD_FS.cardType();
+  if (type == CARD_NONE) {
+    LOGE("No SD card detected");
+    return false;
+  }
+  const char* tname = (type == CARD_MMC)  ? "MMC"
+                    : (type == CARD_SD)   ? "SDSC"
+                    : (type == CARD_SDHC) ? "SDHC"
+                                          : "?";
+  uint64_t mb = SD_FS.cardSize() / (1024ULL * 1024ULL);
+  LOG("SD mounted: type=%s size=%llu MB", tname, (unsigned long long)mb);
+  return true;
+#endif
 }
 
 // -------- defaults --------
@@ -348,11 +365,11 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
 // Internal: parse one config file at `path` into cfg through `parse_line`.
 // Returns true if the file was opened and parsed; false if it didn't exist.
 static void recover_config_backup(const char* path) {
-  if (SD_MMC.exists(path)) return;
+  if (SD_FS.exists(path)) return;
   char backup[192];
   if (snprintf(backup, sizeof(backup), "%s.bak", path) >= (int)sizeof(backup)) return;
-  if (SD_MMC.exists(backup)) {
-    if (SD_MMC.rename(backup, path))
+  if (SD_FS.exists(backup)) {
+    if (SD_FS.rename(backup, path))
       LOG("Restored interrupted config update: %s", path);
     else
       LOGE("Could not restore config backup %s", backup);
@@ -362,7 +379,7 @@ static void recover_config_backup(const char* path) {
 static bool parse_config_file(AppConfig& cfg, const char* path, ConfigDomain domain) {
   SD_FTP_StorageGuard guard;
   recover_config_backup(path);
-  File f = SD_MMC.open(path, FILE_READ);
+  File f = SD_FS.open(path, FILE_READ);
   if (!f) return false;
   String section;
   while (f.available()) {
@@ -430,7 +447,7 @@ bool config_load_pdp(AppConfig& cfg) {
 bool config_write_default_wifi(const AppConfig& cfg) {
   SD_FTP_StorageGuard guard;
   // SD_MMC's FILE_WRITE truncates, which is what we want for a clean rewrite.
-  File f = SD_MMC.open(WIFI_CFG_PATH, FILE_WRITE);
+  File f = SD_FS.open(WIFI_CFG_PATH, FILE_WRITE);
   if (!f) {
     LOGE("Could not open %s for write", WIFI_CFG_PATH);
     return false;
@@ -462,7 +479,7 @@ bool config_write_default_wifi(const AppConfig& cfg) {
 
 bool config_write_default_pdp(const AppConfig& cfg) {
   SD_FTP_StorageGuard guard;
-  File f = SD_MMC.open(PDP_CFG_PATH, FILE_WRITE);
+  File f = SD_FS.open(PDP_CFG_PATH, FILE_WRITE);
   if (!f) {
     LOGE("Could not open %s for write", PDP_CFG_PATH);
     return false;
@@ -573,12 +590,12 @@ bool config_copy_file(const char* src, const char* dst) {
     return false;
   }
 
-  File s = SD_MMC.open(src, FILE_READ);
+  File s = SD_FS.open(src, FILE_READ);
   if (!s) { LOGE("config_copy_file: can't open %s for read", src); return false; }
   uint32_t srcSize = (uint32_t)s.size();
 
-  if (SD_MMC.exists(temp)) SD_MMC.remove(temp);
-  File d = SD_MMC.open(temp, FILE_WRITE);
+  if (SD_FS.exists(temp)) SD_FS.remove(temp);
+  File d = SD_FS.open(temp, FILE_WRITE);
   if (!d) {
     LOGE("config_copy_file: can't open %s for write", temp);
     s.close();
@@ -604,31 +621,31 @@ bool config_copy_file(const char* src, const char* dst) {
   d.flush();
   d.close();
 
-  File v = SD_MMC.open(temp, FILE_READ);
+  File v = SD_FS.open(temp, FILE_READ);
   uint32_t verifySize = v ? (uint32_t)v.size() : 0;
   if (v) v.close();
   if (!copy_ok || total != srcSize || verifySize != srcSize) {
     LOGE("config_copy_file: temporary copy failed src=%u written=%u on-disk=%u",
          (unsigned)srcSize, (unsigned)total, (unsigned)verifySize);
-    SD_MMC.remove(temp);
+    SD_FS.remove(temp);
     return false;
   }
 
-  if (SD_MMC.exists(backup)) SD_MMC.remove(backup);
-  bool had_dst = SD_MMC.exists(dst);
-  if (had_dst && !SD_MMC.rename(dst, backup)) {
+  if (SD_FS.exists(backup)) SD_FS.remove(backup);
+  bool had_dst = SD_FS.exists(dst);
+  if (had_dst && !SD_FS.rename(dst, backup)) {
     LOGE("config_copy_file: can't preserve %s as %s", dst, backup);
-    SD_MMC.remove(temp);
+    SD_FS.remove(temp);
     return false;
   }
-  if (!SD_MMC.rename(temp, dst)) {
+  if (!SD_FS.rename(temp, dst)) {
     LOGE("config_copy_file: can't activate %s", dst);
-    if (had_dst && !SD_MMC.rename(backup, dst))
+    if (had_dst && !SD_FS.rename(backup, dst))
       LOGE("config_copy_file: FAILED to restore %s from %s", dst, backup);
-    SD_MMC.remove(temp);
+    SD_FS.remove(temp);
     return false;
   }
-  if (had_dst) SD_MMC.remove(backup);
+  if (had_dst) SD_FS.remove(backup);
   LOG("config_copy_file: atomically replaced %s from %s (%u bytes)",
       dst, src, (unsigned)srcSize);
   return true;
@@ -644,7 +661,7 @@ int config_list_variants(const char* prefix, char names[][44], int max) {
   if (max <= 0) return 0;
   int count = 0;
 
-  fs::File root = SD_MMC.open("/");
+  fs::File root = SD_FS.open("/");
   if (!root) return 0;
 
   size_t plen = strlen(prefix);

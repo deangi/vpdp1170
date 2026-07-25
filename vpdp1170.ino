@@ -1,5 +1,5 @@
 //-------------------------------------------------------------------------------
-// vpdp1170 - DEC PDP-11/70 emulator on Freenove ESP32-S3 2.8" Display
+// vpdp1170 - DEC PDP-11/70 emulator on ESP32-S3 display hosts
 //
 // Cloned from vpdp1140 on 2026-07-01 as the host scaffold for a PDP-11/70
 // emulator. V1.0 boots Unix V6 through the kek PDP-11/70 CPU/MMU adapter;
@@ -14,14 +14,33 @@
 // carries over from v8088 unchanged; only the CPU core, I/O page dispatch,
 // and disk/console wiring are PDP-11-specific.
 //
-// Requires the TFT_eSPI library to have FNK0104B selected in
-// User_Setup_Select.h (this is the same setup used by all Freenove
-// tutorials for this board).
-// Board: Freenove ESP32-S3 with 2.8" TFT and capacitive touch screen
-//  (WROVER2 w/8Mb PSRAM, 16Mb flash)
-// Board: ESP32S3 Dev Module
-// Partitioning: H16mb Flash (3mb program/9.9 spiffs)
-// Need to go to tools : USB CDC on boot - enable, enable OPI PSRAM, set flash to 16MB
+// ---- Dual board (Arduino IDE) ----
+// Select host in config.h: VPDP_BOARD_FREENOVE_28 or VPDP_BOARD_CROWPANEL_7
+// (must be in config.h — an .ino-only #define does not reach .cpp files).
+//
+// Common Arduino Tools settings (both boards):
+//   Tools → Board → ESP32S3 Dev Module (do not select an "...Octal" variant)
+//   Tools → Flash Size → 16MB (128Mb)
+//   Tools → Partition Scheme → Huge APP (3MB No OTA / 1MB SPIFFS)
+//   Tools → PSRAM → OPI PSRAM (NOT QSPI PSRAM and NOT Disabled)
+//
+// Freenove ESP32-S3 2.8" (FNK0104B, COM18 typical):
+//   TFT_eSPI with FNK0104B in User_Setup_Select.h
+//   Tools → USB CDC On Boot → Enabled
+//
+// Elecrow CrowPanel Advance 7" (COM3 typical):
+//   ESP32-S3-WROOM-1-N16R8: 16MB flash + 8MB OPI (octal) PSRAM.
+//   Tools → Flash Size → 16MB (128Mb)  — required (module is N16R8).
+//   Tools → PSRAM → OPI PSRAM (NOT QSPI PSRAM and NOT Disabled).
+//   OPI PSRAM is mandatory for the 800x480 RGB framebuffer. If disabled or
+//   misconfigured, free_psram=0 and drawing can crash with StoreProhibited.
+//   LovyanGFX library; Tools → USB CDC On Boot → DISABLED
+//   (CDC Enabled sends app Serial to native USB while the flash/monitor
+//   COM is UART0 — ROM lines appear but [vpdp1170] LOGs look missing.)
+//   DIP S1=1 S0=1 for TF card. STC8H backlight + GT911 power before gfx.init.
+//   Touch: LGFX::getTouch() after gfx.init (do not reclaim Wire). Menu still
+//   uses the Freenove 320x240 layout in the top-left of the 800x480 panel.
+//
 // V1.0 23-May-2026, Dean Gienger, Claude
 // Set up to boot from a RL02 disk (10mb) - eventually support 2 RL02 disks (DL0 and DL1)
 // and four RL11 units DL0..DL3.
@@ -41,13 +60,17 @@
 // Optional Serial1
 // 
 //------------------------------------------------------------------------------------------------
+// Board select lives in config.h (VPDP_BOARD) — not here. An .ino-only #define
+// does not reach console.cpp/ui.cpp and causes LGFX vs TFT_eSPI link errors.
 #include <Arduino.h>
 #include <WiFi.h>
-#include <TFT_eSPI.h>
-#include <SD_MMC.h>
-#include "Freenove_WS2812_Lib_for_ESP32.h"
-
+#include <Wire.h>
 #include "config.h"
+#include "gfx.h"        // GfxDisplay = TFT_eSPI (Freenove) or LGFX (CrowPanel)
+#include "sd_fs.h"      // SD_FS = SD_MMC (Freenove) or Crow SDSPI (Elecrow)
+#if VPDP_HAS_WS2812
+#include "Freenove_WS2812_Lib_for_ESP32.h"
+#endif
 #include "platform.h"
 #include "secrets.h"
 #include "appconfig.h"
@@ -68,8 +91,10 @@
 #include "emu_control.h"
 #include "host_diag.h"
 
-static TFT_eSPI tft;
+static GfxDisplay tft;
+#if VPDP_HAS_WS2812
 static Freenove_ESP32_WS2812 strip(LED_COUNT, LED_PIN, LED_CHANNEL, TYPE_GRB);
+#endif
 AppConfig cfg;             // non-static so ui.cpp (System Info screen,
                            // title display) can read it via the extern in
                            // appconfig.h. Only vpdp1170.ino writes it.
@@ -83,16 +108,21 @@ static bool cpu_running = false;   // true once the PDP-11 is booting in loop()
 
 // The PDP-11 runs on core 1 (loop); all TFT rendering runs on core 0
 // (render_task). The settings menu is the only shared mutable UI state -
-// this mutex guards it. The 80x25 console grid is updated lock-free; a
-// torn read just produces one self-correcting frame.
+// this mutex guards it. The 80x25 console grid is snapshotted under a
+// short spinlock in console_render so core-1 ANSI drains cannot tear a
+// frame (cursor underline / scroll artifacts).
 static SemaphoreHandle_t g_ui_mutex = nullptr;
 
 enum BootState { BOOT_RUNNING, BOOT_OK, BOOT_FAIL };
 static BootState boot_state = BOOT_RUNNING;
 
 static void led(uint8_t r, uint8_t g, uint8_t b) {
+#if VPDP_HAS_WS2812
   strip.setLedColorData(0, r, g, b);
   strip.show();
+#else
+  (void)r; (void)g; (void)b;
+#endif
 }
 
 // Re-draw just the title row (top 22 px). Called once at boot before the
@@ -105,6 +135,7 @@ static void tft_banner_title() {
   tft.setCursor(4, 4);
   const char* title = cfg.title.length() ? cfg.title.c_str() : APP_TITLE;
   tft.printf("%s  v%s", title, APP_VERSION);
+  gfx_writeback(tft, 0, 0, TFT_W, 22);
 }
 
 static void tft_banner() {
@@ -114,6 +145,7 @@ static void tft_banner() {
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
   tft.printf("build %s", APP_BUILD_DATE);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  gfx_writeback(tft);
 }
 
 static void tft_status(int row, const char* label, const char* value, uint16_t color) {
@@ -124,6 +156,7 @@ static void tft_status(int row, const char* label, const char* value, uint16_t c
   tft.print(label);
   tft.setTextColor(color, TFT_BLACK);
   tft.print(value);
+  gfx_writeback(tft, 0, y, TFT_W, 18);
 }
 
 static void apply_runtime_pdp_config() {
@@ -220,7 +253,7 @@ static void sd_and_config_init() {
   tft_status(ROW_SD,  "SD:    ", "mounting...", TFT_YELLOW);
   if (sd_mount()) {
     char info[32];
-    uint64_t mb = SD_MMC.cardSize() / (1024ULL * 1024ULL);
+    uint64_t mb = SD_FS.cardSize() / (1024ULL * 1024ULL);
     snprintf(info, sizeof(info), "OK  %llu MB", (unsigned long long)mb);
     tft_status(ROW_SD, "SD:    ", info, TFT_GREEN);
     sd_ok = true;
@@ -262,9 +295,10 @@ static void sd_and_config_init() {
   } else if (bpath.length() == 0) {
     tft_status(ROW_BOOT, boot_label, "(no image)", TFT_RED);
   } else {
+    const bool boot_present = SD_FS.exists(bpath.c_str());
     tft_status(ROW_BOOT, boot_label,
-               SD_MMC.exists(bpath) ? bpath.c_str() : "MISSING",
-               SD_MMC.exists(bpath) ? TFT_GREEN : TFT_RED);
+               boot_present ? bpath.c_str() : "MISSING",
+               boot_present ? TFT_GREEN : TFT_RED);
   }
 }
 
@@ -381,17 +415,20 @@ static void draw_status_bar() {
   prev_ms   = now;
 
   tft.fillRect(156, sy + 1, TFT_W - 156, TFT_H - sy - 1, TFT_BLACK);
+  // IP + MIPS use font 2 (larger) on the top status row — readable on both
+  // the Freenove 40 px band and the CrowPanel 80 px band.
   tft.setTextColor(WiFi.status() == WL_CONNECTED ? TFT_WHITE : TFT_RED, TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
   tft.drawString(WiFi.status() == WL_CONNECTED
                    ? WiFi.localIP().toString().c_str() : "WiFi down",
-                 158, sy + 6, 1);
+                 158, sy + 4, 2);
   // TEL/FTP pills match vApple2: dim when unavailable, green when listening,
   // yellow when a client is connected.
   auto draw_net_pill = [&](int bx, const char* label, uint16_t col) {
-    tft.fillRoundRect(bx, sy + 22, 26, 15, 2, col);
+    tft.fillRoundRect(bx, sy + 24, 26, 15, 2, col);
     tft.setTextColor(TFT_BLACK, col);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString(label, bx + 13, sy + 29, 1);
+    tft.drawString(label, bx + 13, sy + 31, 1);
   };
   const uint16_t COL_NET_OFF    = 0x2945;
   const uint16_t COL_NET_IDLE   = TFT_GREEN;
@@ -415,7 +452,8 @@ static void draw_status_bar() {
   else
     snprintf(mips_str, sizeof(mips_str), "%.2f MIPS", mips);
   tft.setTextDatum(TR_DATUM);
-  tft.drawString(mips_str, TFT_W - 4, sy + 22, 1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(mips_str, TFT_W - 4, sy + 4, 2);
   tft.setTextDatum(TL_DATUM);   // restore for the title row below
 
   // [system] title from pdpconfig.ini, drawn below the drive indicators
@@ -426,6 +464,9 @@ static void draw_status_bar() {
   tft.setTextDatum(TL_DATUM);
   const char* title = cfg.title.length() ? cfg.title.c_str() : APP_TITLE;
   tft.drawString(title, 6, sy + 24, 2);
+
+  // Flush the status band to PSRAM for the RGB scanout (no-op on SPI panels).
+  gfx_writeback(tft, 0, sy, TFT_W, TFT_H - sy);
 }
 
 // Boot (or reboot) the PDP-11 with the currently-mounted drives. cold=true
@@ -506,6 +547,7 @@ static void render_task(void* arg) {
       // Menu just closed: clear the strip below the console, full repaint.
       tft.fillRect(0, CON_ROWS * CELL_H, TFT_W, TFT_H - CON_ROWS * CELL_H,
                    TFT_BLACK);
+      gfx_writeback(tft, 0, CON_ROWS * CELL_H, TFT_W, TFT_H - CON_ROWS * CELL_H);
       console_force_redraw();
       status_ms = 0;
     }
@@ -536,8 +578,13 @@ static void net_task(void* arg) {
     uint32_t now = millis();
     if (now - wifi_ms >= 10000) {
       wifi_ms = now;
-      if (WiFi.status() != WL_CONNECTED) {
-        LOGE("WiFi link down - reconnecting");
+      // Only reconnect when fully disconnected. Calling reconnect() while the
+      // stack is already in WL_IDLE_STATUS ("sta is connecting") just spams
+      // ESP-IDF errors and can delay/abort the in-flight join.
+      const wl_status_t st = WiFi.status();
+      if (st == WL_DISCONNECTED || st == WL_CONNECTION_LOST ||
+          st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) {
+        LOGE("WiFi link down (status=%d) - reconnecting", (int)st);
         WiFi.reconnect();
       }
     }
@@ -550,7 +597,8 @@ void setup() {
   delay(200);
   Serial.begin(115200);
   // ESP32-S3 native USB CDC re-enumerates after the post-flash reset; the host
-  // serial monitor needs a moment to reconnect. 
+  // serial monitor needs a moment to reconnect. (Elecrow: CDC Disabled so
+  // Serial == UART0 on the flash/monitor COM port.)
   for (i = 0; i < 3; i++)
   {
     delay(1000);
@@ -558,18 +606,59 @@ void setup() {
   }  
   Serial.println();
   LOG("%s v%s build %s", APP_TITLE, APP_VERSION, APP_BUILD_DATE);
+  LOG("board: %s (VPDP_BOARD=%d  display=%d touch=%d sd=%d  %dx%d console %dx%d @%dx%d)",
+      VPDP_BOARD_NAME, VPDP_BOARD, VPDP_DISPLAY_BACKEND, VPDP_TOUCH_BACKEND,
+      VPDP_SD_BACKEND, TFT_W, TFT_H, TEXT_COLS, TEXT_ROWS, CELL_W, CELL_H);
   LOG("PDP core selected: %s (VPDP1170_USE_KEK_CORE=%d, VPDP1170_BUILD_KEK_ADAPTER=%d)",
       pdp_core::engine_name(), VPDP1170_USE_KEK_CORE, VPDP1170_BUILD_KEK_ADAPTER);
   if (!pdp_core::is_kek_engine())
     LOG("kek core disabled; running inherited 11/40 scaffold");
 
+#if VPDP_HAS_WS2812
   strip.begin();
   strip.setBrightness(20);
+#endif
   led(32, 0, 0);  // red while booting
 
+#if VPDP_BOARD == VPDP_BOARD_CROWPANEL_7
+  // Match CrowPanelBringup order: GT911 power → Wire → STC8H mute+BL → gfx.init.
+  // Skipping any of these leaves the panel dark (STC8H BL never arms / RGB FB
+  // not scanned). LovyanGFX then owns I2C for GT911 — do not reclaim Wire.
+  // Do not call initDMA()/setRotation() after Panel_RGB init (see below).
+  pinMode(CROW_GT911_INT_A, OUTPUT);
+  pinMode(CROW_GT911_INT_B, OUTPUT);
+  pinMode(CROW_GT911_RST, OUTPUT);
+  digitalWrite(CROW_GT911_RST, LOW);
+  delay(120);
+  pinMode(CROW_GT911_RST, INPUT);
+
+  Wire.begin(TOUCH_SDA, TOUCH_SCL);
+  delay(50);
+  Wire.beginTransmission(CROW_STC8H_ADDR);
+  Wire.write((uint8_t)CROW_BL_MUTE_CMD);
+  Wire.endTransmission();
+  delay(20);
+  Wire.beginTransmission(CROW_STC8H_ADDR);
+  Wire.write((uint8_t)CROW_BL_MAX_CMD);
+  if (Wire.endTransmission() != 0)
+    LOGE("CrowPanel: STC8H backlight cmd failed (I2C 0x%02X)", CROW_STC8H_ADDR);
+  else
+    LOG("CrowPanel: STC8H backlight ON");
+#endif
   tft.init();
-  tft.setRotation(1);     // landscape 320x240
+#if VPDP_BOARD == VPDP_BOARD_CROWPANEL_7
+  // Panel_RGB already runs LCD DMA after init(). Do NOT call initDMA() here —
+  // with the SDSPI backend linked it has been observed to leave the PSRAM
+  // framebuffer null (StoreProhibited in fillScreen). Orientation is
+  // offset_rotation=2 in lgfx_conf.h — do NOT also setRotation().
+  LOG("CrowPanel: gfx.init OK  %dx%d  free_psram=%u",
+      tft.width(), tft.height(), (unsigned)ESP.getFreePsram());
+#else
+  tft.setRotation(VPDP_TFT_ROTATION);   // landscape 320x240
+#endif
+  LOG("drawing boot banner");
   tft_banner();
+  LOG("boot banner done");
 
   // PSRAM line first
   {
@@ -646,7 +735,7 @@ void setup() {
     ftp_begin(cfg.ftp_port, cfg.ftp_enabled,
               cfg.ftp_user.c_str(), cfg.ftp_password.c_str());
     pinMode(BUTTON_PIN, INPUT_PULLUP);   // onboard button opens the menu
-    touch_init();
+    touch_init(&tft);
     ui_init();
 
     if (pdp_core::is_kek_engine()) {
@@ -705,8 +794,8 @@ static uint32_t g_last_tap_ms = 0;
 // Poll the touchscreen once. When the menu is open, route the tap into
 // the menu; when closed, accumulate it as a double-tap candidate that
 // opens the menu when two taps land within UI_DOUBLE_TAP_MS of each
-// other. Called from render_task every ~20 ms; the FT6336U edge event does
-// not survive long CPU slices on core 1.
+// other. Called from render_task every ~20 ms; touch edge events do not
+// survive long CPU slices on core 1.
 static void poll_touch_once() {
   int tx, ty;
   if (!touch_poll(&tx, &ty)) return;

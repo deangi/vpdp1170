@@ -17,7 +17,7 @@
 #include "telnet.h"
 
 #include <Arduino.h>
-#include <SD_MMC.h>
+#include "sd_fs.h"
 #include "esp_attr.h"
 #include <stdarg.h>
 #include <stdlib.h>
@@ -1061,7 +1061,7 @@ static void command_ls(const char* argument) {
     return;
   }
   SD_FTP_StorageGuard guard;
-  File entry = SD_MMC.open(path, "r");
+  File entry = SD_FS.open(path, "r");
   if (!entry) {
     output_printf("error: cannot open %s\r\n", path);
     return;
@@ -1095,7 +1095,7 @@ static void command_cat(const char* argument) {
     return;
   }
   SD_FTP_StorageGuard guard;
-  File file = SD_MMC.open(path, "r");
+  File file = SD_FS.open(path, "r");
   if (!file || file.isDirectory()) {
     output_printf("error: cannot read file: %s\r\n", path);
     if (file) file.close();
@@ -1172,7 +1172,7 @@ static void command_cd(const char* argument) {
     return;
   }
   SD_FTP_StorageGuard guard;
-  File directory = SD_MMC.open(path, "r");
+  File directory = SD_FS.open(path, "r");
   if (!directory || !directory.isDirectory()) {
     output_printf("error: not a directory: %s\r\n", path);
     if (directory) directory.close();
@@ -1197,7 +1197,7 @@ static void command_rm(const char* argument) {
     return;
   }
   SD_FTP_StorageGuard guard;
-  File file = SD_MMC.open(path, "r");
+  File file = SD_FS.open(path, "r");
   if (!file) {
     output_printf("error: file not found: %s\r\n", path);
     return;
@@ -1208,7 +1208,7 @@ static void command_rm(const char* argument) {
     output_text("error: rm removes files only\r\n");
     return;
   }
-  output_printf(SD_MMC.remove(path) ? "removed %s\r\n"
+  output_printf(SD_FS.remove(path) ? "removed %s\r\n"
                                     : "error: remove failed: %s\r\n", path);
 }
 
@@ -1225,15 +1225,15 @@ static void command_mv(const char* source_arg, const char* destination_arg) {
     return;
   }
   SD_FTP_StorageGuard guard;
-  if (!SD_MMC.exists(source)) {
+  if (!SD_FS.exists(source)) {
     output_printf("error: file not found: %s\r\n", source);
     return;
   }
-  if (SD_MMC.exists(destination)) {
+  if (SD_FS.exists(destination)) {
     output_printf("error: destination exists: %s\r\n", destination);
     return;
   }
-  output_printf(SD_MMC.rename(source, destination) ? "moved %s -> %s\r\n"
+  output_printf(SD_FS.rename(source, destination) ? "moved %s -> %s\r\n"
                                                    : "error: move failed\r\n",
                 source, destination);
 }
@@ -1251,17 +1251,17 @@ static void command_cp(const char* source_arg, const char* destination_arg) {
     return;
   }
   SD_FTP_StorageGuard guard;
-  if (SD_MMC.exists(destination)) {
+  if (SD_FS.exists(destination)) {
     output_printf("error: destination exists: %s\r\n", destination);
     return;
   }
-  File source_file = SD_MMC.open(source, "r");
+  File source_file = SD_FS.open(source, "r");
   if (!source_file || source_file.isDirectory()) {
     output_printf("error: cannot read file: %s\r\n", source);
     if (source_file) source_file.close();
     return;
   }
-  File destination_file = SD_MMC.open(destination, "w");
+  File destination_file = SD_FS.open(destination, "w");
   if (!destination_file) {
     source_file.close();
     output_printf("error: cannot create: %s\r\n", destination);
@@ -1280,7 +1280,7 @@ static void command_cp(const char* source_arg, const char* destination_arg) {
   destination_file.close();
   source_file.close();
   if (!ok) {
-    SD_MMC.remove(destination);
+    SD_FS.remove(destination);
     output_text("error: copy failed; partial destination removed\r\n");
   } else {
     output_printf("copied %s -> %s\r\n", source, destination);
@@ -1492,11 +1492,11 @@ static void command_create(const char* type, const char* path_arg) {
   }
   output_printf("creating %s (%lu bytes)...\r\n", path, (unsigned long)bytes);
   SD_FTP_StorageGuard guard;
-  if (SD_MMC.exists(path)) {
+  if (SD_FS.exists(path)) {
     output_printf("error: file already exists: %s\r\n", path);
     return;
   }
-  File file = SD_MMC.open(path, "w");
+  File file = SD_FS.open(path, "w");
   if (!file) {
     output_printf("error: cannot create: %s\r\n", path);
     return;
@@ -1517,7 +1517,7 @@ static void command_create(const char* type, const char* path_arg) {
   file.flush();
   file.close();
   if (!ok) {
-    SD_MMC.remove(path);
+    SD_FS.remove(path);
     output_text("error: create failed; partial file removed\r\n");
   } else {
     output_printf("created %s\r\n", path);

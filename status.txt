@@ -2,8 +2,10 @@ TODO:
 1) fixed 7/22 speedup
 2) fixed - pdp reboot from halt doesn't work
 3) fixed 7/22 - assign pills by mounted drives, not fixed positions
-4) in work - 7/23 - Big display version CrowPanel Advance 7" dual-board: Phase0 bring-up sketch in
-    CrowPanelBringup/ (display/fonts/touch). Prefer #ifdef board profiles.
+4) in work - 7/24 - CrowPanel Advance 7" dual-board: Phase0 bring-up local only;
+    Phase1 board profiles (board_freenove.h / board_crowpanel.h + VPDP_BOARD).
+    Checkpoint aa439c9 on origin/main before Phase1.  Phase0 complete, bring up display
+	bring up touch, bring up SD card, bring up WiFi - successful 7/24
 5) Telnet is laggy
 6) fixed 7/22 - emulator reset mode
 7) fixed 7/22 - Investigate m+4.6 - halt - fixed reset instruction - M+4.6 now boots from rl02
@@ -14,8 +16,21 @@ TODO:
 12) works - Boot M+4.6 with full memory (not 2044, 1920 max)
 13) obe - 11M+3.0 - SIMH 11/84 OK, SIMH 11/70 red stack trap (not 11/70
     sysgen). HB instrumentation removed; clean run path.
-
-
+1:00 1-JAN-88
+vpdp1170 status 7/24 - prior to Elecrow board support:
+- 11Mark      - runs RSX-11M V4.8 BL70
+- RSTSV4      - runs
+- RSX11M base - runs
+- RT11V5      - runs
+- UNIXV6      - runs
+- XXDP22      - runs 
+- XXDP25      - runs
+- RSTSV7      - fail - Unexpected trap through the vector at 000220 Trap occurred from PC=011372, PS=004210
+- UNIX7       - fail? unix_v7_rl.dsk boot rl(0,0)rl2unix, fset specification repeats endlessly then  PDP-11/70 stopped: guest HALT instruction PC=115354 ins=000000 PS=030341 HALT
+- UNIX7       - fail unixv7.dsk - same
+- 211bsd      - fail - hit return, boot rl(0,0,0)unix, rl error = rl(0,0,0) err cy=11, hd=1, sc=12, rlcs=112275, rlmp=177000 rl(0,0,0) err cy=11, hd=1, sc=20, rlcs=112275, rlmp=177000
+- RSX11M+ 4.6 - runs
+- RSTSV7 full - fail
 
 
 EMU Status PDP 11/70

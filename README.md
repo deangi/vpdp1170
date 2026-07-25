@@ -62,9 +62,16 @@ rows are verified for V1.4. Broader validation on the kek PDP-11/70 path is ongo
 
 ## Hardware
 
-- **Freenove ESP32-S3  2.8" Display** board (FNK0104B): ILI9341
-  TFT, FT6336U capacitive touch, micro-SD slot, 8 MB Octal PSRAM,
-  16 MB flash.
+Supported hosts (select with `VPDP_BOARD` in `config.h` — must be set there,
+not in the `.ino`, so every `.cpp` sees the same value):
+
+- **Freenove ESP32-S3 2.8" Display** (`VPDP_BOARD_FREENOVE_28`, default production):
+  ILI9341 TFT, FT6336U capacitive touch, micro-SD (SD_MMC 4-bit), 8 MB Octal
+  PSRAM, 16 MB flash, WS2812 status LED.
+- **Elecrow CrowPanel Advance 7"** (`VPDP_BOARD_CROWPANEL_7`): SC7277 RGB
+  800×480 via LovyanGFX, GT911 touch (via `LGFX::getTouch`), SPI TF slot
+  (DIP S1/S0 must be TF), STC8H backlight, 8 MB OPI PSRAM. The settings menu
+  still lays out in the Freenove 320×240 top-left region on this panel.
 
 ## Emulated configuration
 
@@ -86,12 +93,12 @@ Telnet / FTP state and MIPS in real time.
 
 ## Building
 
-Arduino IDE with the ESP32 board package and these libraries (same set
-as v8088 — nothing PDP-11-specific):
+Arduino IDE with the ESP32 board package and these libraries:
 
-- **TFT_eSPI** — with the `FNK0104B` setup enabled in `User_Setup_Select.h`
+- **TFT_eSPI** — Freenove only; enable the `FNK0104B` setup in `User_Setup_Select.h`
 - **FT6336U** — Freenove-bundled touch library
-- **Freenove_WS2812_Lib_for_ESP32**
+- **Freenove_WS2812_Lib_for_ESP32** — Freenove only
+- **LovyanGFX** — CrowPanel / Elecrow only
 
 The sam11 sources we use are copied directly into the sketch root (see
 the file list below) so the Arduino IDE picks them up automatically. No
@@ -100,16 +107,35 @@ SdFat library is needed — we route all sam11 disk I/O through our own
 
 ### Tools-menu settings (important)
 
+Common to both boards:
+
 | Setting            | Value                                |
 |--------------------|--------------------------------------|
 | Board              | **ESP32S3 Dev Module** (not "Octal") |
-| USB CDC On Boot    | **Enabled**                          |
-| PSRAM              | **OPI PSRAM**                        |
-| Flash Size         | 16MB (128Mb)                         |
-| Partition Scheme   | Huge App (3MB)                       |
+| Flash Size         | **16MB (128Mb)**                     |
+| Partition Scheme   | Huge APP (3MB No OTA / 1MB SPIFFS)  |
+| PSRAM              | **OPI PSRAM** (not QSPI or Disabled) |
 
-Selecting an "…Octal" board variant, or PSRAM set to anything but OPI,
-will bootloop the board.
+The CrowPanel Advance 7" uses an **ESP32-S3-WROOM-1-N16R8** module:
+**16 MB flash** and **8 MB OPI (octal) PSRAM**. It is not a QSPI-PSRAM board.
+Set **Tools → Flash Size → 16MB (128Mb)** every time — a smaller flash size
+mis-matches the module and can brick or fail uploads.
+
+OPI PSRAM is mandatory because LovyanGFX stores the 800×480 RGB framebuffer
+there. If PSRAM is Disabled or set to QSPI, the boot log reports
+`free_psram=0`; framebuffer drawing can then fail with a `StoreProhibited`
+panic and reboot the ESP32.
+
+**USB CDC On Boot** differs by board — set this every time you switch targets:
+
+| Board | USB CDC On Boot | Why |
+|-------|-----------------|-----|
+| **Freenove 2.8"** | **Enabled** | App `Serial` is native USB; that is the COM port you monitor. |
+| **Elecrow CrowPanel 7"** | **Disabled** | Flash/monitor COM is the USB-UART bridge (UART0). With CDC Enabled, ROM boot text still appears on that port but app `LOG` goes to a different native-USB COM and looks “silent.” |
+
+Select the regular **ESP32S3 Dev Module**, then separately select
+**Tools → PSRAM → OPI PSRAM**. Selecting an "…Octal" board variant, or setting
+PSRAM to QSPI or Disabled, can bootloop the board.
 
 ## SD card layout
 

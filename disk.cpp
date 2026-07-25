@@ -3,7 +3,7 @@
 #include "platform.h"
 #include "SD_FTP_Server/src/SD_FTP_Server.h"
 #include <Arduino.h>
-#include <SD_MMC.h>
+#include "sd_fs.h"
 #include <string.h>
 
 struct DriveSlot {
@@ -109,12 +109,12 @@ bool disk_mount_mode(int slot, const char* path, bool force_readonly) {
   // requested file is missing or invalid.
   bool readonly = force_readonly;
   File f;
-  if (!force_readonly) f = SD_MMC.open(path, "r+");
+  if (!force_readonly) f = SD_FS.open(path, "r+");
   if (!f) {
-    f = SD_MMC.open(path, "r");
+    f = SD_FS.open(path, "r");
     if (!f) {
       LOGE("disk_mount[%d]: cannot open %s", slot, path);
-      if (!SD_MMC.exists(path))
+      if (!SD_FS.exists(path))
         set_last_error("file not found");
       else
         set_last_error("cannot open file (file lock or SD handle limit)");

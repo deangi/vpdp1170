@@ -1,7 +1,6 @@
 #pragma once
 #include <stdint.h>
-
-class TFT_eSPI;
+#include "gfx.h"
 
 void ui_init();
 
@@ -15,7 +14,7 @@ bool ui_is_open();
 bool ui_handle_tap(int x, int y);
 
 // Draw the menu overlay when open and the screen needs a repaint.
-void ui_draw(TFT_eSPI& tft);
+void ui_draw(GfxDisplay& tft);
 
 // One-shot: returns true once if the user asked to reboot the PDP-11.
 bool ui_consume_reboot();

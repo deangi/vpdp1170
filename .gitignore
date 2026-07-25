@@ -14,5 +14,18 @@ tools/kek_vs_core/build-min/
 # Disk images - keep local copies but don't bloat git with multi-MB binaries.
 DiskImages/
 *.dsk
+*.DSK
 *.hdd
 *.img
+*.iso
+*.ISO
+*.rl01
+*.rl02
+*.zip
+
+# Local-only Elecrow bring-up sketch (not part of the shipped firmware).
+CrowPanelBringup/
+
+# Python caches (diagnostics toolkit, font tools)
+__pycache__/
+*.pyc

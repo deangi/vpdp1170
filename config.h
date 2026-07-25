@@ -2,8 +2,38 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vpdp1170"
-#define APP_VERSION     "V1.4"
-#define APP_BUILD_DATE  "2026-07-17"
+#define APP_VERSION     "V2.0"
+#define APP_BUILD_DATE  "2026-07-24"
+
+// ---- Board selection ----
+// Arduino IDE compiles each .cpp separately, so a #define in the .ino does NOT
+// reach console.cpp / ui.cpp / touch.cpp. Set the board HERE (the one place all
+// translation units include). Flip between:
+//   VPDP_BOARD_FREENOVE_28  — Freenove 2.8" (COM18)
+//   VPDP_BOARD_CROWPANEL_7  — Elecrow CrowPanel Advance 7" (COM3)
+// Display is board-abstracted (gfx.h). CrowPanel SD-SPI and GT911 (via Lovyan
+// getTouch) are wired; the settings menu still uses the Freenove 320×240 layout
+// in the top-left corner on the 800×480 panel.
+#define VPDP_BOARD_FREENOVE_28   1
+#define VPDP_BOARD_CROWPANEL_7   2
+#ifndef VPDP_BOARD
+#define VPDP_BOARD VPDP_BOARD_CROWPANEL_7
+#endif
+
+#define VPDP_DISPLAY_TFT_ESPI    1
+#define VPDP_DISPLAY_LOVYANGFX   2
+#define VPDP_TOUCH_FT6336U       1
+#define VPDP_TOUCH_GT911         2
+#define VPDP_SD_SDMMC4           1
+#define VPDP_SD_SPI_IDF          2
+
+#if VPDP_BOARD == VPDP_BOARD_FREENOVE_28
+#include "board_freenove.h"
+#elif VPDP_BOARD == VPDP_BOARD_CROWPANEL_7
+#include "board_crowpanel.h"
+#else
+#error "Unknown VPDP_BOARD — use VPDP_BOARD_FREENOVE_28 or VPDP_BOARD_CROWPANEL_7"
+#endif
 
 // ---- PDP core selection ----
 // 0 = inherited vpdp1140/sam11 PDP-11/40-derived scaffold.
@@ -22,39 +52,6 @@
 
 // Mounted disk images, FTP, TT1, and shell file commands may all hold files open.
 #define SD_MAX_OPEN_FILES 16
-
-// ---- RGB LED (WS2812) ----
-#define LED_PIN         42
-#define LED_CHANNEL     0
-#define LED_COUNT       1
-
-// ---- Onboard button ----
-#define BUTTON_PIN      0
-
-// ---- TFT (ILI9341, configured via TFT_eSPI FNK0104B preset) ----
-// Reference only - actual pins live in TFT_eSPI User_Setup_Select.h (FNK0104B):
-//   TFT_MISO=13 TFT_MOSI=11 TFT_SCLK=12 TFT_CS=10 TFT_DC=46 TFT_BL=45 @ 40 MHz
-#define TFT_W           320
-#define TFT_H           240
-#define TEXT_COLS       80
-#define TEXT_ROWS       25
-#define CELL_W          4
-#define CELL_H          8
-
-// ---- Capacitive touch FT6336U (I2C) ----
-#define TOUCH_SDA       16
-#define TOUCH_SCL       15
-#define TOUCH_RST       18
-#define TOUCH_INT       17
-#define TOUCH_I2C_ADDR  0x38
-
-// ---- SD_MMC 4-bit ----
-#define SD_MMC_CMD      40
-#define SD_MMC_CLK      38
-#define SD_MMC_D0       39
-#define SD_MMC_D1       41
-#define SD_MMC_D2       48
-#define SD_MMC_D3       47
 
 // ---- File paths on SD (defaults; overridden by config files) ----
 // m15: config split into two files so users can carry named variants
