@@ -79,6 +79,11 @@ struct AppConfig {
   // on every guest instruction.
   bool   diag_trace = false;
 
+  // Optional PC breakpoint armed before guest boot (octal virtual address).
+  // 0 disables. Survives cold_boot/reset so early-boot loops can be caught
+  // before a telnet monitor session is available.
+  uint16_t diag_break_pc = 0;
+
   // [compat]
   // V4B (RSTS/E V4B) requires its probe-by-write of two non-emulated
   // device ranges to be silently absorbed in dd11 (KE11-A EAE at

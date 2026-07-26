@@ -199,6 +199,7 @@ io_trace    = 0
 clock_trace = 0
 console_trace = 0
 trace       = false
+break       = 0
 v4b_quirks  = true
 kwp_enabled = false
 
@@ -280,6 +281,7 @@ allocation for operating systems that are not configured for a second TTY.
 | `clock_trace` | Event count | Log the next N KW11-L/KW11-P register accesses and interrupt requests/deliveries, then stop automatically. `0` disables. |
 | `console_trace` | Character count | Log the next N characters read by or written by the PDP through the KL11 console data registers, then stop automatically. `0` disables. |
 | `trace` | Boolean | Enables expensive per-instruction panic trace capture. Use only for debugging. |
+| `break` | Octal PC or `0` | Arm a PC breakpoint before guest boot. `0` / `off` / `clear` disables. Survives cold boot so early loops can be caught before telnet is available. |
 | `v4b_quirks` | Boolean | Absorbs selected missing-device probes for RSTS/E V4B compatibility. Default `true`. |
 | `kwp_enabled` | Boolean | Enables KW11-P programmable clock emulation. Default `false`. |
 
@@ -476,7 +478,7 @@ Flush and offline/dismount the guest device before issuing the shell
 execution while the SD card is written.
 
 The runtime-changeable settings are `pcping`, `serialdelay`, `io_trace`,
-`clock_trace`, `console_trace`, `trace`, `title`, and `boot_input`.
+`clock_trace`, `console_trace`, `trace`, `break`, `title`, and `boot_input`.
 `boot_text` is accepted as an alias for `boot_input`.
 
 ```text
@@ -487,12 +489,14 @@ set io_trace=100
 set clock_trace=100
 set console_trace=100
 set trace=false
+set break=04642
 set title="PDP 11/70"
 set boot_input="hello\r"
 ```
 
 The settings take effect immediately except `boot_input`, which is injected on
-the next PDP-11 reboot. They are not saved to `/pdpconfig.ini` and are lost
+the next PDP-11 reboot. `break` can also be set in `[diag]` so it is armed
+before early boot. They are not saved to `/pdpconfig.ini` and are lost
 when the ESP32 restarts. Hardware-discovery settings such as TT1, KW11-P, and
 compatibility mode still require editing the configuration file and restarting
 the emulator.

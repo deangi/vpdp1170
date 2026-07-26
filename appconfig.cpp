@@ -229,6 +229,7 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.diag_dl_trace = 0;
   cfg.diag_rp_trace = 0;
   cfg.diag_trace      = false;
+  cfg.diag_break_pc   = 0;
   cfg.v4b_quirks      = true;
   cfg.kwp_enabled     = false;
 
@@ -316,6 +317,20 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
                         : count > 1000000 ? 1000000 : (int)count;
     }
     else if (key == "trace")      cfg.diag_trace = truthy(val);
+    else if (key == "break") {
+      // Octal virtual PC. 0 / off / clear / empty disables.
+      String v = to_lower(val);
+      if (v.length() == 0 || v == "0" || v == "off" || v == "clear" ||
+          v == "none" || v == "-") {
+        cfg.diag_break_pc = 0;
+      } else {
+        char* end = nullptr;
+        unsigned long pc = strtoul(val.c_str(), &end, 8);
+        while (end && (*end == ' ' || *end == '\t')) end++;
+        if (end && !*end && !(pc & 1UL) && pc <= 0177777UL)
+          cfg.diag_break_pc = (uint16_t)pc;
+      }
+    }
     else if (key == "v4b_quirks") cfg.v4b_quirks = (val.equalsIgnoreCase("true") ||
                                                    val == "1" ||
                                                    val.equalsIgnoreCase("yes") ||
@@ -542,6 +557,9 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println(";              disk events, then stop. 0 disables.");
   f.println("; rp_trace   = log the next N kek RH/RP (DP) controller and host");
   f.println(";              disk events, then stop. 0 disables. Alias: dp_trace.");
+  f.println("; break      = arm a PC breakpoint before guest boot (octal VA).");
+  f.println(";              0 disables. Example: break = 04642 pauses on first");
+  f.println(";              fetch of that PC so H can dump the lead-in history.");
   f.printf("pcping      = %d\r\n", cfg.diag_pcping_sec);
   f.printf("serialdelay = %d\r\n", cfg.diag_serialdelay_ms);
   f.printf("io_trace    = %d\r\n", cfg.diag_io_trace);
@@ -550,6 +568,7 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.printf("dl_trace    = %d\r\n", cfg.diag_dl_trace);
   f.printf("rp_trace    = %d\r\n", cfg.diag_rp_trace);
   f.printf("trace       = %s\r\n", cfg.diag_trace ? "true" : "false");
+  f.printf("break       = %06o\r\n", (unsigned)cfg.diag_break_pc);
   f.printf("v4b_quirks  = %s\r\n", cfg.v4b_quirks ? "true" : "false");
   f.printf("kwp_enabled = %s\r\n", cfg.kwp_enabled ? "true" : "false");
   f.println();
@@ -711,7 +730,7 @@ void config_print(const AppConfig& cfg) {
   LOG("[ftp]     enabled=%s  port=%d  user=\"%s\" (password=%d chars)",
       cfg.ftp_enabled ? "true" : "false", cfg.ftp_port,
       cfg.ftp_user.c_str(), (int)cfg.ftp_password.length());
-  LOG("[diag]    pcping=%d sec%s  serialdelay=%d ms  io_trace=%d  clock_trace=%d  console_trace=%d  dl_trace=%d  rp_trace=%d  trace=%s  v4b_quirks=%s  kwp_enabled=%s",
+  LOG("[diag]    pcping=%d sec%s  serialdelay=%d ms  io_trace=%d  clock_trace=%d  console_trace=%d  dl_trace=%d  rp_trace=%d  trace=%s  break=%06o%s  v4b_quirks=%s  kwp_enabled=%s",
       cfg.diag_pcping_sec, cfg.diag_pcping_sec <= 0 ? " (disabled)" : "",
       cfg.diag_serialdelay_ms,
       cfg.diag_io_trace,
@@ -720,6 +739,8 @@ void config_print(const AppConfig& cfg) {
       cfg.diag_dl_trace,
       cfg.diag_rp_trace,
       cfg.diag_trace ? "true" : "false",
+      (unsigned)cfg.diag_break_pc,
+      cfg.diag_break_pc == 0 ? " (disabled)" : "",
       cfg.v4b_quirks  ? "true" : "false",
       cfg.kwp_enabled ? "true (V7 mode)" : "false (V4B-safe)");
   const char* boot_name;

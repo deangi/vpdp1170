@@ -177,6 +177,10 @@ static void apply_runtime_pdp_config() {
                                       ? 0 : cfg.diag_rp_trace));
   kwp::enabled             = cfg.kwp_enabled;
   pdp_core::set_trace(cfg.diag_trace);
+  if (cfg.diag_break_pc != 0)
+    pdp_core::monitor_break_set_pc(cfg.diag_break_pc);
+  else
+    pdp_core::monitor_break_clear();
   kl11::serial_in_delay_ms = (uint32_t)(cfg.diag_serialdelay_ms < 0 ? 0
                                       : cfg.diag_serialdelay_ms);
 }

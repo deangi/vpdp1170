@@ -333,6 +333,10 @@ static void show_runtime_settings() {
   output_printf("rp_trace=%u\r\n",
                 (unsigned)pdp_core::rp_trace_remaining());
   output_printf("trace=%s\r\n", cfg.diag_trace ? "true" : "false");
+  if (cfg.diag_break_pc != 0)
+    output_printf("break=%06o\r\n", (unsigned)cfg.diag_break_pc);
+  else
+    output_text("break=0\r\n");
   output_printf("title=\"%s\"\r\n", cfg.title.c_str());
   output_printf("boot_input=\"%s\"\r\n",
                 config_escape_bytes(cfg.boot_input,
@@ -501,6 +505,32 @@ static void command_set(char* arguments) {
     pdp_core::set_trace(parsed);
     output_printf("trace=%s (runtime only)\r\n",
                   parsed ? "true" : "false");
+    return;
+  }
+  if (!strcasecmp(name, "break")) {
+    String v = String(value);
+    v.trim();
+    if (!v.length() || v.equalsIgnoreCase("0") ||
+        v.equalsIgnoreCase("off") || v.equalsIgnoreCase("clear") ||
+        v.equalsIgnoreCase("none") || v == "-") {
+      cfg.diag_break_pc = 0;
+      pdp_core::monitor_break_clear();
+      output_text("break=0 (runtime only)\r\n");
+      return;
+    }
+    char* end = nullptr;
+    unsigned long pc = strtoul(v.c_str(), &end, 8);
+    while (end && (*end == ' ' || *end == '\t')) end++;
+    if (!end || *end || (pc & 1UL) || pc > 0177777UL) {
+      output_text("error: break must be an even octal PC, or 0/clear\r\n");
+      return;
+    }
+    cfg.diag_break_pc = (uint16_t)pc;
+    if (!pdp_core::monitor_break_set_pc(cfg.diag_break_pc)) {
+      output_text("error: could not arm PC breakpoint\r\n");
+      return;
+    }
+    output_printf("break=%06lo (runtime only)\r\n", pc);
     return;
   }
   if (!strcasecmp(name, "title")) {

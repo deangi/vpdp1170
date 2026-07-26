@@ -1262,7 +1262,9 @@ static uint32_t run_diagnostic(uint32_t max_cycles) {
 static bool diagnostic_run_required() {
   // Any of these must take the Diagnostic specialization so the ring (and
   // live T-stream) actually record. Clean is for the nominal hot path only.
-  return g_trace_enabled || g_rp_trace_history_active || g_trace_remaining;
+  // An armed PC breakpoint also needs the ring so H shows lead-in history.
+  return g_trace_enabled || g_rp_trace_history_active || g_trace_remaining ||
+         g_bp_pc_enabled;
 }
 
 uint32_t run(uint32_t max_cycles) {

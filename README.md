@@ -228,6 +228,7 @@ io_trace    = 0               ; trace next N I/O-page accesses
 clock_trace = 0               ; trace next N clock accesses/IRQs
 console_trace = 0             ; trace next N PDP console characters
 trace       = false           ; true only for panic/HALT diagnosis
+break       = 0               ; octal PC breakpoint before boot; 0 disables
 v4b_quirks  = true            ; RSTS V4B / RT-11 / V6 / XXDP
 kwp_enabled = false           ; true for RSTS V7 bring-up
 
@@ -331,7 +332,7 @@ or 10,485,760 bytes for RL02.
 
 `set` with no arguments displays the runtime-changeable settings. Supported
 assignments are `pcping`, `serialdelay`, `io_trace`, `clock_trace`,
-`console_trace`, `trace`, `title`, and `boot_input`;
+`console_trace`, `trace`, `break`, `title`, and `boot_input`;
 `boot_text` is accepted as an alias for `boot_input`. For example:
 
 ```text
@@ -340,11 +341,14 @@ set io_trace=100
 set clock_trace=100
 set console_trace=100
 set trace=false
+set break=04642
 set boot_input="hello\r"
 ```
 
 These changes are not written to `/pdpconfig.ini` and are lost when the ESP32
-restarts. `boot_input` takes effect on the next PDP-11 reboot.
+restarts. `boot_input` takes effect on the next PDP-11 reboot. `break` is also
+readable from `[diag] break=` in `/pdpconfig.ini` so it can be armed before
+early boot.
 
 The `monitor` command enters a front-panel-style PDP-11 monitor. Addresses and
 values are octal:
