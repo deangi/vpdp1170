@@ -74,6 +74,9 @@ struct AppConfig {
   // Alias name in pdpconfig/telnet: dp_trace. 0 disables RP tracing.
   int    diag_rp_trace = 0;
 
+  // Number of upcoming UDA50/MSCP controller events to log.
+  int    diag_du_trace = 0;
+
   // Per-instruction trace ring for panic diagnosis. Disabled by default
   // because it costs an MMU decode, instruction read, and register snapshot
   // on every guest instruction.
@@ -119,24 +122,28 @@ struct AppConfig {
   String disk_rk0;
   // Optional RH11/RP image (RP0). Bootable when boot_kind is BK_RP.
   String disk_rp0;
+  // Optional UDA50/MSCP disk image mounted as DU0.
+  String disk_du0;
   String disk_rp0_type = "rp06";
   // Boot drive: RL boot unit encoded as 'a'..'d' for DL0..DL3. RK/RP boot
   // use the dedicated disk_rk0 / disk_rp0 slots. boot_kind selects the
   // bootstrap controller path.
   char   boot_drive = 'a';
-  enum BootKind { BK_RL = 0, BK_RK = 1, BK_RP = 2 };
+  enum BootKind { BK_RL = 0, BK_RK = 1, BK_RP = 2, BK_DU = 3 };
   uint8_t boot_kind = BK_RL;
 
-  // Value passed to pdp_core::set_boot_kind(): 0=RL, 1=RK, 2=RP.
+  // Value passed to pdp_core::set_boot_kind(): 0=RL, 1=RK, 2=RP, 3=DU.
   int core_boot_kind() const {
     if (boot_kind == BK_RK) return 1;
     if (boot_kind == BK_RP) return 2;
+    if (boot_kind == BK_DU) return 3;
     return 0;
   }
 
   const char* boot_unit_label() const {
     if (boot_kind == BK_RK) return "RK0";
     if (boot_kind == BK_RP) return "RP0";
+    if (boot_kind == BK_DU) return "DU0";
     switch (boot_drive) {
       case 'b': return "DL1";
       case 'c': return "DL2";

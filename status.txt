@@ -19,12 +19,32 @@ TODO:
 14) works - dim/brightness for Elecrow panel working
 15) done - Create RSX11m+ bootable RP06 disk using PiDP MSCP image and BRU per email from Mark.  See if we can boot RP0 - created
 16) Boot RSX11M+ from RP0
-17) Investigate adding TAPE interface
-18) Investigate adding MSCP interface
+17) done - Investigate adding TAPE interface TU56 DEC Tape Unibus, TU77 MASSBUS
+     TU56 is resource intensive, physics level sim required.
+	 TU77 drive on a TM03 controller
+	 Thinking 7/26 - very complex to implement, little use other than Sysgen type ops - which can be done on SIMH
+18) done - Implement UDA50/MSCP interface for DU0 (RA50/RA-family disk),
+     Thinking 7/26 - have Cursor investigate, RA60=400176 blks, RA80=237212, RA81=891072, 512 blk size, so RA60 is 200mb, ra80 is 1118mb, ra81 is 556mb
+     7/26, proceeding with Codex.  7/27 Booted DU0 RSX11M+ 4.6 BL87 from DU0:
+     created with SIMH booting the PiDP setup. Verified actual image capacity,
+     write/read/reboot persistence, delete, repeated cold boots, and I/O copy/compare soak.
+19) 11/70 code cleanup - remove 11/40 only files, get rid of .disabled
+20) done 7/27 - DU0 mount/boot issue resolved with UDA50 response deferral,
+    vector 0154, MMR3 feature correction, and actual image-size capacity reporting.
+21) Investigate things to move to 11/40 project
+22) Investigate ways to "escape" from serial to inject shell commands and monitor commands
 
-Ideas:
-7/24 
-- stuff time/date fields
+Disk Geometry - DEC, model numbers start with R (RK05), in an OS, individual drives start with D (DK0:)
+Disk,Heads,Tracks,Sectors/track,512 byte sectors,size (bytes)
+RK05,2,200,12,4800,2457600
+RL01,1,256,40,10240,5242880
+RL02,2,256,40,20480,10485760
+RP06,19,815,22,340670,174423040
+
+Convert LBN to H/T/S:   #H = number of heads, #S = sectors/track, #T = number of tracks/surface
+T=LBN/(#H*#S) (integer divide)
+H=(LBN/#S)%#H
+S=(LBN%#S)
 
 1:00 1-JAN-88
 vpdp1170 status 7/24 - prior to Elecrow board support:

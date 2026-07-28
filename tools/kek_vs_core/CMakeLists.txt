@@ -38,6 +38,7 @@ add_executable(kek_vs_core
     "${KEK_ROOT}/rk05.cpp"
     "${KEK_ROOT}/rl02.cpp"
     "${KEK_ROOT}/rp06.cpp"
+    "${KEK_ROOT}/uda50.cpp"
     "${KEK_ROOT}/tm-11.cpp"
     "${KEK_ROOT}/tty.cpp"
 )

@@ -137,6 +137,8 @@ inline void set_boot_kind(int kind) { pdp_core_kek::set_boot_kind(kind); }
 inline void set_trace(bool enabled) { pdp_core_kek::set_trace(enabled); }
 inline void set_dl_trace(uint32_t count) { pdp_core_kek::set_dl_trace(count); }
 inline uint32_t dl_trace_remaining() { return pdp_core_kek::dl_trace_remaining(); }
+inline void set_du_trace(uint32_t count) { pdp_core_kek::set_du_trace(count); }
+inline uint32_t du_trace_remaining() { return pdp_core_kek::du_trace_remaining(); }
 inline void set_rp_trace(uint32_t count) { pdp_core_kek::set_rp_trace(count); }
 inline uint32_t rp_trace_remaining() { return pdp_core_kek::rp_trace_remaining(); }
 inline void monitor_pause() { pdp_core_kek::monitor_pause(); }
@@ -215,6 +217,8 @@ inline void set_boot_kind(int) {}
 inline void set_trace(bool) {}
 inline void set_dl_trace(uint32_t) {}
 inline uint32_t dl_trace_remaining() { return 0; }
+inline void set_du_trace(uint32_t) {}
+inline uint32_t du_trace_remaining() { return 0; }
 inline void set_rp_trace(uint32_t) {}
 inline uint32_t rp_trace_remaining() { return 0; }
 inline void monitor_pause() {}
@@ -291,6 +295,8 @@ inline void set_boot_kind(int kind) { cpu_set_boot_kind(kind); }
 inline void set_trace(bool enabled) { cpu_set_trace(enabled); }
 inline void set_dl_trace(uint32_t) {}
 inline uint32_t dl_trace_remaining() { return 0; }
+inline void set_du_trace(uint32_t) {}
+inline uint32_t du_trace_remaining() { return 0; }
 inline void set_rp_trace(uint32_t) {}
 inline uint32_t rp_trace_remaining() { return 0; }
 inline void monitor_pause() { cpu_monitor_pause(); }

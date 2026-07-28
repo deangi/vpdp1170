@@ -332,6 +332,8 @@ static void show_runtime_settings() {
                 (unsigned)pdp_core::dl_trace_remaining());
   output_printf("rp_trace=%u\r\n",
                 (unsigned)pdp_core::rp_trace_remaining());
+  output_printf("du_trace=%u\r\n",
+                (unsigned)pdp_core::du_trace_remaining());
   output_printf("trace=%s\r\n", cfg.diag_trace ? "true" : "false");
   if (cfg.diag_break_pc != 0)
     output_printf("break=%06o\r\n", (unsigned)cfg.diag_break_pc);
@@ -482,6 +484,17 @@ static void command_set(char* arguments) {
     cfg.diag_dl_trace = parsed;
     pdp_core::set_dl_trace((uint32_t)parsed);
     output_printf("dl_trace=%d (runtime only)\r\n", parsed);
+    return;
+  }
+  if (!strcasecmp(name, "du_trace")) {
+    int parsed;
+    if (!parse_int_value(value, 0, 1000000, &parsed)) {
+      output_text("error: du_trace must be 0..1000000 events\r\n");
+      return;
+    }
+    cfg.diag_du_trace = parsed;
+    pdp_core::set_du_trace((uint32_t)parsed);
+    output_printf("du_trace=%d (runtime only)\r\n", parsed);
     return;
   }
   if (!strcasecmp(name, "rp_trace") || !strcasecmp(name, "dp_trace")) {

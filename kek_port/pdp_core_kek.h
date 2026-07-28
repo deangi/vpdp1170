@@ -59,6 +59,8 @@ void set_boot_kind(int kind);
 void set_trace(bool enabled);
 void set_dl_trace(uint32_t count);
 uint32_t dl_trace_remaining();
+void set_du_trace(uint32_t count);
+uint32_t du_trace_remaining();
 void set_rp_trace(uint32_t count);
 uint32_t rp_trace_remaining();
 void monitor_pause();

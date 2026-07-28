@@ -48,6 +48,7 @@ bus::~bus()
 	delete mmu_;
 	delete dz11_;
 	delete rp06_;
+	delete uda50_;
 	delete deqna_;
 	delete m;
 }
@@ -252,6 +253,8 @@ void bus::reset(const bool hard)
 		dc11_->reset(hard);
 	if (rp06_)
 		rp06_->reset(hard);
+	if (uda50_)
+		uda50_->reset(hard);
 	if (deqna_)
 		deqna_->reset(hard);
 
@@ -269,6 +272,12 @@ void bus::add_RP06(rp06 *const rp06_)
 {
 	delete this->rp06_;
 	this->rp06_ = rp06_;
+}
+
+void bus::add_UDA50(uda50 *const uda50_)
+{
+	delete this->uda50_;
+	this->uda50_ = uda50_;
 }
 
 void bus::add_KW11_L(kw11_l *const kw11_l_)
@@ -583,6 +592,9 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 	if (rp06_ && a >= RP06_BASE && a < RP06_END)
 		return word_mode == wm_byte ? rp06_->read_byte(a) : rp06_->read_word(a);
 
+	if (uda50_ && a >= UDA50_BASE && a < UDA50_END)
+		return word_mode == wm_byte ? uda50_->read_byte(a) : uda50_->read_word(a);
+
 	if (deqna_ && a >= DEQNA_BASE && a < DEQNA_END)
 		return word_mode == wm_byte ? deqna_->read_byte(a) : deqna_->read_word(a);
 
@@ -878,6 +890,11 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 
 	if (rp06_ && a >= RP06_BASE && a < RP06_END) {
 		word_mode == wm_byte ? rp06_->write_byte(a, value) : rp06_->write_word(a, value);
+		return false;
+	}
+
+	if (uda50_ && a >= UDA50_BASE && a < UDA50_END) {
+		word_mode == wm_byte ? uda50_->write_byte(a, value) : uda50_->write_word(a, value);
 		return false;
 	}
 

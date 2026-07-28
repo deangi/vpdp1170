@@ -131,7 +131,11 @@ void mmu::setMMR2(const uint16_t value)
 
 void mmu::setMMR3(const uint16_t value) 
 {
-	MMR3 = value;
+	// PDP-11/70 implements split I/D, 22-bit mapping, and the Unibus map,
+	// but not the PDP-11/44/J11 Call Supervisor Mode extension. If bit 010
+	// reads back as set, RSX detects CSM and emits 0070dd entry stubs that an
+	// 11/70 must instead reject as reserved instructions.
+	MMR3 = value & 067;
 	update_io_base();
 }
 

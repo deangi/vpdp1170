@@ -10,7 +10,8 @@ enum {
   DRIVE_D = 3,   // DL3
   DRIVE_RK0 = 4, // RK0
   DRIVE_RP0 = 5, // RP0
-  DRIVE_COUNT = 6
+  DRIVE_DU0 = 6, // DU0 (UDA50/MSCP)
+  DRIVE_COUNT = 7
 };
 
 static constexpr uint32_t DISK_SIZE_TOLERANCE_PERCENT = 20;

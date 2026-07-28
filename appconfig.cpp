@@ -228,6 +228,7 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.diag_console_trace = 0;
   cfg.diag_dl_trace = 0;
   cfg.diag_rp_trace = 0;
+  cfg.diag_du_trace = 0;
   cfg.diag_trace      = false;
   cfg.diag_break_pc   = 0;
   cfg.v4b_quirks      = true;
@@ -239,6 +240,7 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.disk_d        = DEFAULT_DL3_IMG;
   cfg.disk_rk0      = "";
   cfg.disk_rp0      = "";
+  cfg.disk_du0      = "";
   cfg.disk_rp0_type = "rp06";
   cfg.boot_drive    = 'a';
   cfg.boot_kind     = AppConfig::BK_RL;
@@ -316,6 +318,11 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
       cfg.diag_rp_trace = count < 0 ? 0
                         : count > 1000000 ? 1000000 : (int)count;
     }
+    else if (key == "du_trace") {
+      long count = val.toInt();
+      cfg.diag_du_trace = count < 0 ? 0
+                        : count > 1000000 ? 1000000 : (int)count;
+    }
     else if (key == "trace")      cfg.diag_trace = truthy(val);
     else if (key == "break") {
       // Octal virtual PC. 0 / off / clear / empty disables.
@@ -349,6 +356,7 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
     else if (key == "dl3")      cfg.disk_d = val;
     else if (key == "rk0")      cfg.disk_rk0 = val;
     else if (key == "rp0")      cfg.disk_rp0 = val;
+    else if (key == "du0")      cfg.disk_du0 = val;
     else if (key == "rp0_type") cfg.disk_rp0_type = to_lower(val);
     else if (key == "boot") {
       String v = to_lower(val);
@@ -366,6 +374,10 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
       else if (v == "rp0" || v == "hp0" || v == "dp0") {
         cfg.boot_drive = 'a';
         cfg.boot_kind  = AppConfig::BK_RP;
+      }
+      else if (v == "du0") {
+        cfg.boot_drive = 'a';
+        cfg.boot_kind  = AppConfig::BK_DU;
       }
       else if (v.length() == 1 && v[0] >= 'a' && v[0] <= 'd')
         cfg.boot_drive = v[0];           // legacy single-char form
@@ -557,6 +569,8 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println(";              disk events, then stop. 0 disables.");
   f.println("; rp_trace   = log the next N kek RH/RP (DP) controller and host");
   f.println(";              disk events, then stop. 0 disables. Alias: dp_trace.");
+  f.println("; du_trace   = log the next N UDA50/MSCP init, ring, command,");
+  f.println(";              response, interrupt, and DMA events, then stop.");
   f.println("; break      = arm a PC breakpoint before guest boot (octal VA).");
   f.println(";              0 disables. Example: break = 04642 pauses on first");
   f.println(";              fetch of that PC so H can dump the lead-in history.");
@@ -567,6 +581,7 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.printf("console_trace = %d\r\n", cfg.diag_console_trace);
   f.printf("dl_trace    = %d\r\n", cfg.diag_dl_trace);
   f.printf("rp_trace    = %d\r\n", cfg.diag_rp_trace);
+  f.printf("du_trace    = %d\r\n", cfg.diag_du_trace);
   f.printf("trace       = %s\r\n", cfg.diag_trace ? "true" : "false");
   f.printf("break       = %06o\r\n", (unsigned)cfg.diag_break_pc);
   f.printf("v4b_quirks  = %s\r\n", cfg.v4b_quirks ? "true" : "false");
@@ -584,11 +599,13 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.printf("dl3  = %s\r\n", cfg.disk_d.c_str());
   f.printf("rk0  = %s\r\n", cfg.disk_rk0.c_str());
   f.printf("rp0  = %s\r\n", cfg.disk_rp0.c_str());
+  f.printf("du0  = %s\r\n", cfg.disk_du0.c_str());
   f.printf("rp0_type = %s\r\n", cfg.disk_rp0_type.c_str());
-  // Friendly boot value: dl0/dl1/dl2/dl3/rk0/rp0. rl*/dk0/dp0/hp0 aliases accepted.
+  // Friendly boot value: dl0/dl1/dl2/dl3/rk0/rp0/du0.
   const char* boot_name;
   if (cfg.boot_kind == AppConfig::BK_RK) boot_name = "rk0";
   else if (cfg.boot_kind == AppConfig::BK_RP) boot_name = "rp0";
+  else if (cfg.boot_kind == AppConfig::BK_DU) boot_name = "du0";
   else boot_name = (cfg.boot_drive == 'a') ? "dl0"
                  : (cfg.boot_drive == 'b') ? "dl1"
                  : (cfg.boot_drive == 'c') ? "dl2"
@@ -730,7 +747,7 @@ void config_print(const AppConfig& cfg) {
   LOG("[ftp]     enabled=%s  port=%d  user=\"%s\" (password=%d chars)",
       cfg.ftp_enabled ? "true" : "false", cfg.ftp_port,
       cfg.ftp_user.c_str(), (int)cfg.ftp_password.length());
-  LOG("[diag]    pcping=%d sec%s  serialdelay=%d ms  io_trace=%d  clock_trace=%d  console_trace=%d  dl_trace=%d  rp_trace=%d  trace=%s  break=%06o%s  v4b_quirks=%s  kwp_enabled=%s",
+  LOG("[diag]    pcping=%d sec%s  serialdelay=%d ms  io_trace=%d  clock_trace=%d  console_trace=%d  dl_trace=%d  rp_trace=%d  du_trace=%d  trace=%s  break=%06o%s  v4b_quirks=%s  kwp_enabled=%s",
       cfg.diag_pcping_sec, cfg.diag_pcping_sec <= 0 ? " (disabled)" : "",
       cfg.diag_serialdelay_ms,
       cfg.diag_io_trace,
@@ -738,6 +755,7 @@ void config_print(const AppConfig& cfg) {
       cfg.diag_console_trace,
       cfg.diag_dl_trace,
       cfg.diag_rp_trace,
+      cfg.diag_du_trace,
       cfg.diag_trace ? "true" : "false",
       (unsigned)cfg.diag_break_pc,
       cfg.diag_break_pc == 0 ? " (disabled)" : "",
@@ -746,6 +764,7 @@ void config_print(const AppConfig& cfg) {
   const char* boot_name;
   if (cfg.boot_kind == AppConfig::BK_RK) boot_name = "rk0";
   else if (cfg.boot_kind == AppConfig::BK_RP) boot_name = "rp0";
+  else if (cfg.boot_kind == AppConfig::BK_DU) boot_name = "du0";
   else boot_name = (cfg.boot_drive == 'a') ? "dl0"
                  : (cfg.boot_drive == 'b') ? "dl1"
                  : (cfg.boot_drive == 'c') ? "dl2"
@@ -757,5 +776,6 @@ void config_print(const AppConfig& cfg) {
   LOG("          rk0=\"%s\"  rp0=\"%s\" (%s)  boot=%s",
       cfg.disk_rk0.c_str(), cfg.disk_rp0.c_str(),
       cfg.disk_rp0_type.c_str(), boot_name);
+  LOG("          du0=\"%s\"", cfg.disk_du0.c_str());
   LOG("--------------------------------------");
 }

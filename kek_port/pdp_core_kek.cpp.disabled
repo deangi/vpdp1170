@@ -23,6 +23,7 @@
 #include "../_upstream_kek/rk05.h"
 #include "../_upstream_kek/rl02.h"
 #include "../_upstream_kek/rp06.h"
+#include "../_upstream_kek/uda50.h"
 #include "../_upstream_kek/tty.h"
 #include "../bootrom.h"
 #include "../disk.h"
@@ -43,6 +44,7 @@ static tty* g_tty = nullptr;
 static rk05* g_rk05 = nullptr;
 static rl02* g_rl02 = nullptr;
 static rp06* g_rp06 = nullptr;
+static uda50* g_uda50 = nullptr;
 static bool g_paused = false;
 static bool g_bp_pc_enabled = false;
 static bool g_bp_skip_once = false;
@@ -87,6 +89,7 @@ static abool g_disk_read_activity { false };
 static abool g_disk_write_activity { false };
 static int g_rl_host_trace_left = 0;
 static int g_rp_host_trace_left = 0;
+static uint32_t g_du_trace_count = 0;
 static uint32_t g_target_memory_kw = 2048;
 
 static constexpr uint32_t kTraceRingSize = 512;
@@ -361,17 +364,70 @@ static bool ensure_rp06_attached() {
   return true;
 }
 
+static bool uda_media_read(void*, uint32_t offset, uint8_t* target, uint32_t bytes) {
+  return disk_read(DRIVE_DU0, offset, target, bytes) == (int)bytes;
+}
+
+static bool uda_media_write(void*, uint32_t offset, const uint8_t* source, uint32_t bytes) {
+  return disk_write(DRIVE_DU0, offset, source, bytes) == (int)bytes;
+}
+
+static uint32_t uda_media_size(void*) {
+  return disk_size_bytes(DRIVE_DU0);
+}
+static void uda_trace_log(void *, const char *line) {
+  LOG("kek DU %s", line ? line : "");
+}
+
+static bool ensure_uda50_attached() {
+  if (!g_bus) return false;
+  if (g_uda50) return true;
+
+  // Phase 1 registers the controller even though no DU media backend or
+  // MSCP command processor is present yet.
+  g_uda50 = new uda50(g_bus);
+  if (!g_uda50) return false;
+  g_uda50->attach_media(nullptr, uda_media_read, uda_media_write, uda_media_size);
+  g_bus->add_UDA50(g_uda50);
+  g_uda50->set_trace(g_du_trace_count, nullptr, uda_trace_log);
+  LOG("kek UDA50 attached at 0172150-0172152, DU0 mounted=%d bytes=%u",
+      disk_is_mounted(DRIVE_DU0) ? 1 : 0, (unsigned)disk_size_bytes(DRIVE_DU0));
+  return true;
+}
+
+// SIMH UDA50 bootstrap relocated from 016000 to the vpdp boot slot at 02000.
+// Entry is 02002; word zero is the conventional "UD" signature.
+static const uint16_t bootrom_du0[] = {
+  0042125,
+  0012706, 0002000, 0012700, 0000000, 0012701, 0172150,
+  0012704, 0002162, 0012705, 0004000, 0010102, 0005022,
+  0005712, 0100001, 0000000, 0030512, 0001773, 0012412,
+  0006305, 0100370,
+  0105714, 0001434, 0012702, 0007000, 0005022, 0020227,
+  0007204, 0103774, 0112437, 0007100, 0110037, 0007110,
+  0112437, 0007114, 0112437, 0007121, 0012722, 0007004,
+  0010522, 0012722, 0007104, 0010512, 0024242, 0005711,
+  0005712, 0100776, 0005737, 0007016, 0001743, 0000000,
+  0005011, 0005003, 0012704, 0002020, 0005005, 0005007,
+  0100000, 0007204, 0000000, 0000001, 0004420, 0020000,
+  0001041, 0000000
+};
 static void install_boot_stub() {
   if (!g_bus || !g_cpu) return;
 
   const bool rk_attached = ensure_rk05_attached();
   const bool rl_attached = ensure_rl02_attached();
   const bool rp_attached = ensure_rp06_attached();
+  ensure_uda50_attached();
   bool boot_rk = (g_boot_kind == 1) && rk_attached;
   bool boot_rp = (g_boot_kind == 2) && rp_attached && disk_is_mounted(DRIVE_RP0);
   bool boot_rl = (g_boot_kind == 0) && rl_attached && disk_is_mounted(DRIVE_A);
+  bool boot_du = (g_boot_kind == 3) && g_uda50 && disk_is_mounted(DRIVE_DU0);
 
-  if (boot_rk) {
+  if (boot_du) {
+    for (uint32_t i = 0; i < sizeof(bootrom_du0) / sizeof(bootrom_du0[0]); i++)
+      g_bus->write_physical(BOOT_START + (i * 2), bootrom_du0[i]);
+  } else if (boot_rk) {
     const uint32_t rk_words = sizeof(bootrom_rk0) / sizeof(uint16_t);
     for (uint32_t i = 0; i < rk_words; i++) {
       g_bus->write_physical(BOOT_START + (i * 2), bootrom_rk0[i]);
@@ -406,11 +462,16 @@ static void install_boot_stub() {
   for (uint32_t i = 0; i < sizeof(banner_prog) / sizeof(banner_prog[0]); i++) {
     g_bus->write_physical(0001000 + (i * 2), banner_prog[i]);
   }
-  if (!boot_rk && !boot_rp && !boot_rl) {
+  if (boot_du) {
+    g_bus->write_physical(0001026, 0002002); // banner JMP target: UDA entry
+  }
+  if (!boot_du && !boot_rk && !boot_rp && !boot_rl) {
     g_bus->write_physical(0001024, 0000777);  // BR .
   }
 
-  const char* msg = boot_rk
+  const char* msg = boot_du
+      ? "vpdp1170: kek PDP-11/70 adapter console OK; trying DU0 boot...\r\n"
+      : boot_rk
       ? "vpdp1170: kek PDP-11/70 adapter console OK; trying RK0 boot...\r\n"
       : boot_rp
         ? "vpdp1170: kek PDP-11/70 adapter console OK; trying RP0 boot...\r\n"
@@ -421,10 +482,10 @@ static void install_boot_stub() {
   write_physical_bytes(0001100, msg);
 
   g_cpu->setPC(0001000);
-  const char* boot_label = boot_rk ? "RK0" : boot_rp ? "RP0" : boot_rl ? "DL0" : "no";
+  const char* boot_label = boot_du ? "DU0" : boot_rk ? "RK0" : boot_rp ? "RP0" : boot_rl ? "DL0" : "no";
   LOG("kek boot stub installed: banner @01000, %s boot ROM @02000%s",
       boot_label,
-      (boot_rk || boot_rp || boot_rl) ? "" : " (boot device not attached)");
+      (boot_du || boot_rk || boot_rp || boot_rl) ? "" : " (boot device not attached)");
 }
 
 static void clear_trace_ring() {
@@ -1169,6 +1230,7 @@ static void service_deferred_devices() {
   if (g_rl02) g_rl02->service_deferred();
   if (g_rk05) g_rk05->service_deferred();
   if (g_rp06) g_rp06->service_deferred();
+  if (g_uda50) g_uda50->service_deferred();
   if (g_tty) g_tty->service_deferred();
 }
 
@@ -1176,6 +1238,7 @@ static void service_instruction_deferred_devices() {
   if (g_rl02) g_rl02->service_deferred();
   if (g_rk05) g_rk05->service_deferred();
   if (g_rp06) g_rp06->service_deferred();
+  if (g_uda50) g_uda50->service_deferred();
   if (g_tty) g_tty->service_deferred();
 }
 
@@ -1287,6 +1350,10 @@ uint32_t run(uint32_t max_cycles) {
 
 bool selftest() {
   if (!init()) return false;
+  if (!ensure_uda50_attached()) return false;
+  const bool uda_transport_ok = g_uda50->transport_selftest();
+  const bool uda_mscp_ok = g_uda50->mscp_selftest();
+  const bool uda_media_ok = g_uda50->media_selftest();
 
   g_cpu->reset();
   g_cpu->setPC(01000);
@@ -1301,12 +1368,18 @@ bool selftest() {
   for (int i = 0; i < 8; i++)
     if (!g_cpu->step()) break;
 
-  return g_cpu->get_register(0) == 0000005 &&
-         g_cpu->get_register(1) == 0000014;
+  const bool cpu_ok = g_cpu->get_register(0) == 0000005 &&
+                      g_cpu->get_register(1) == 0000014;
+  LOG("kek UDA50 transport selftest: %s", uda_transport_ok ? "PASS" : "FAIL");
+  LOG("kek UDA50 MSCP selftest: %s", uda_mscp_ok ? "PASS" : "FAIL");
+  LOG("kek UDA50 media DMA selftest: %s", uda_media_ok ? "PASS" : "FAIL");
+  return cpu_ok && uda_transport_ok && uda_mscp_ok && uda_media_ok;
 }
 
 
 namespace {
+
+#if VPDP1170_STARTUP_BENCHMARK
 
 static constexpr uint32_t kBenchmarkInstructions = 100000;
 static constexpr uint16_t kBenchmarkCode = 01000;
@@ -1386,7 +1459,11 @@ static bool run_benchmark_sample(const char* name, bool memory_operand,
   return counted == kBenchmarkInstructions;
 }
 
+#endif
+
 }  // namespace
+
+#if VPDP1170_STARTUP_BENCHMARK
 
 bool benchmark() {
   if (!init()) return false;
@@ -1427,6 +1504,8 @@ bool benchmark() {
   set_trace(restore_trace);
   return ok;
 }
+#endif
+
 uint8_t* memory() {
   return nullptr;  // kek memory owns its buffer; expose examine/deposit instead.
 }
@@ -1646,8 +1725,8 @@ bool write_physical_word(uint32_t address, uint16_t value) {
 }
 
 void set_boot_kind(int kind) {
-  // 0=RL, 1=RK, 2=RP; anything else falls back to RL.
-  g_boot_kind = (kind == 1 || kind == 2) ? kind : 0;
+  // 0=RL, 1=RK, 2=RP, 3=DU; anything else falls back to RL.
+  g_boot_kind = (kind >= 1 && kind <= 3) ? kind : 0;
 }
 
 void set_trace(bool enabled) {
@@ -1684,6 +1763,16 @@ uint32_t dl_trace_remaining() {
   int controller = rl02_trace_remaining();
   int host = g_rl_host_trace_left;
   return (uint32_t)(controller > host ? controller : host);
+}
+
+void set_du_trace(uint32_t count) {
+  g_du_trace_count = count > 1000000 ? 1000000 : count;
+  if (g_uda50) g_uda50->set_trace(g_du_trace_count, nullptr, uda_trace_log);
+  LOG("kek DU trace=%u", (unsigned)g_du_trace_count);
+}
+
+uint32_t du_trace_remaining() {
+  return g_uda50 ? g_uda50->trace_remaining() : g_du_trace_count;
 }
 
 void set_rp_trace(uint32_t count) {

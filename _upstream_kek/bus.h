@@ -19,6 +19,7 @@
 #include "rk05.h"
 #include "rl02.h"
 #include "rp06.h"
+#include "uda50.h"
 #if !defined(TEENSY4_1)
 #include "tm-11.h"
 #endif
@@ -65,6 +66,7 @@ class memory;
 class rk05;
 class rl02;
 class rp06;
+class uda50;
 #if !defined(TEENSY4_1)
 class tm_11;
 #endif
@@ -90,6 +92,7 @@ private:
 	dc11    *dc11_   { nullptr };
 	dz11    *dz11_   { nullptr };
 	rp06    *rp06_   { nullptr };
+	uda50   *uda50_  { nullptr };
 	deqna   *deqna_  { nullptr };
 
 	uint16_t microprogram_break_register { 0 };
@@ -145,6 +148,7 @@ public:
 	// required to release devices when doing a reload
 	void del_DZ11  ();
 	void add_RP06  (rp06   *const rp06_  );
+	void add_UDA50 (uda50  *const uda50_ );
 	void add_DEQNA (deqna  *const deqna_ );
 
 	memory *getRAM()    { return m;       }
@@ -160,6 +164,7 @@ public:
 	tm_11  *getTM11()   { return tm11;    }
 #endif
 	rp06   *getRP06()   { return rp06_;   }
+	uda50  *getUDA50()  { return uda50_;  }
 	deqna  *getDEQNA()  { return deqna_;  }
 	uint32_t get_unibus_map_entry(int entry) const {
 		return entry >= 0 && entry < UNIBUS_MAP_ENTRIES ? unibus_map[entry] : 0;

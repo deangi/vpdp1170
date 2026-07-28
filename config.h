@@ -2,8 +2,8 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vpdp1170"
-#define APP_VERSION     "V2.0"
-#define APP_BUILD_DATE  "2026-07-24"
+#define APP_VERSION     "V2.1"
+#define APP_BUILD_DATE  "2026-07-27"
 
 // ---- Board selection ----
 // Arduino IDE compiles each .cpp separately, so a #define in the .ino does NOT
@@ -48,7 +48,7 @@
 // Run the deterministic kek microbenchmark suite once during setup, before
 // the selected guest is booted. Disable after performance characterization
 // if the extra startup delay is undesirable.
-#define VPDP1170_STARTUP_BENCHMARK 1
+#define VPDP1170_STARTUP_BENCHMARK 0
 
 // Mounted disk images, FTP, TT1, and shell file commands may all hold files open.
 #define SD_MAX_OPEN_FILES 16

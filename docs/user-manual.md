@@ -280,6 +280,7 @@ allocation for operating systems that are not configured for a second TTY.
 | `io_trace` | Access count | Log the next N I/O-page reads/writes to USB serial, then stop automatically. `0` disables. |
 | `clock_trace` | Event count | Log the next N KW11-L/KW11-P register accesses and interrupt requests/deliveries, then stop automatically. `0` disables. |
 | `console_trace` | Character count | Log the next N characters read by or written by the PDP through the KL11 console data registers, then stop automatically. `0` disables. |
+| `du_trace` | Event count | Log the next N UDA50/MSCP initialization, ring, command, response, DMA, and interrupt events to USB serial, then stop automatically. `0` disables. |
 | `trace` | Boolean | Enables expensive per-instruction panic trace capture. Use only for debugging. |
 | `break` | Octal PC or `0` | Arm a PC breakpoint before guest boot. `0` / `off` / `clear` disables. Survives cold boot so early loops can be caught before telnet is available. |
 | `v4b_quirks` | Boolean | Absorbs selected missing-device probes for RSTS/E V4B compatibility. Default `true`. |
@@ -306,8 +307,9 @@ config files should use `[diag]`.
 | `dl3` | SD path or blank | RL11 unit DL3 image. |
 | `rk0` | SD path or blank | RK05 image used when booting RK0. |
 | `rp0` | SD path or blank | Optional secondary RP-family image. |
-| `rp0_type` | `rp04`, `rp05`, `rp06` | Geometry reported for RP0. |
-| `boot` | `dl0`, `dl1`, `dl2`, `dl3`, `rk0`, `dk0`, `0`..`3`, `a`..`d` | Boot controller and unit. |
+| `du0` | SD path or blank | UDA50/MSCP unit DU0 image. |
+| `rp0_type` | `rp04`, `rp05`, `rp06`, `rp07` | Geometry reported for RP0. |
+| `boot` | `dl0`, `dl1`, `dl2`, `dl3`, `rk0`, `dk0`, `rp0`, `du0`, `0`..`3`, `a`..`d` | Boot controller and unit. |
 
 `rk0` and `dk0` are treated as the same boot target. `dk0` is useful when
 thinking in UNIX V6 naming.
@@ -359,6 +361,25 @@ boot = dl0
 ```
 
 The emulator installs the RL boot stub and boots from DL0.
+
+### Boot From UDA50/MSCP DU0
+
+Set `/pdpconfig.ini`:
+
+```ini
+[disks]
+du0 = /rsx11mp.dsk
+boot = du0
+```
+
+The emulator presents the image as UDA50 unit DU0 with RA81 media identity.
+The capacity reported to the guest is the actual image size divided by 512,
+rounded down to whole blocks. This build provides DU0 only.
+
+The image must contain a bootable MSCP layout for the selected operating
+system. An RK05, RL01/RL02, or RP06 image is not converted merely by mounting
+it on DU0. Use `du_trace = N` in `[diag]` for a bounded USB-serial trace of
+controller initialization and I/O while diagnosing a boot.
 
 ### Startup Console Input
 

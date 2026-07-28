@@ -84,6 +84,7 @@ set(APP_SOURCES
   rk05.cpp
   rl02.cpp
   rp06.cpp
+  uda50.cpp
   terminal.cpp
   tm-11.cpp
   tty.cpp

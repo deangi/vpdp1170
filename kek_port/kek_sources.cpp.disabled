@@ -26,6 +26,7 @@
 #include "../_upstream_kek/rk05.cpp"
 #include "../_upstream_kek/rl02.cpp"
 #include "../_upstream_kek/rp06.cpp"
+#include "../_upstream_kek/uda50.cpp"
 #include "../_upstream_kek/dc11.cpp"
 #include "../_upstream_kek/dz11.cpp"
 #include "../_upstream_kek/deqna.cpp"

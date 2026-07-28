@@ -34,6 +34,7 @@ static const char* slot_name(int s) {
   static char name[4];
   if (s == DRIVE_RK0) return "RK0";
   if (s == DRIVE_RP0) return "RP0";
+  if (s == DRIVE_DU0) return "DU0";
   if (s >= DRIVE_A && s <= DRIVE_D) {
     name[0] = 'D';
     name[1] = 'L';

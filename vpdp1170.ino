@@ -173,6 +173,8 @@ static void apply_runtime_pdp_config() {
 #endif
   pdp_core::set_dl_trace((uint32_t)(cfg.diag_dl_trace < 0
                                       ? 0 : cfg.diag_dl_trace));
+  pdp_core::set_du_trace((uint32_t)(cfg.diag_du_trace < 0
+                                      ? 0 : cfg.diag_du_trace));
   pdp_core::set_rp_trace((uint32_t)(cfg.diag_rp_trace < 0
                                       ? 0 : cfg.diag_rp_trace));
   kwp::enabled             = cfg.kwp_enabled;
@@ -206,6 +208,7 @@ static const char* boot_unit_label() {
 static const String& boot_image_path() {
   if (cfg.boot_kind == AppConfig::BK_RK) return cfg.disk_rk0;
   if (cfg.boot_kind == AppConfig::BK_RP) return cfg.disk_rp0;
+  if (cfg.boot_kind == AppConfig::BK_DU) return cfg.disk_du0;
   int slot = (cfg.boot_drive >= 'a' && cfg.boot_drive <= 'd')
                ? (cfg.boot_drive - 'a') : 0;
   const String* paths[4] = { &cfg.disk_a, &cfg.disk_b, &cfg.disk_c, &cfg.disk_d };
@@ -345,6 +348,11 @@ static void disks_mount() {
         cfg.disk_rp0_type.c_str(), cfg.disk_rp0.c_str(),
         ok ? "mounted" : "FAILED");
   }
+  if (cfg.disk_du0.length()) {
+    bool ok = disk_mount(DRIVE_DU0, cfg.disk_du0.c_str());
+    LOG("disks_mount DU0: \"%s\" -> %s",
+        cfg.disk_du0.c_str(), ok ? "mounted" : "FAILED");
+  }
 }
 
 // Status bar drawn in the 40 px strip below the 80x25 console: drive activity
@@ -352,6 +360,7 @@ static void disks_mount() {
 static int boot_drive_slot() {
   if (cfg.boot_kind == AppConfig::BK_RK) return DRIVE_RK0;
   if (cfg.boot_kind == AppConfig::BK_RP) return DRIVE_RP0;
+  if (cfg.boot_kind == AppConfig::BK_DU) return DRIVE_DU0;
   if (cfg.boot_drive >= 'a' && cfg.boot_drive <= 'd')
     return cfg.boot_drive - 'a';
   return DRIVE_A;
@@ -365,6 +374,7 @@ static const char* status_drive_label(int slot) {
     case DRIVE_D:   return "DL3";
     case DRIVE_RK0: return "RK0";
     case DRIVE_RP0: return "RP0";
+    case DRIVE_DU0: return "DU0";
     default:        return "?";
   }
 }
@@ -768,6 +778,7 @@ void setup() {
       bool boot_mounted =
           (cfg.boot_kind == AppConfig::BK_RK) ? disk_is_mounted(DRIVE_RK0) :
           (cfg.boot_kind == AppConfig::BK_RP) ? disk_is_mounted(DRIVE_RP0) :
+          (cfg.boot_kind == AppConfig::BK_DU) ? disk_is_mounted(DRIVE_DU0) :
                                                disk_is_mounted(DRIVE_A);
       char boot_row[16];
       snprintf(boot_row, sizeof(boot_row), "Boot %s:", boot_lbl);
