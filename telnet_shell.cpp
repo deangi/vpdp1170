@@ -11,9 +11,6 @@
 #include "kw11.h"
 #include "pdp_core.h"
 #include "platform.h"
-#include "rh11.h"
-#include "rk11.h"
-#include "rl11.h"
 #include "telnet.h"
 
 #include <Arduino.h>
@@ -24,7 +21,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
 extern "C" void kek_tty_set_trace(uint32_t count);
 extern "C" uint32_t kek_tty_trace_remaining();
 extern "C" void kek_tty_get_stats(uint32_t* tx_chars,
@@ -41,7 +37,6 @@ extern "C" void kek_tty_get_stats(uint32_t* tx_chars,
                                   uint16_t* tks, uint16_t* tkb,
                                   uint16_t* tps, uint16_t* tpb,
                                   uint8_t* tx_busy);
-#endif
 
 static constexpr size_t SHELL_LINE_MAX = 255;
 static constexpr size_t SHELL_QUEUE_DEPTH = 4;
@@ -324,10 +319,8 @@ static void show_runtime_settings() {
                 (unsigned)kw11::clock_trace_remaining());
   output_printf("console_trace=%u\r\n",
                 (unsigned)kl11::console_trace_remaining());
-#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
   output_printf("kek_console_trace=%u\r\n",
                 (unsigned)kek_tty_trace_remaining());
-#endif
   output_printf("dl_trace=%u\r\n",
                 (unsigned)pdp_core::dl_trace_remaining());
   output_printf("rp_trace=%u\r\n",
@@ -345,7 +338,6 @@ static void show_runtime_settings() {
                                     cfg.boot_input_len).c_str());
 }
 
-#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
 static void command_tty_stats() {
   uint32_t tx_chars = 0;
   uint32_t tx_ready = 0;
@@ -401,7 +393,6 @@ static void command_tty_stats() {
     output_text("\r\n");
   }
 }
-#endif
 
 static void command_set(char* arguments) {
   char* assignment = trim_in_place(arguments);
@@ -469,9 +460,7 @@ static void command_set(char* arguments) {
     }
     cfg.diag_console_trace = parsed;
     kl11::set_console_trace((uint32_t)parsed);
-#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
     kek_tty_set_trace((uint32_t)parsed);
-#endif
     output_printf("console_trace=%d (runtime only)\r\n", parsed);
     return;
   }
@@ -1349,7 +1338,7 @@ static void command_drives() {
       output_printf("%-3s  %s  %lu bytes  %s  %s\r\n",
                     slot_label(slot), disk_path(slot),
                     (unsigned long)disk_size_bytes(slot),
-                    rl11::mounted_media_type(slot),
+                    disk_rl_mounted_media_type(slot),
                     disk_is_readonly(slot) ? "read-only" : "read-write");
     } else {
       output_printf("%-3s  %s  %lu bytes  %s\r\n",
@@ -1446,13 +1435,8 @@ static int unit_slot(const char* unit) {
   return -1;
 }
 
-static void notify_media(int slot, bool mounted) {
-  if (slot == DRIVE_RP0)
-    rh11::media_changed(mounted);
-  else if (slot == DRIVE_RK0)
-    rk11::media_changed(0, mounted);
-  else
-    rl11::media_changed(slot, mounted);
+static void notify_media(int /*slot*/, bool /*mounted*/) {
+  // Kek backends read live disk_* mount state; no scaffold notify needed.
 }
 
 static void command_mount(const char* unit, const char* path_arg,
@@ -1479,14 +1463,14 @@ static void command_mount(const char* unit, const char* path_arg,
                   disk_last_error()[0] ? disk_last_error() : "unknown error");
     return;
   }
-  if (unit_is_rl(unit) && !rl11::validate_mounted_media(slot)) {
+  if (unit_is_rl(unit) && !disk_validate_rl_mounted(slot)) {
     uint32_t bytes = disk_size_bytes(slot);
     disk_dismount(slot);
-    rl11::media_changed(slot, false);
+    notify_media(slot, false);
     output_printf("error: invalid RL image size: %lu bytes; expected RL01=%lu or RL02=%lu\r\n",
                   (unsigned long)bytes,
-                  (unsigned long)rl11::RL01_IMAGE_BYTES,
-                  (unsigned long)rl11::RL02_IMAGE_BYTES);
+                  (unsigned long)DISK_RL01_IMAGE_BYTES,
+                  (unsigned long)DISK_RL02_IMAGE_BYTES);
     return;
   }
   notify_media(slot, true);
@@ -1623,10 +1607,8 @@ static void execute_command(char* line) {
     command_switches(count > 1 ? words[1] : nullptr);
   else if (!strcasecmp(words[0], "lights"))
     command_lights();
-#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
   else if (!strcasecmp(words[0], "tty"))
     command_tty_stats();
-#endif
   else if (!strcasecmp(words[0], "monitor")) {
     g_monitor_mode = true;
     output_printf("PDP-11 monitor; CPU is currently %s.\r\n",

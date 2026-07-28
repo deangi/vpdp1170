@@ -19,6 +19,25 @@ and menu documentation, see the [PDP 11/70 Emulator User Guide](docs/user-manual
 For the 11/70 engine replacement plan and device source decisions, see
 [vpdp1170 Device Source Plan](docs/device-plan.md).
 
+## Source tree layout
+
+Arduino IDE compiles every `.cpp` / `.ino` in the **sketch root** only (it does
+not recurse into subfolders). Upstream kek sources and the adapter live under
+subdirectories and are pulled in by thin sketch-root wrappers.
+
+| Path | Role |
+|------|------|
+| `vpdp1170.ino`, `config.h`, `board_*.h`, `gfx.h` | Sketch entry, board select, display abstraction |
+| `console.*`, `ui.*`, `touch.*`, `telnet*`, `ftp.*`, `disk.*`, `appconfig.*` | ESP32 host services (TFT, network, SD mounts) |
+| `kek_src_*.cpp`, `pdp_core_kek.cpp`, `kek_kwp.*` | Sketch-root wrappers that `#include` kek sources |
+| `kek_port/pdp_core_kek_impl.cpp`, `kek_port/pdp_core_kek.h` | kek PDP-11/70 adapter (included, not auto-compiled) |
+| `_upstream_kek/` | Vendored kek engine + devices (subset used via wrappers) |
+| `legacy_sam11/` | Inherited vpdp1140/sam11 scaffold (reference only; not compiled) |
+| `docs/`, `documentation/` | User docs, screenshots, manuals, hardware assets |
+| `PdpSdCard/` | Sample SD-card configs (copy to a live TF card) |
+| `tools/` | Font generator, diagnostics toolkit, Windows kek harness |
+| `kl11-implementation/`, `CrowPanelBringup/` | Reference / local bring-up (not part of shipped firmware) |
+
 ![vpdp1170 running RT-11 V5](docs/images/rt11-running.jpeg)
 
 ```

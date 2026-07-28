@@ -1,7 +1,5 @@
 #include "config.h"
 
-#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
-
 // DEC-faithful KL11/DL11 console for the kek 11/70 path (Option 3).
 // Design inputs: EK-DL11-TM-003, open-simh pdp11_stddev.c, vpdp1140 kl11
 // reference copies, Phase 2 boot traces. Not derived from the former stub.
@@ -131,6 +129,13 @@ static bool pop_host_input(uint8_t* out) {
   bool delay_ok = s_rx_fifo_drained ||
                   (uint32_t)(now - s_last_rx_ms) >= kl11::serial_in_delay_ms;
   if (!delay_ok) return false;
+
+  // Control replies and injected bytes take priority over interactive input.
+  if (kl11::pop_priority_input(out)) {
+    s_last_rx_ms = now;
+    s_rx_fifo_drained = false;
+    return true;
+  }
 
   static bool prefer_telnet = false;
   bool got = false;
@@ -395,9 +400,8 @@ void tty::write_word(const uint16_t addr, uint16_t v) {
     registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] &= (uint16_t)~TTY_DONE;
     update_tx_interrupt();
 
-    console_feed(out);
-    telnet_write(out);
-    if (!g_serial_silenced) kl11::queue_serial_out(out);
+    // Escape-channel parse + TFT / Telnet / USB-Serial fan-out.
+    kl11::handle_guest_output(out);
 
     g_tty_tx_chars++;
     g_tty_last_tx = out;
@@ -415,4 +419,3 @@ void tty::write_word(const uint16_t addr, uint16_t v) {
 
 void tty::operator()() {}
 
-#endif

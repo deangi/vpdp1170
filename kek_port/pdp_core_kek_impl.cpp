@@ -1768,7 +1768,6 @@ uint32_t dl_trace_remaining() {
 void set_du_trace(uint32_t count) {
   g_du_trace_count = count > 1000000 ? 1000000 : count;
   if (g_uda50) g_uda50->set_trace(g_du_trace_count, nullptr, uda_trace_log);
-  LOG("kek DU trace=%u", (unsigned)g_du_trace_count);
 }
 
 uint32_t du_trace_remaining() {

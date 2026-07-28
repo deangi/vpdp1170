@@ -3,7 +3,7 @@
 # translation unit is committed.
 _upstream_sam11/
 
-# Build artifacts
+# Build artifacts (Arduino sketch build dumps, capture logs, VS harness)
 build/
 tools/kek_vs_core/build-min/
 *.bin

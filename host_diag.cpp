@@ -7,6 +7,10 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+// Defined here (was previously in the sam11 cpu_pdp11.cpp unit). Set true
+// after a panic dump so further LOG noise cannot overwrite the trace.
+volatile bool g_serial_silenced = false;
+
 void host_diag_write(const char* text) {
   if (!text || !*text) return;
   if (!g_serial_silenced) Serial.print(text);

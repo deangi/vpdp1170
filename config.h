@@ -2,8 +2,8 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vpdp1170"
-#define APP_VERSION     "V2.1"
-#define APP_BUILD_DATE  "2026-07-27"
+#define APP_VERSION     "V2.2"
+#define APP_BUILD_DATE  "2026-07-28"
 
 // ---- Board selection ----
 // Arduino IDE compiles each .cpp separately, so a #define in the .ino does NOT
@@ -35,14 +35,10 @@
 #error "Unknown VPDP_BOARD — use VPDP_BOARD_FREENOVE_28 or VPDP_BOARD_CROWPANEL_7"
 #endif
 
-// ---- PDP core selection ----
-// 0 = inherited vpdp1140/sam11 PDP-11/40-derived scaffold.
-// 1 = kek PDP-11/70 engine path.
-#define VPDP1170_USE_KEK_CORE 1
-// Internal bring-up gate. 1 compiles the staged Arduino kek adapter and the
-// selected upstream source wrappers. This is expected to reach the CPU/MMU
-// self-test stage before full disk/console boot is wired.
-#define VPDP1170_BUILD_KEK_ADAPTER 1
+// ---- PDP core ----
+// Guest CPU/MMU/bus is always the kek PDP-11/70 adapter. The inherited
+// sam11/11/40 scaffold is kept under legacy_sam11/ for reference only and
+// is not compiled by the Arduino sketch.
 #define VPDP1170_TARGET_RAM_BYTES 0x400000u   // PDP-11/70 22-bit, 4 MB
 
 // Run the deterministic kek microbenchmark suite once during setup, before

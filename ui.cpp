@@ -3,8 +3,6 @@
 #include "config.h"
 #include "platform.h"
 #include "disk.h"
-#include "rl11.h"
-#include "rh11.h"
 #include "pdp_core.h"
 #include "telnet.h"
 #include "ftp.h"
@@ -202,7 +200,7 @@ static bool valid_rl_file_size(const char* path, uint32_t* size_out = nullptr) {
   uint32_t bytes = (uint32_t)file.size();
   file.close();
   if (size_out) *size_out = bytes;
-  return rl11::valid_image_size(bytes);
+  return disk_size_is_rl(bytes);
 }
 
 static const char* slot_display_path(int slot) {
@@ -432,7 +430,6 @@ static void activate(int idx) {        // idx = absolute item index
       } else if (g_sel == DRIVE_RP0) {
         cfg.disk_rp0 = "";
         disk_dismount(DRIVE_RP0);
-        rh11::media_changed(false);
         if (cfg.boot_kind == AppConfig::BK_RP) {
           g_boot_change = true;
           g_screen = SC_CLOSED;
@@ -464,7 +461,6 @@ static void activate(int idx) {        // idx = absolute item index
       } else if (g_sel == DRIVE_RP0) {
         cfg.disk_rp0 = path;
         ok = disk_mount(DRIVE_RP0, path);
-        if (ok) rh11::media_changed(true);
         if (ok && cfg.boot_kind == AppConfig::BK_RP) {
           g_boot_change = true;
           g_screen = SC_CLOSED;
@@ -476,15 +472,15 @@ static void activate(int idx) {        // idx = absolute item index
         if (!valid_rl_file_size(path, &bytes)) {
           LOGE("ui: mount %c: %s rejected, RL image size is %u bytes; expected RL01=%u or RL02=%u +/- %u%%",
                'A' + g_sel, path, (unsigned)bytes,
-               (unsigned)rl11::RL01_IMAGE_BYTES,
-               (unsigned)rl11::RL02_IMAGE_BYTES,
+               (unsigned)DISK_RL01_IMAGE_BYTES,
+               (unsigned)DISK_RL02_IMAGE_BYTES,
                (unsigned)DISK_SIZE_TOLERANCE_PERCENT);
           go(SC_DRIVES);
           break;
         }
         cfg_disk_path(g_sel) = path;
         ok = slot_live(g_sel) ? disk_mount(g_sel, path) : true;
-        if (ok && slot_live(g_sel) && !rl11::validate_mounted_media(g_sel)) {
+        if (ok && slot_live(g_sel) && !disk_validate_rl_mounted(g_sel)) {
           uint32_t mounted_bytes = disk_size_bytes(g_sel);
           disk_dismount(g_sel);
           LOGE("ui: mount %c: %s rejected after mount, RL image size is %u bytes",

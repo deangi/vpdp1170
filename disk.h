@@ -18,12 +18,25 @@ static constexpr uint32_t DISK_SIZE_TOLERANCE_PERCENT = 20;
 static constexpr uint32_t DISK_RK05_IMAGE_BYTES = 2494464u;
 static constexpr uint32_t DISK_RL01_IMAGE_BYTES = 5242880u;
 static constexpr uint32_t DISK_RL02_IMAGE_BYTES = 10485760u;
+// RP0 (Massbus) packs stay under this bound (RP06 ~174 MB).
+static constexpr uint32_t DISK_RP_MAX_IMAGE_BYTES = 256u * 1024u * 1024u;
+// DU0 (UDA50/MSCP) images are autosized; allow up to just under 4 GiB
+// (uint32 byte offsets / FatFS 32-bit size). PiDP-style packs are often >1 GB.
+static constexpr uint32_t DISK_DU_MIN_IMAGE_BYTES = 100u * 1024u;
+static constexpr uint32_t DISK_DU_MAX_IMAGE_BYTES = 0xFFFFFE00u;  // 4GiB-512, 512-aligned
+static constexpr uint32_t DISK_RP_MIN_IMAGE_BYTES = 100u * 1024u;
 
 bool disk_size_within_tolerance(uint32_t bytes, uint32_t nominal);
 bool disk_size_is_rk(uint32_t bytes);
 bool disk_size_is_rl01(uint32_t bytes);
 bool disk_size_is_rl02(uint32_t bytes);
 bool disk_size_is_rl(uint32_t bytes);
+
+// RL01/RL02 helpers used by UI / shell / mount paths (kek does not use
+// the legacy rl11 controller for geometry checks).
+const char* disk_rl_image_type_name(uint32_t bytes);   // "RL01" / "RL02" / "invalid"
+const char* disk_rl_mounted_media_type(int slot);      // "RL01" / "RL02" / "empty" / "invalid"
+bool        disk_validate_rl_mounted(int slot);        // true if slot has valid RL01/RL02 size
 
 // Mount an image file (path on the SD card) into a drive slot.
 // Basic size validation is performed here; the selected PDP-11 controller

@@ -45,21 +45,16 @@ The working rule is:
 
 2. **Core adapter**
    - Define a neutral PDP core adapter for reset/run/trace/registers.
-   - Host code includes `pdp_core.h`; this currently forwards to
-     `cpu_pdp11.h` and later becomes the `kek` swap point.
-   - The Arduino sketch reports the active engine at boot and in System Info.
-   - `config.h` contains the bring-up switch:
-     `VPDP1170_USE_KEK_CORE=0` means inherited PDP-11/40 scaffold,
-     `VPDP1170_USE_KEK_CORE=1` selects the kek path rather than accidentally
-     running the 11/40 scaffold. `VPDP1170_BUILD_KEK_ADAPTER=0` keeps that path
-     in a deliberate "not wired" state until the kek source dependency set is
-     ready for Arduino.
+   - Host code includes `pdp_core.h`; this always forwards to the kek
+     PDP-11/70 adapter. The inherited 11/40 scaffold is under
+     `legacy_sam11/` for reference and is not part of the Arduino build.
    - Keep the host UI, telnet, FTP, shell, and monitor independent of the CPU engine.
 
 3. **kek CPU/MMU/memory bring-up**
    - Create a minimal Arduino `kek` object graph: `memory`, `mmu`, `bus`, `cpu`.
-   - Staging code lives in `kek_port/`; the sketch-root `pdp_core_kek.cpp`
-     includes it only when both kek switches are enabled.
+   - Staging code lives in `kek_port/` (`pdp_core_kek_impl.cpp`); the
+     sketch-root `pdp_core_kek.cpp` includes it only when both kek switches
+     are enabled.
    - Allocate 4 MB guest memory in PSRAM.
    - Prove reset and instruction stepping with a RAM-resident MOV/MOV/ADD/BR
      self-test like the Visual Studio harness.

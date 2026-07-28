@@ -3,6 +3,10 @@
 #include "kwp.h"
 #include "platform.h"
 
+namespace kwp {
+bool enabled = false;
+}
+
 namespace kek_kwp {
 
 static constexpr uint16_t CSR_ERR    = 0100000;

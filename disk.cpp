@@ -66,6 +66,24 @@ bool disk_size_is_rl(uint32_t bytes) {
   return disk_size_is_rl01(bytes) || disk_size_is_rl02(bytes);
 }
 
+const char* disk_rl_image_type_name(uint32_t bytes) {
+  if (disk_size_is_rl01(bytes)) return "RL01";
+  if (disk_size_is_rl02(bytes)) return "RL02";
+  return "invalid";
+}
+
+const char* disk_rl_mounted_media_type(int slot) {
+  if (!slot_valid(slot) || !disk_is_mounted(slot)) return "empty";
+  return disk_size_is_rl(disk_size_bytes(slot))
+           ? disk_rl_image_type_name(disk_size_bytes(slot))
+           : "invalid";
+}
+
+bool disk_validate_rl_mounted(int slot) {
+  if (!slot_valid(slot) || !disk_is_mounted(slot)) return false;
+  return disk_size_is_rl(disk_size_bytes(slot));
+}
+
 static bool validate_slot_image_size(int slot, uint32_t bytes) {
   if (slot >= DRIVE_A && slot <= DRIVE_D) {
     if (disk_size_is_rl(bytes)) return true;
@@ -83,12 +101,25 @@ static bool validate_slot_image_size(int slot, uint32_t bytes) {
     return false;
   }
 
-  const uint32_t MIN_IMAGE = 100u * 1024u;
-  const uint32_t MAX_IMAGE = 256u * 1024u * 1024u;
-  if (bytes >= MIN_IMAGE && bytes <= MAX_IMAGE) return true;
+  if (slot == DRIVE_DU0) {
+    if (bytes >= DISK_DU_MIN_IMAGE_BYTES && bytes <= DISK_DU_MAX_IMAGE_BYTES)
+      return true;
+    snprintf(g_last_error, sizeof(g_last_error),
+             "DU image size %u is outside %u..%u bytes",
+             (unsigned)bytes,
+             (unsigned)DISK_DU_MIN_IMAGE_BYTES,
+             (unsigned)DISK_DU_MAX_IMAGE_BYTES);
+    return false;
+  }
+
+  // RP0 and any future Massbus-style slots.
+  if (bytes >= DISK_RP_MIN_IMAGE_BYTES && bytes <= DISK_RP_MAX_IMAGE_BYTES)
+    return true;
   snprintf(g_last_error, sizeof(g_last_error),
-           "image size %u is outside the supported range",
-           (unsigned)bytes);
+           "image size %u is outside the supported range (%u..%u)",
+           (unsigned)bytes,
+           (unsigned)DISK_RP_MIN_IMAGE_BYTES,
+           (unsigned)DISK_RP_MAX_IMAGE_BYTES);
   return false;
 }
 

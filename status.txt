@@ -18,7 +18,7 @@ TODO:
     sysgen). HB instrumentation removed; clean run path.
 14) works - dim/brightness for Elecrow panel working
 15) done - Create RSX11m+ bootable RP06 disk using PiDP MSCP image and BRU per email from Mark.  See if we can boot RP0 - created
-16) Boot RSX11M+ from RP0
+16) skip - Boot RSX11M+ from RP0
 17) done - Investigate adding TAPE interface TU56 DEC Tape Unibus, TU77 MASSBUS
      TU56 is resource intensive, physics level sim required.
 	 TU77 drive on a TM03 controller
@@ -28,11 +28,12 @@ TODO:
      7/26, proceeding with Codex.  7/27 Booted DU0 RSX11M+ 4.6 BL87 from DU0:
      created with SIMH booting the PiDP setup. Verified actual image capacity,
      write/read/reboot persistence, delete, repeated cold boots, and I/O copy/compare soak.
-19) 11/70 code cleanup - remove 11/40 only files, get rid of .disabled
+19) done - 11/70 code cleanup - remove 11/40 only files, get rid of .disabled
 20) done 7/27 - DU0 mount/boot issue resolved with UDA50 response deferral,
     vector 0154, MMR3 feature correction, and actual image-size capacity reporting.
 21) Investigate things to move to 11/40 project
 22) Investigate ways to "escape" from serial to inject shell commands and monitor commands
+23) done - Boot large PiDP 1Gb image
 
 Disk Geometry - DEC, model numbers start with R (RK05), in an OS, individual drives start with D (DK0:)
 Disk,Heads,Tracks,Sectors/track,512 byte sectors,size (bytes)

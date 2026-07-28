@@ -1,7 +1,5 @@
 #include "config.h"
 
-#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
-
 // Link stubs for kek peripherals not yet ported. Console KL11 lives in
 // kek_src_tty.cpp (Option 3) — do not implement tty:: here.
 
@@ -76,4 +74,3 @@ uint16_t tm_11::read_word(const uint16_t) { return 0; }
 void tm_11::write_byte(const uint16_t, const uint8_t) {}
 void tm_11::write_word(const uint16_t, uint16_t) {}
 
-#endif

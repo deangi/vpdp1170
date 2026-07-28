@@ -6,8 +6,6 @@
 #include "fifo.h"
 #include "kl11.h"
 #include "platform.h"
-#include "rk11.h"
-#include "rl11.h"
 
 #include <Arduino.h>
 #include <ctype.h>
@@ -264,11 +262,9 @@ static bool unit_is_rl(const char* unit) {
   return unit && (!strncasecmp(unit, "RL", 2) || !strncasecmp(unit, "DL", 2));
 }
 
-static void media_changed(const char* unit, int slot, bool mounted) {
-  if (!strncasecmp(unit, "RK", 2))
-    rk11::media_changed(slot, mounted);
-  else
-    rl11::media_changed(slot, mounted);
+static void media_changed(const char* /*unit*/, int /*slot*/, bool /*mounted*/) {
+  // Kek disk backends observe mount state via disk_* on each I/O; no
+  // scaffold controller attached[] bookkeeping is required.
 }
 
 static void handle_tty(char* tokens[], int count, bool requested) {
@@ -420,14 +416,14 @@ static void handle_disk(char* tokens[], int count, bool requested) {
       reply(requested, "ERROR;DISK_MOUNT_FAILED");
       return;
     }
-    if (unit_is_rl(unit) && !rl11::validate_mounted_media(slot)) {
+    if (unit_is_rl(unit) && !disk_validate_rl_mounted(slot)) {
       uint32_t bytes = disk_size_bytes(slot);
       disk_dismount(slot);
-      rl11::media_changed(slot, false);
+      media_changed(unit, slot, false);
       LOGE("EMU DISK MOUNT rejected %s path=%s size=%lu expected RL01=%lu RL02=%lu",
            unit, path, (unsigned long)bytes,
-           (unsigned long)rl11::RL01_IMAGE_BYTES,
-           (unsigned long)rl11::RL02_IMAGE_BYTES);
+           (unsigned long)DISK_RL01_IMAGE_BYTES,
+           (unsigned long)DISK_RL02_IMAGE_BYTES);
       reply(requested, "ERROR;DISK;INVALID_RL_SIZE");
       return;
     }

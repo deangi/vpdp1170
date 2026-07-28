@@ -80,7 +80,6 @@
 #include "kw11.h"
 #include "kwp.h"   // kwp::enabled gate
 #include "disk.h"
-#include "rl11.h"
 #include "console.h"
 #include "telnet.h"
 #include "telnet_shell.h"
@@ -99,9 +98,7 @@ AppConfig cfg;             // non-static so ui.cpp (System Info screen,
                            // title display) can read it via the extern in
                            // appconfig.h. Only vpdp1170.ino writes it.
 
-#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
 extern "C" void kek_tty_set_trace(uint32_t count);
-#endif
 
 static bool sd_ok = false;
 static bool cpu_running = false;   // true once the PDP-11 is booting in loop()
@@ -167,10 +164,8 @@ static void apply_runtime_pdp_config() {
                                      ? 0 : cfg.diag_clock_trace));
   kl11::set_console_trace((uint32_t)(cfg.diag_console_trace < 0
                                       ? 0 : cfg.diag_console_trace));
-#if VPDP1170_USE_KEK_CORE && VPDP1170_BUILD_KEK_ADAPTER
   kek_tty_set_trace((uint32_t)(cfg.diag_console_trace < 0
                                 ? 0 : cfg.diag_console_trace));
-#endif
   pdp_core::set_dl_trace((uint32_t)(cfg.diag_dl_trace < 0
                                       ? 0 : cfg.diag_dl_trace));
   pdp_core::set_du_trace((uint32_t)(cfg.diag_du_trace < 0
@@ -325,12 +320,12 @@ static void disks_mount() {
   for (int s = 0; s < 4; s++) {
     if (paths[s]->length() == 0) continue;
     bool ok = disk_mount(s, paths[s]->c_str());
-    if (ok && !rl11::validate_mounted_media(s)) {
+    if (ok && !disk_validate_rl_mounted(s)) {
       uint32_t bytes = disk_size_bytes(s);
       LOGE("disks_mount %s: \"%s\" rejected, RL image size is %u bytes; expected RL01=%u or RL02=%u",
            unit_names[s], paths[s]->c_str(), (unsigned)bytes,
-           (unsigned)rl11::RL01_IMAGE_BYTES,
-           (unsigned)rl11::RL02_IMAGE_BYTES);
+           (unsigned)DISK_RL01_IMAGE_BYTES,
+           (unsigned)DISK_RL02_IMAGE_BYTES);
       disk_dismount(s);
       ok = false;
     }
@@ -641,10 +636,7 @@ void setup() {
   LOG("board: %s (VPDP_BOARD=%d  display=%d touch=%d sd=%d  %dx%d console %dx%d @%dx%d)",
       VPDP_BOARD_NAME, VPDP_BOARD, VPDP_DISPLAY_BACKEND, VPDP_TOUCH_BACKEND,
       VPDP_SD_BACKEND, TFT_W, TFT_H, TEXT_COLS, TEXT_ROWS, CELL_W, CELL_H);
-  LOG("PDP core selected: %s (VPDP1170_USE_KEK_CORE=%d, VPDP1170_BUILD_KEK_ADAPTER=%d)",
-      pdp_core::engine_name(), VPDP1170_USE_KEK_CORE, VPDP1170_BUILD_KEK_ADAPTER);
-  if (!pdp_core::is_kek_engine())
-    LOG("kek core disabled; running inherited 11/40 scaffold");
+  LOG("PDP core: %s", pdp_core::engine_name());
 
 #if VPDP_HAS_WS2812
   strip.begin();

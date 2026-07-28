@@ -1,11 +1,8 @@
 #include "dl11_file.h"
 
 #include "fifo.h"
-#include "kd11.h"
 #include "kl11.h"
-#include "pdp1140.h"
 #include "platform.h"
-#include "sam11.h"
 #include "SD_FTP_Server/src/SD_FTP_Server.h"
 
 #include <Arduino.h>
@@ -19,6 +16,19 @@ static constexpr uint16_t RX_VECTOR = 0300;
 static constexpr uint16_t TX_VECTOR = 0304;
 static constexpr uint8_t IRQ_LEVEL = 4;
 static constexpr size_t FIFO_SIZE = 4096;
+
+// Second DL11 (TT1) at 0176500. Values match the former pdp1140.h symbols
+// (18-bit Unibus form used by the scaffold CSR switch).
+static constexpr uint32_t DEV_DL_1_TTY_IN_STATUS  = 0776500;
+static constexpr uint32_t DEV_DL_1_TTY_IN_DATA    = 0776502;
+static constexpr uint32_t DEV_DL_1_TTY_OUT_STATUS = 0776504;
+static constexpr uint32_t DEV_DL_1_TTY_OUT_DATA   = 0776506;
+
+// Guest TT1 CSR/IRQ path is not wired on the kek bus yet. Host file
+// streaming via VPDP commands still works; IRQ helpers are no-ops.
+static void irq_request(uint16_t, uint8_t) {}
+static void irq_cancel(uint16_t) {}
+static bool interrupt_pending(uint16_t) { return false; }
 
 static bool g_enabled = false;
 static uint16_t rcsr = 0;
@@ -42,14 +52,6 @@ static bool input_eof = false;
 static int input_eof_byte = -1;
 static bool input_notify = false;
 static bool output_append = true;
-
-static bool interrupt_pending(uint16_t vector) {
-  for (uint8_t i = 0; i < ITABN; i++) {
-    if (itab[i].vec == 0) break;
-    if (itab[i].vec == vector) return true;
-  }
-  return false;
-}
 
 static void init_fifos() {
   if (fifos_initialized) return;
@@ -109,8 +111,8 @@ void set_enabled(bool enabled_value) {
   g_enabled = enabled_value;
   if (!g_enabled) {
     disconnect_all();
-    kd11::cancelinterrupt(RX_VECTOR);
-    kd11::cancelinterrupt(TX_VECTOR);
+    irq_cancel(RX_VECTOR);
+    irq_cancel(TX_VECTOR);
   }
 }
 
@@ -126,8 +128,8 @@ void reset() {
   xbuf = 0;
   tx_delay = 0;
   rx_poll_div = 0;
-  kd11::cancelinterrupt(RX_VECTOR);
-  kd11::cancelinterrupt(TX_VECTOR);
+  irq_cancel(RX_VECTOR);
+  irq_cancel(TX_VECTOR);
 }
 
 void poll() {
@@ -140,7 +142,7 @@ void poll() {
       if (input_fifo.pop(&value)) {
         rbuf = value & 0177;
         rcsr |= 0200;
-        if (rcsr & 0100) kd11::interrupt(RX_VECTOR, IRQ_LEVEL);
+        if (rcsr & 0100) irq_request(RX_VECTOR, IRQ_LEVEL);
       }
     }
   }
@@ -150,7 +152,7 @@ void poll() {
       LOGE("TT1 output FIFO full; byte dropped");
     }
     xcsr |= 0200;
-    if (xcsr & 0100) kd11::interrupt(TX_VECTOR, IRQ_LEVEL);
+    if (xcsr & 0100) irq_request(TX_VECTOR, IRQ_LEVEL);
   }
 }
 
@@ -206,14 +208,14 @@ void write16(uint32_t address, uint16_t value) {
       bool was_disabled = !(rcsr & 0100);
       rcsr = (rcsr & 0200) | (value & 0100);
       if (was_disabled && (rcsr & 0300) == 0300)
-        kd11::interrupt(RX_VECTOR, IRQ_LEVEL);
+        irq_request(RX_VECTOR, IRQ_LEVEL);
       break;
     }
     case DEV_DL_1_TTY_OUT_STATUS: {
       bool was_disabled = !(xcsr & 0100);
       xcsr = (xcsr & 0200) | (value & 0100);
       if (was_disabled && (xcsr & 0300) == 0300)
-        kd11::interrupt(TX_VECTOR, IRQ_LEVEL);
+        irq_request(TX_VECTOR, IRQ_LEVEL);
       break;
     }
     case DEV_DL_1_TTY_OUT_DATA:
@@ -245,7 +247,7 @@ bool open_input(const char* path, int eof_byte, bool notify) {
   input_fifo.clear();
   rcsr &= ~0200;
   rbuf = 0;
-  kd11::cancelinterrupt(RX_VECTOR);
+  irq_cancel(RX_VECTOR);
   copy_path(input_name, sizeof(input_name), path);
   input_eof = false;
   input_eof_byte = eof_byte;
@@ -265,7 +267,7 @@ void close_input() {
   input_fifo.clear();
   rcsr &= ~0200;
   rbuf = 0;
-  kd11::cancelinterrupt(RX_VECTOR);
+  irq_cancel(RX_VECTOR);
   input_name[0] = 0;
   input_eof = false;
   input_eof_byte = -1;
@@ -350,7 +352,7 @@ size_t read_stream(uint8_t* data, size_t max_bytes) {
     data[count++] = (uint8_t)(rbuf & 0377);
     rcsr &= ~0200;
     rbuf = 0;
-    kd11::cancelinterrupt(RX_VECTOR);
+    irq_cancel(RX_VECTOR);
   }
   while (count < max_bytes && input_fifo.pop(&data[count])) count++;
   if (count == max_bytes) return count;
