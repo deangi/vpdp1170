@@ -96,6 +96,8 @@ private:
 
 	bool     check_pending_interrupts() const;  // needs the 'qi_lock'-lock
 	void     execute_any_pending_interrupt();
+	template <bool Diagnostic>
+	bool     step_impl();
 
 	uint32_t shifter(uint32_t value, int shift, bool is32b);
 
@@ -159,6 +161,8 @@ public:
 
 	void     reset();
 	bool     step ();
+	bool     step_fast();
+	bool     step_diagnostic();
 	bool     get_last_instruction(uint16_t *address, uint16_t *opcode) const;
 	bool     get_last_instruction_physical(uint32_t *address) const;
 	bool     get_previous_instruction(uint16_t *address, uint16_t *opcode) const;

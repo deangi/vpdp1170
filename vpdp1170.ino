@@ -378,6 +378,93 @@ static void draw_status_bar() {
   static uint32_t prev_io[DRIVE_COUNT] = {0};
   static uint32_t prev_inst = 0;
   static uint32_t prev_ms   = 0;
+#if VPDP_BOARD == VPDP_BOARD_FREENOVE_28
+  const int sy = CON_ROWS * CELL_H;          // 200
+
+  tft.drawFastHLine(0, sy, TFT_W, TFT_DARKGREY);
+
+  // Original Freenove 320x240 geometry: four compact drive pills across the
+  // upper-left half of the 40 px status band.
+  int visible_slots[4];
+  int pill_count = 0;
+  const int boot_slot = boot_drive_slot();
+  visible_slots[pill_count++] = boot_slot;
+  for (int s = 0; s < DRIVE_COUNT && pill_count < 4; s++) {
+    if (s == boot_slot) continue;
+    if (!disk_is_mounted(s)) continue;
+    visible_slots[pill_count++] = s;
+  }
+
+  tft.fillRect(0, sy + 1, 156, 20, TFT_BLACK);
+  for (int i = 0; i < pill_count; i++) {
+    int s = visible_slots[i];
+    uint32_t r = 0, w = 0;
+    disk_stats(s, &r, &w);
+    bool active = (r + w) != prev_io[s];
+    prev_io[s] = r + w;
+    uint16_t col = !disk_is_mounted(s) ? 0x2945
+                 : active             ? TFT_YELLOW
+                                      : TFT_GREEN;
+    int bx = 6 + i * 36;
+    tft.fillRoundRect(bx, sy + 5, 32, 16, 2, col);
+    tft.setTextColor(TFT_BLACK, col);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString(status_drive_label(s), bx + 16, sy + 13, 1);
+  }
+  tft.setTextDatum(TL_DATUM);
+
+  uint32_t now  = millis();
+  uint32_t inst = pdp_core::instruction_count();
+  float mips = 0.0f;
+  if (prev_ms && now > prev_ms && inst >= prev_inst)
+    mips = (float)(inst - prev_inst) / (float)(now - prev_ms) / 1000.0f;
+  prev_inst = inst;
+  prev_ms   = now;
+
+  tft.fillRect(156, sy + 1, TFT_W - 156, TFT_H - sy - 1, TFT_BLACK);
+  tft.setTextColor(WiFi.status() == WL_CONNECTED ? TFT_WHITE : TFT_RED,
+                   TFT_BLACK);
+  tft.drawString(WiFi.status() == WL_CONNECTED
+                   ? WiFi.localIP().toString().c_str() : "WiFi down",
+                 158, sy + 6, 1);
+
+  auto draw_net_pill = [&](int bx, const char* label, uint16_t col) {
+    tft.fillRoundRect(bx, sy + 22, 26, 15, 2, col);
+    tft.setTextColor(TFT_BLACK, col);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString(label, bx + 13, sy + 29, 1);
+  };
+  const uint16_t COL_NET_OFF    = 0x2945;
+  const uint16_t COL_NET_IDLE   = TFT_GREEN;
+  const uint16_t COL_NET_ACTIVE = TFT_YELLOW;
+  uint16_t tel_col = !telnet_listening() ? COL_NET_OFF
+                   : telnet_connected()  ? COL_NET_ACTIVE
+                                         : COL_NET_IDLE;
+  uint16_t ftp_col = !ftp_listening() ? COL_NET_OFF
+                  : ftp_connected()   ? COL_NET_ACTIVE
+                                      : COL_NET_IDLE;
+  draw_net_pill(158, "TEL", tel_col);
+  draw_net_pill(188, "FTP", ftp_col);
+
+  char mips_str[16];
+  if (pdp_core::monitor_paused())
+    snprintf(mips_str, sizeof(mips_str), "PAUSED");
+  else if (mips > 0.0f && mips < 0.01f)
+    snprintf(mips_str, sizeof(mips_str), "%.1f KIPS", mips * 1000.0f);
+  else
+    snprintf(mips_str, sizeof(mips_str), "%.2f MIPS", mips);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextDatum(TR_DATUM);
+  tft.drawString(mips_str, TFT_W - 4, sy + 22, 1);
+
+  tft.fillRect(0, sy + 22, 156, TFT_H - sy - 22, TFT_BLACK);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
+  const char* title = cfg.title.length() ? cfg.title.c_str() : APP_TITLE;
+  tft.drawString(title, 6, sy + 24, 2);
+
+  gfx_writeback(tft, 0, sy, TFT_W, TFT_H - sy);
+#else
   const int sy = CON_ROWS * CELL_H;
   const int band = TFT_H - sy;
   const int rule_h = 3;
@@ -494,6 +581,7 @@ static void draw_status_bar() {
   }
 
   gfx_writeback(tft, 0, sy, TFT_W, band);
+#endif
 }
 
 // Boot (or reboot) the PDP-11 with the currently-mounted drives. cold=true

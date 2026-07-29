@@ -3525,7 +3525,8 @@ std::unordered_map<std::string, std::vector<std::string> > cpu::disassemble(cons
 	return out;
 }
 
-bool cpu::step()
+template <bool Diagnostic>
+bool cpu::step_impl()
 {
 	instructions_executed++;
 
@@ -3545,7 +3546,8 @@ bool cpu::step()
 		any_queued_interrupts = false;
 		execute_any_pending_interrupt();
 #else
-	if (any_queued_interrupts.exchange(false, std::memory_order_relaxed)) {
+	if (any_queued_interrupts.load(std::memory_order_relaxed) &&
+			any_queued_interrupts.exchange(false, std::memory_order_relaxed)) {
 #endif
 		if (delayed_trap.has_value()) {
 			DOLOG(log_ss::LS_TRACE, "delayed trap %06o", delayed_trap.value());
@@ -3558,30 +3560,38 @@ bool cpu::step()
 
 	try {
 		instruction_pc = pc;
-		instruction_active = true;
+		if constexpr (Diagnostic)
+			instruction_active = true;
 		mmu_->MMRStartInstruction(instruction_pc);
 		uint32_t instruction_physical = 0;
-		uint16_t instr = b->fetch_instruction_word(pc, getPSW_runmode(), &instruction_physical);
-		previous_instruction_valid = last_instruction_valid;
-		previous_instruction_pc = last_instruction_pc;
-		previous_instruction_word = last_instruction_word;
-		previous_instruction_phys = last_instruction_phys;
-		last_instruction_valid = true;
-		last_instruction_pc = instruction_pc;
-		last_instruction_word = instr;
-		last_instruction_phys = instruction_physical;
+		uint32_t *instruction_physical_out = nullptr;
+		if constexpr (Diagnostic)
+			instruction_physical_out = &instruction_physical;
+		uint16_t instr = b->fetch_instruction_word(pc, getPSW_runmode(), instruction_physical_out);
+		if constexpr (Diagnostic) {
+			previous_instruction_valid = last_instruction_valid;
+			previous_instruction_pc = last_instruction_pc;
+			previous_instruction_word = last_instruction_word;
+			previous_instruction_phys = last_instruction_phys;
+			last_instruction_valid = true;
+			last_instruction_pc = instruction_pc;
+			last_instruction_word = instr;
+			last_instruction_phys = instruction_physical;
+		}
 		add_register(7, 2);
 
 		// JSR is in the 004xxx opcode block. Handle it before the broad
 		// operand decoders so its extension word can never be mistaken for
 		// the next instruction in trace-heavy bring-up builds.
 		if (jsr_instruction(instr)) {
-			instruction_active = false;
+			if constexpr (Diagnostic)
+				instruction_active = false;
 			return true;
 		}
 
 		if (misc_operations(instr) || double_operand_instructions(instr) || floating_point_instructions(instr) || conditional_branch_instructions(instr) || condition_code_operations(instr)) {
-			instruction_active = false;
+			if constexpr (Diagnostic)
+				instruction_active = false;
 			return true;
 		}
 
@@ -3590,7 +3600,8 @@ bool cpu::step()
 			// FPP/FP11 is not emulated.  A real PDP-11 without usable
 			// floating-point hardware reports this to the guest via vector 010;
 			// it should not stop the host emulator.
-			instruction_active = false;
+			if constexpr (Diagnostic)
+				instruction_active = false;
 			trap(010);
 			return true;
 		}
@@ -3598,17 +3609,35 @@ bool cpu::step()
 		// Reserved/illegal instructions are also guest-visible instruction
 		// traps.  Stopping the host here prevents operating systems from using
 		// their normal probe/recovery paths.
-		instruction_active = false;
+		if constexpr (Diagnostic)
+			instruction_active = false;
 		trap(010);
 		return true;
 	}
 	catch(const int exception_nr) {
-		instruction_active = false;
+		if constexpr (Diagnostic)
+			instruction_active = false;
 		DOLOG(log_ss::LS_TRACE, "trap during execution of command (%d)", exception_nr);
 	}
 
-	instruction_active = false;
+	if constexpr (Diagnostic)
+		instruction_active = false;
 	return true;
+}
+
+bool cpu::step_fast()
+{
+	return step_impl<false>();
+}
+
+bool cpu::step_diagnostic()
+{
+	return step_impl<true>();
+}
+
+bool cpu::step()
+{
+	return step_diagnostic();
 }
 
 bool cpu::get_last_instruction(uint16_t *address, uint16_t *opcode) const

@@ -1302,7 +1302,12 @@ static uint32_t run_loop(uint32_t max_cycles) {
         break;
       }
     }
-    if (!g_cpu->step()) {
+    bool step_ok;
+    if constexpr (Diagnostic)
+      step_ok = g_cpu->step_diagnostic();
+    else
+      step_ok = g_cpu->step_fast();
+    if (!step_ok) {
       if constexpr (Diagnostic) record_trace_entry();
       dump_panic_trace("cpu step returned false");
       g_paused = true;
@@ -1446,7 +1451,7 @@ static bool run_benchmark_sample(const char* name, bool memory_operand,
   uint32_t executed = 0;
   if (runner == BenchmarkRunner::CpuStep) {
     while (executed < kBenchmarkInstructions) {
-      if (!g_cpu->step()) return false;
+      if (!g_cpu->step_fast()) return false;
       executed++;
     }
   } else {
@@ -1843,7 +1848,7 @@ uint32_t monitor_step() {
     return 0;
   }
   store_event(EVENT_NONE);
-  uint32_t ran = g_cpu->step() ? 1 : 0;
+  uint32_t ran = g_cpu->step_diagnostic() ? 1 : 0;
   record_trace_entry();
   trace_next_instruction();
   if (ran) service_deferred_devices();
