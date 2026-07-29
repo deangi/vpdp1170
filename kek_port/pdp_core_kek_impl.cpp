@@ -364,12 +364,29 @@ static bool ensure_rp06_attached() {
   return true;
 }
 
-static bool uda_media_read(void*, uint32_t offset, uint8_t* target, uint32_t bytes) {
-  return disk_read(DRIVE_DU0, offset, target, bytes) == (int)bytes;
+// DU0 previously called disk_read() per MSCP 512-byte sector (seek+SD every
+// time). RK/RL/RP already use host_slot_disk_backend's PSRAM read cache
+// (32 KB = 64 sectors). Route UDA media through the same path so sequential
+// MSCP reads hit cache after one SD fetch; writes invalidate.
+static host_slot_disk_backend* g_du_backend = nullptr;
+
+static host_slot_disk_backend* du_backend() {
+  if (!g_du_backend) {
+    g_du_backend = new host_slot_disk_backend(DRIVE_DU0, "DU0");
+    LOG("kek DU0 media uses host read cache (32 KB, same as RK/RL/RP)");
+  }
+  return g_du_backend;
 }
 
-static bool uda_media_write(void*, uint32_t offset, const uint8_t* source, uint32_t bytes) {
-  return disk_write(DRIVE_DU0, offset, source, bytes) == (int)bytes;
+static bool uda_media_read(void*, uint32_t offset, uint8_t* target, uint32_t bytes) {
+  host_slot_disk_backend* be = du_backend();
+  return be && be->read(offset, bytes, target, 0);
+}
+
+static bool uda_media_write(void*, uint32_t offset, const uint8_t* source,
+                            uint32_t bytes) {
+  host_slot_disk_backend* be = du_backend();
+  return be && be->write(offset, bytes, source, 0);
 }
 
 static uint32_t uda_media_size(void*) {
@@ -1474,8 +1491,12 @@ bool benchmark() {
   // a later guest HALT dumps only previous/last instead of the ring.
   const bool restore_trace = g_trace_enabled;
 
-  LOG("BENCH begin samples=5 instructions_per_sample=%u",
-      (unsigned)kBenchmarkInstructions);
+  LOG("BENCH begin samples=5 instructions_per_sample=%u "
+      "mem_bytes=%u free_heap=%u free_psram=%u",
+      (unsigned)kBenchmarkInstructions,
+      (unsigned)(g_bus ? g_bus->get_memory_size() : 0),
+      (unsigned)ESP.getFreeHeap(),
+      (unsigned)ESP.getFreePsram());
   bool ok = true;
   ok &= run_benchmark_sample("register", false, false,
                              BenchmarkRunner::CpuStep);

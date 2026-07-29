@@ -2,7 +2,7 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vpdp1170"
-#define APP_VERSION     "V2.2"
+#define APP_VERSION     "V2.3"
 #define APP_BUILD_DATE  "2026-07-28"
 
 // ---- Board selection ----
@@ -17,7 +17,7 @@
 #define VPDP_BOARD_FREENOVE_28   1
 #define VPDP_BOARD_CROWPANEL_7   2
 #ifndef VPDP_BOARD
-#define VPDP_BOARD VPDP_BOARD_CROWPANEL_7
+#define VPDP_BOARD VPDP_BOARD_FREENOVE_28
 #endif
 
 #define VPDP_DISPLAY_TFT_ESPI    1

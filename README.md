@@ -92,7 +92,22 @@ not in the `.ino`, so every `.cpp` sees the same value):
   (DIP S1/S0 must be TF), STC8H backlight, 8 MB OPI PSRAM. The settings menu
   still lays out in the Freenove 320×240 top-left region on this panel.
 
-## Dual-core split
+### Emulation speed / PSRAM
+
+Guest RAM is allocated in ESP32-S3 PSRAM on both boards. Measured kek
+microbenchmarks on the Freenove (after `TURBO` / `-O2` / `-DNDEBUG`) land
+around **0.4+ MIPS** for MMU-mapped code. The **Elecrow CrowPanel runs
+noticeably slower** with the same firmware: its RGB panel continuously DMA-
+streams the LovyanGFX framebuffer from the **same OPI PSRAM** that holds
+guest memory, so instruction fetches and operand accesses compete with
+display refresh bandwidth. The Freenove SPI TFT does not keep a full-frame
+PSRAM DMA stream running, so it is the cleaner performance baseline.
+Keep diagnostic / panic-trace rings off for speed runs; they cost several×.
+
+Build flags that affect the hot path live in `_upstream_kek/gen.h` (`TURBO`
+strips kek `DOLOG`) and sketch-root `build_opt.h` (`-DNDEBUG`, `-O2`).
+Optional startup microbenchmarks are gated by `VPDP1170_STARTUP_BENCHMARK`
+in `config.h`.
 
 The ESP32-S3 dual cores are pinned so display work never stalls the PDP-11
 (and guest disk I/O never stalls the TFT).
@@ -173,7 +188,9 @@ mis-matches the module and can brick or fail uploads.
 OPI PSRAM is mandatory because LovyanGFX stores the 800×480 RGB framebuffer
 there. If PSRAM is Disabled or set to QSPI, the boot log reports
 `free_psram=0`; framebuffer drawing can then fail with a `StoreProhibited`
-panic and reboot the ESP32.
+panic and reboot the ESP32. That same continuous framebuffer DMA is also why
+CrowPanel kek MIPS is lower than Freenove — see **Emulation speed / PSRAM**
+above.
 
 **USB CDC On Boot** differs by board — set this every time you switch targets:
 

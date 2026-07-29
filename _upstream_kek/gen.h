@@ -3,7 +3,8 @@
 
 #pragma once
 
-// #define TURBO
+// Strip DOLOG from the hot path (bus/CPU/MMU). Host LOG() is unaffected.
+#define TURBO
 
 typedef enum { EVENT_NONE = 0, EVENT_HALT, EVENT_INTERRUPT, EVENT_TERMINATE } stop_event_t;
 
