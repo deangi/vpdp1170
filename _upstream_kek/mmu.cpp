@@ -538,11 +538,3 @@ mmu *mmu::deserialize(const JsonVariantConst j, memory *const mem, cpu *const c)
 	return m;
 }
 #endif
-
-void mmu::MMRStartInstruction(const uint16_t pc)
-{
-	if (!isMMR1Locked()) {
-		setMMR2(pc);
-		clearMMR1();
-	}
-}

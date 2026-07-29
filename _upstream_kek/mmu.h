@@ -160,7 +160,12 @@ public:
 	void     setMMR2(const uint16_t value);
 	void     setMMR3(const uint16_t value);
 
-	void     MMRStartInstruction(const uint16_t pc);
+	void     MMRStartInstruction(const uint16_t pc) {
+		if (!isMMR1Locked()) {
+			MMR2 = pc;
+			MMR1 = 0;
+		}
+	}
 
 	bool     isMMR1Locked() const { return MMR0 & 0160000; }
 	void     clearMMR1();
