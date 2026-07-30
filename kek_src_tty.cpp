@@ -406,9 +406,11 @@ void tty::write_word(const uint16_t addr, uint16_t v) {
     g_tty_tx_chars++;
     g_tty_last_tx = out;
     g_tty_last_tx_ms = millis();
-    char detail[24];
-    snprintf(detail, sizeof(detail), "ch=%03o", (unsigned)out);
-    tty_trace("WRITE", addr, out, detail);
+    if (g_tty_trace_count != 0) {
+      char detail[24];
+      snprintf(detail, sizeof(detail), "ch=%03o", (unsigned)out);
+      tty_trace("WRITE", addr, out, detail);
+    }
     tty_save_snapshot(registers, tx_busy);
     return;
   }

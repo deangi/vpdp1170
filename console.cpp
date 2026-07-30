@@ -319,8 +319,6 @@ static void exec_csi(uint8_t final) {
 // Internal ANSI-parser entrypoint. Called from console_drain_tft() under
 // g_con_mux so console_render can take a coherent grid+cursor snapshot.
 static void feed_ansi(uint8_t c) {
-  g_feed_count++;
-  g_last_feed_ms = millis();
   switch (ansi_st) {
     case ST_GROUND:
       switch (c) {
@@ -451,6 +449,10 @@ void console_drain_tft() {
     size_t n = 0;
     while (n < sizeof(batch) && g_tft_out.pop(&batch[n])) n++;
     if (!n) break;
+    // Activity accounting is per drained batch. This preserves the byte
+    // count and idle-time semantics while avoiding millis() on every byte.
+    g_feed_count += n;
+    g_last_feed_ms = millis();
     portENTER_CRITICAL(&g_con_mux);
     for (size_t i = 0; i < n; i++) feed_ansi(batch[i]);
     portEXIT_CRITICAL(&g_con_mux);
