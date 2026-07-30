@@ -9,13 +9,11 @@
 #endif
 #include "fifo.h"
 #include <Arduino.h>
+#include <atomic>
 #include <string.h>
-#include "esp_attr.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
-#ifndef EXT_RAM_BSS_ATTR
-#define EXT_RAM_BSS_ATTR
-#endif
 
 // ---- 16-colour CGA palette in RGB565 ----
 static const uint16_t kPalette[16] = {
@@ -56,8 +54,8 @@ static uint8_t cur_attr = DEF_ATTR;
 static int  sr_top = 0, sr_bot = CON_ROWS - 1;
 static int  saved_r = 0, saved_c = 0;
 
-// Cell grid + cursor are written on core 1 (console_drain_tft) and read on
-// core 0 (console_render). Without a coherent snapshot, a cursor advance
+// Cell grid + cursor are written by the core-0 TFT output task and read by
+// the core-0 render task. Without a coherent snapshot, a cursor advance
 // mid-frame leaves the underline behind, and a scroll mid-pass leaves
 // mismatched shadow cells (artifacts / missing glyphs).
 static portMUX_TYPE g_con_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -88,20 +86,25 @@ static uint8_t charset_designate_target = 0;
 #define GLYPH_TTEE  0x89
 #define GLYPH_CROSS 0x8A
 
-// ---- 8 KB serial-input FIFO (host USB-Serial -> KL11 TKB) and 8 KB
-//      TFT-output FIFO (KL11 TPB -> ANSI parser -> cell grid). Both live
-//      in PSRAM via EXT_RAM_BSS_ATTR; the indices stay in DRAM. Producer
-//      and consumer for both are on core 1 (loop()), so plain volatile
-//      head/tail is sufficient. ----
-#define VPDP_FIFO_BYTES 8192   // must be power of two
-EXT_RAM_BSS_ATTR static uint8_t serial_in_storage[VPDP_FIFO_BYTES];
-EXT_RAM_BSS_ATTR static uint8_t tft_out_storage[VPDP_FIFO_BYTES];
+// ---- 8 KB serial-input FIFO (host USB-Serial -> KL11 TKB) and 64 KB
+//      TFT-output FIFO. The TFT output FIFO is deliberately larger so
+//      bursts cannot make a busy display task stall KEK. Payloads live in
+//      PSRAM; atomic indices and counters stay in internal DRAM. ----
+#define VPDP_SERIAL_IN_FIFO_BYTES 8192
+#define VPDP_TFT_OUT_FIFO_BYTES 65536
+static uint8_t serial_in_storage[VPDP_SERIAL_IN_FIFO_BYTES];
+static uint8_t tft_out_fallback[8192];
+static uint8_t* tft_out_storage = nullptr;
+static size_t tft_out_capacity = 0;
 static Fifo g_serial_in;
 static Fifo g_tft_out;
+static TaskHandle_t g_tft_output_task = nullptr;
+static std::atomic<uint32_t> g_tft_dropped { 0 };
+static std::atomic<bool> g_tft_reset_requested { false };
 
 // ---- output activity ----
-static uint32_t g_feed_count   = 0;
-static uint32_t g_last_feed_ms = 0;
+static std::atomic<uint32_t> g_feed_count   { 0 };
+static std::atomic<uint32_t> g_last_feed_ms { 0 };
 
 // -------------------------------------------------------------------------
 
@@ -110,6 +113,32 @@ static void clear_row(int r, uint8_t attr) {
 }
 
 void console_init() {
+  if (!tft_out_storage) {
+    tft_out_storage = static_cast<uint8_t*>(
+        heap_caps_malloc(VPDP_TFT_OUT_FIFO_BYTES,
+                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (tft_out_storage) {
+      tft_out_capacity = VPDP_TFT_OUT_FIFO_BYTES;
+      LOG("console TFT FIFO: %u KB PSRAM",
+          (unsigned)(tft_out_capacity / 1024));
+    } else {
+      tft_out_storage = tft_out_fallback;
+      tft_out_capacity = sizeof(tft_out_fallback);
+      LOGE("console TFT FIFO: PSRAM allocation failed; using %u KB DRAM",
+           (unsigned)(tft_out_capacity / 1024));
+    }
+  }
+
+  if (g_tft_output_task) {
+    g_tft_reset_requested.store(true, std::memory_order_release);
+    xTaskNotifyGive(g_tft_output_task);
+    while (g_tft_reset_requested.load(std::memory_order_acquire))
+      vTaskDelay(1);
+  } else {
+    g_tft_out.init(tft_out_storage, tft_out_capacity);
+  }
+
+  portENTER_CRITICAL(&g_con_mux);
   for (int r = 0; r < CON_ROWS; r++) clear_row(r, DEF_ATTR);
   cur_r = cur_c = 0;
   prev_cur_r = prev_cur_c = 0;
@@ -121,8 +150,11 @@ void console_init() {
   g1_charset = CHARSET_ASCII;
   active_charset = ACTIVE_G0;
   shad_valid = false;
-  g_serial_in.init(serial_in_storage, VPDP_FIFO_BYTES);
-  g_tft_out.init(tft_out_storage, VPDP_FIFO_BYTES);
+  g_serial_in.init(serial_in_storage, VPDP_SERIAL_IN_FIFO_BYTES);
+  g_tft_dropped.store(0, std::memory_order_relaxed);
+  g_feed_count.store(0, std::memory_order_relaxed);
+  g_last_feed_ms.store(0, std::memory_order_relaxed);
+  portEXIT_CRITICAL(&g_con_mux);
 }
 
 void console_force_redraw() { shad_valid = false; }
@@ -316,7 +348,7 @@ static void exec_csi(uint8_t final) {
 }
 
 // -------------------------------------------------------------------------
-// Internal ANSI-parser entrypoint. Called from console_drain_tft() under
+// Internal ANSI-parser entrypoint. Called by the TFT output task under
 // g_con_mux so console_render can take a coherent grid+cursor snapshot.
 static void feed_ansi(uint8_t c) {
   switch (ansi_st) {
@@ -433,38 +465,79 @@ static bool console_vt100_selftest() {
 }
 #endif
 
-// ---- TFT-out FIFO: KL11 push, main-loop drain ----
-// Public entrypoint kl11::poll() calls per output byte. Just buffers.
+// ---- TFT-out FIFO: KEK/core 1 push, dedicated core-0 task drain ----
 void console_feed(uint8_t c) {
-  g_tft_out.push(c);          // drop-newest if full (sink falls behind)
+  bool was_empty = false;
+  if (!g_tft_out.push(c, &was_empty)) {
+    g_tft_dropped.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  // Wake only on an observed empty->nonempty transition. The consumer also
+  // has a short timeout, which closes the harmless observation race without
+  // imposing a task-notify call on every guest character.
+  if (was_empty && g_tft_output_task)
+    xTaskNotifyGive(g_tft_output_task);
 }
 
-// Drain pending TFT bytes through the ANSI parser. Called from loop() on
-// core 1 once per slice so the cell grid updates in roughly real time.
-void console_drain_tft() {
+static size_t drain_tft_output(size_t limit) {
   // Apply under the console mux in small batches so render can take a
   // coherent snapshot between batches without holding a long critical.
   uint8_t batch[64];
-  for (;;) {
+  size_t total = 0;
+  while (total < limit) {
     size_t n = 0;
-    while (n < sizeof(batch) && g_tft_out.pop(&batch[n])) n++;
+    size_t room = limit - total;
+    size_t target = room < sizeof(batch) ? room : sizeof(batch);
+    while (n < target && g_tft_out.pop(&batch[n])) n++;
     if (!n) break;
     // Activity accounting is per drained batch. This preserves the byte
     // count and idle-time semantics while avoiding millis() on every byte.
-    g_feed_count += n;
-    g_last_feed_ms = millis();
+    g_feed_count.fetch_add((uint32_t)n, std::memory_order_relaxed);
+    g_last_feed_ms.store(millis(), std::memory_order_relaxed);
     portENTER_CRITICAL(&g_con_mux);
     for (size_t i = 0; i < n; i++) feed_ansi(batch[i]);
     portEXIT_CRITICAL(&g_con_mux);
+    total += n;
   }
+  return total;
+}
+
+static void tft_output_task(void*) {
+  for (;;) {
+    if (g_tft_reset_requested.load(std::memory_order_acquire)) {
+      g_tft_out.clear();
+      g_tft_reset_requested.store(false, std::memory_order_release);
+    }
+    size_t drained = drain_tft_output(2048);
+    if (drained == 0)
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
+    else
+      taskYIELD();
+  }
+}
+
+bool console_start_output_task() {
+  if (g_tft_output_task) return true;
+  return xTaskCreatePinnedToCore(tft_output_task, "tftout", 4096, nullptr, 1,
+                                 &g_tft_output_task, 0) == pdPASS;
+}
+
+void console_output_stats(uint32_t* pending, uint32_t* dropped) {
+  if (pending) *pending = (uint32_t)g_tft_out.count();
+  if (dropped)
+    *dropped = g_tft_dropped.load(std::memory_order_relaxed);
 }
 
 // ---- keyboard (host USB-Serial -> KL11 input FIFO) ----
 void console_key_push(uint8_t c) { g_serial_in.push(c); }
 int  console_key_pop(uint8_t* out) { return g_serial_in.pop(out) ? 1 : 0; }
 
-uint32_t console_feed_count()   { return g_feed_count; }
-uint32_t console_last_feed_ms() { return g_last_feed_ms; }
+uint32_t console_feed_count() {
+  return g_feed_count.load(std::memory_order_relaxed);
+}
+uint32_t console_last_feed_ms() {
+  return g_last_feed_ms.load(std::memory_order_relaxed);
+}
 
 // ---- TFT rendering ----
 // Text area is anchored top-left: CON_COLS*CELL_W wide, CON_ROWS*CELL_H tall.

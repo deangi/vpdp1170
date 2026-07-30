@@ -21,6 +21,8 @@
 #include <stdio.h>
 #include <string.h>
 
+void console_output_stats(uint32_t* pending, uint32_t* dropped);
+
 extern "C" void kek_tty_set_trace(uint32_t count);
 extern "C" uint32_t kek_tty_trace_remaining();
 extern "C" void kek_tty_get_stats(uint32_t* tx_chars,
@@ -392,6 +394,18 @@ static void command_tty_stats() {
     if (!printed) output_text(" none");
     output_text("\r\n");
   }
+
+  uint32_t tft_pending = 0, tft_dropped = 0;
+  uint32_t telnet_pending = 0, telnet_dropped = 0;
+  uint32_t serial_pending = 0, serial_dropped = 0;
+  console_output_stats(&tft_pending, &tft_dropped);
+  telnet_output_stats(&telnet_pending, &telnet_dropped);
+  kl11::serial_output_stats(&serial_pending, &serial_dropped);
+  output_printf("     sinks TFT=%lu/%lu Telnet=%lu/%lu USB=%lu/%lu "
+                "(pending/dropped)\r\n",
+                (unsigned long)tft_pending, (unsigned long)tft_dropped,
+                (unsigned long)telnet_pending, (unsigned long)telnet_dropped,
+                (unsigned long)serial_pending, (unsigned long)serial_dropped);
 }
 
 static void command_set(char* arguments) {

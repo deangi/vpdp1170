@@ -17,11 +17,12 @@ void set_console_trace(uint32_t count);
 uint32_t console_trace_remaining();
 void charge_console_trace(const char* direction, uint8_t value);
 
-// Drain queued KL11->USB-Serial bytes (called from loop() on core 1).
-void drain_serial_out();
+// Start the dedicated core-0 USB-Serial output consumer. Idempotent.
+bool start_serial_output_task();
 
 // Non-blocking enqueue of a guest console output byte (USB-Serial sink).
 void queue_serial_out(uint8_t out);
+void serial_output_stats(uint32_t* pending, uint32_t* dropped);
 
 // Parse guest console output for the ESC ] VPDP ; ... ETX control channel
 // and forward printable bytes to TFT / Telnet / USB-Serial.

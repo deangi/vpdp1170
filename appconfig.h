@@ -87,19 +87,6 @@ struct AppConfig {
   // before a telnet monitor session is available.
   uint16_t diag_break_pc = 0;
 
-  // [compat]
-  // V4B (RSTS/E V4B) requires its probe-by-write of two non-emulated
-  // device ranges to be silently absorbed in dd11 (KE11-A EAE at
-  // 0o772100..0o772176 and, when serial1 is disabled, the second DL11 /
-  // TT1 at 0o776500..0o776516).
-  // Without absorbs, V4B's bus-error handler unconditionally HALTs.
-  // RSTS V7 is the opposite case: with the TT1 absorb V7's INIT.SYS
-  // sees a phantom DL11, allocates a floating vector for it, and later
-  // critical devices (RK, RL) collide on the next vector and disable.
-  // Default true (V4B + V6 + XXDP + RT-11 all work). Set to false to
-  // attempt RSTS V7; V4B will not boot in that mode.
-  bool   v4b_quirks = true;
-
   // KW11-P programmable real-time clock. When true the kwp.cpp device
   // is fully active (CSR/CSB/CNTR live, four clock rates, up/down and
   // repeat modes, raises INTRTC at BR6 on expiry). RSTS V7

@@ -231,7 +231,6 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.diag_du_trace = 0;
   cfg.diag_trace      = false;
   cfg.diag_break_pc   = 0;
-  cfg.v4b_quirks      = true;
   cfg.kwp_enabled     = false;
 
   cfg.disk_a        = DEFAULT_DL0_IMG;
@@ -338,10 +337,6 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
           cfg.diag_break_pc = (uint16_t)pc;
       }
     }
-    else if (key == "v4b_quirks") cfg.v4b_quirks = (val.equalsIgnoreCase("true") ||
-                                                   val == "1" ||
-                                                   val.equalsIgnoreCase("yes") ||
-                                                   val.equalsIgnoreCase("on"));
     else if (key == "kwp_enabled") cfg.kwp_enabled = (val.equalsIgnoreCase("true") ||
                                                      val == "1" ||
                                                      val.equalsIgnoreCase("yes") ||
@@ -536,11 +531,6 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println("[diag]");
   f.println("; pcping      = seconds between host's periodic PC/register dump");
   f.println(";               to USB-Serial. 0 disables it (so do large values).");
-  f.println("; v4b_quirks  = absorb KE11-A (0o772100..0o772176) and TT1");
-  f.println(";               (0o776500..0o776516) probes silently. Default");
-  f.println(";               true makes RSTS/E V4B + RT-11 + V6 + XXDP boot;");
-  f.println(";               set false to attempt RSTS/E V7 (V4B will not");
-  f.println(";               boot in that mode).");
   f.println("; kwp_enabled = activate the KW11-P programmable real-time clock");
   f.println(";               at 0o772540 (vector 0104, BR6). Implements the");
   f.println(";               100 kHz, 10 kHz, line and external rates plus");
@@ -584,7 +574,6 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.printf("du_trace    = %d\r\n", cfg.diag_du_trace);
   f.printf("trace       = %s\r\n", cfg.diag_trace ? "true" : "false");
   f.printf("break       = %06o\r\n", (unsigned)cfg.diag_break_pc);
-  f.printf("v4b_quirks  = %s\r\n", cfg.v4b_quirks ? "true" : "false");
   f.printf("kwp_enabled = %s\r\n", cfg.kwp_enabled ? "true" : "false");
   f.println();
   f.println("[disks]");
@@ -747,7 +736,7 @@ void config_print(const AppConfig& cfg) {
   LOG("[ftp]     enabled=%s  port=%d  user=\"%s\" (password=%d chars)",
       cfg.ftp_enabled ? "true" : "false", cfg.ftp_port,
       cfg.ftp_user.c_str(), (int)cfg.ftp_password.length());
-  LOG("[diag]    pcping=%d sec%s  serialdelay=%d ms  io_trace=%d  clock_trace=%d  console_trace=%d  dl_trace=%d  rp_trace=%d  du_trace=%d  trace=%s  break=%06o%s  v4b_quirks=%s  kwp_enabled=%s",
+  LOG("[diag]    pcping=%d sec%s  serialdelay=%d ms  io_trace=%d  clock_trace=%d  console_trace=%d  dl_trace=%d  rp_trace=%d  du_trace=%d  trace=%s  break=%06o%s  kwp_enabled=%s",
       cfg.diag_pcping_sec, cfg.diag_pcping_sec <= 0 ? " (disabled)" : "",
       cfg.diag_serialdelay_ms,
       cfg.diag_io_trace,
@@ -759,7 +748,6 @@ void config_print(const AppConfig& cfg) {
       cfg.diag_trace ? "true" : "false",
       (unsigned)cfg.diag_break_pc,
       cfg.diag_break_pc == 0 ? " (disabled)" : "",
-      cfg.v4b_quirks  ? "true" : "false",
       cfg.kwp_enabled ? "true (V7 mode)" : "false (V4B-safe)");
   const char* boot_name;
   if (cfg.boot_kind == AppConfig::BK_RK) boot_name = "rk0";

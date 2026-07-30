@@ -4,10 +4,8 @@
 #include "fifo.h"
 #include "telnet_shell.h"
 #include <WiFi.h>
-#include "esp_attr.h"
-#ifndef EXT_RAM_BSS_ATTR
-#define EXT_RAM_BSS_ATTR
-#endif
+#include <atomic>
+#include "esp_heap_caps.h"
 
 // Telnet protocol bytes
 #define T_IAC   255
@@ -29,15 +27,19 @@ static bool        g_started = false;
 static uint16_t    g_port = 23;
 static char        g_client_ip[20] = {0};
 
-// 8 KB output FIFO (KL11/core 1 push, telnet task/core 0 drain) and 8 KB
-// input FIFO (telnet task/core 0 push, KL11/core 1 pop). Both storages live
-// in PSRAM via EXT_RAM_BSS_ATTR and each ring has one producer and consumer.
-#define VPDP_TELNET_FIFO_BYTES 8192   // must be power of two
-EXT_RAM_BSS_ATTR static uint8_t telnet_out_storage[VPDP_TELNET_FIFO_BYTES];
-EXT_RAM_BSS_ATTR static uint8_t telnet_in_storage[VPDP_TELNET_FIFO_BYTES];
+// 128 KB output FIFO (KEK/core 1 push, net task/core 0 drain) and 8 KB input
+// FIFO (net task/core 0 push, KEK/core 1 pop). Both storages live
+// in explicitly allocated PSRAM and each ring has one producer and consumer.
+#define VPDP_TELNET_OUT_FIFO_BYTES 131072
+#define VPDP_TELNET_IN_FIFO_BYTES 8192
+static uint8_t telnet_out_fallback[8192];
+static uint8_t* telnet_out_storage = nullptr;
+static size_t telnet_out_capacity = 0;
+static uint8_t telnet_in_storage[VPDP_TELNET_IN_FIFO_BYTES];
 static Fifo g_telnet_out;
 static Fifo g_telnet_in;
 static bool g_fifos_inited = false;
+static std::atomic<uint32_t> g_telnet_dropped { 0 };
 
 enum TelnetRxState : uint8_t {
   RX_DATA,
@@ -61,8 +63,21 @@ static void reset_rx_parser() {
 
 static void ensure_fifos_inited() {
   if (g_fifos_inited) return;
-  g_telnet_out.init(telnet_out_storage, VPDP_TELNET_FIFO_BYTES);
-  g_telnet_in.init(telnet_in_storage,  VPDP_TELNET_FIFO_BYTES);
+  telnet_out_storage = static_cast<uint8_t*>(
+      heap_caps_malloc(VPDP_TELNET_OUT_FIFO_BYTES,
+                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (telnet_out_storage) {
+    telnet_out_capacity = VPDP_TELNET_OUT_FIFO_BYTES;
+    LOG("console Telnet FIFO: %u KB PSRAM",
+        (unsigned)(telnet_out_capacity / 1024));
+  } else {
+    telnet_out_storage = telnet_out_fallback;
+    telnet_out_capacity = sizeof(telnet_out_fallback);
+    LOGE("console Telnet FIFO: PSRAM allocation failed; using %u KB DRAM",
+         (unsigned)(telnet_out_capacity / 1024));
+  }
+  g_telnet_out.init(telnet_out_storage, telnet_out_capacity);
+  g_telnet_in.init(telnet_in_storage, VPDP_TELNET_IN_FIFO_BYTES);
   g_fifos_inited = true;
 }
 
@@ -96,6 +111,7 @@ static void on_connect() {
   send_iac(T_WONT, OPT_LINEMODE);
   send_iac(T_DO,   OPT_BINARY);
   g_telnet_out.clear();     // drop any stale output queued before connect
+  g_telnet_dropped.store(0, std::memory_order_relaxed);
 }
 
 static void send_shell_banner() {
@@ -293,16 +309,31 @@ void telnet_write(uint8_t c) {
   // the session. IAC bytes in the data stream are escaped by emitting
   // them twice (RFC 854). A full FIFO drops new bytes silently.
   if (!g_started || telnet_shell_active()) return;
-  g_telnet_out.push(c);
-  if (c == T_IAC) g_telnet_out.push(T_IAC);
+  if (!g_telnet_out.push(c)) {
+    g_telnet_dropped.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  if (c == T_IAC && !g_telnet_out.push(T_IAC))
+    g_telnet_dropped.fetch_add(1, std::memory_order_relaxed);
 }
 
 void telnet_diag_write(uint8_t c) {
   // Same FIFO as console output, but allowed during the management shell
   // so HALT/reset diagnostics remain visible on an active Telnet session.
   if (!g_started) return;
-  g_telnet_out.push(c);
-  if (c == T_IAC) g_telnet_out.push(T_IAC);
+  if (!g_telnet_out.push(c)) {
+    g_telnet_dropped.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  if (c == T_IAC && !g_telnet_out.push(T_IAC))
+    g_telnet_dropped.fetch_add(1, std::memory_order_relaxed);
+}
+
+void telnet_output_stats(uint32_t* pending, uint32_t* dropped) {
+  ensure_fifos_inited();
+  if (pending) *pending = (uint32_t)g_telnet_out.count();
+  if (dropped)
+    *dropped = g_telnet_dropped.load(std::memory_order_relaxed);
 }
 
 void telnet_diag_text(const char* text) {

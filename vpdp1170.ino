@@ -75,8 +75,8 @@
 #include "secrets.h"
 #include "appconfig.h"
 #include "pdp_core.h"
-#include "kl11.h"        // kl11::drain_serial_out() in loop()
-#include "dd11.h"  // dd11::v4b_quirks_enabled gate
+#include "kl11.h"
+#include "dd11.h"  // dd11::set_io_trace()
 #include "kw11.h"
 #include "kwp.h"   // kwp::enabled gate
 #include "disk.h"
@@ -157,7 +157,6 @@ static void tft_status(int row, const char* label, const char* value, uint16_t c
 }
 
 static void apply_runtime_pdp_config() {
-  dd11::v4b_quirks_enabled = cfg.v4b_quirks;
   dd11::set_io_trace((uint32_t)(cfg.diag_io_trace < 0
                                   ? 0 : cfg.diag_io_trace));
   kw11::set_clock_trace((uint32_t)(cfg.diag_clock_trace < 0
@@ -878,13 +877,23 @@ void setup() {
       start_cpu(false);
       led(0, 0, 32);          // blue = PDP-11 booting
     }
-    cpu_running = true;
 
-    // Spin up core-0 display and Telnet tasks. The PDP-11 and all SD-card
-    // activity remain on core 1.
+    // Spin up core-0 display, Telnet, and output-consumer tasks. KEK writes
+    // directly to three independent SPSC FIFOs; no sink can block core 1.
     g_ui_mutex = xSemaphoreCreateMutex();
     xTaskCreatePinnedToCore(render_task, "render", 10240, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(net_task,    "net",     8192, NULL, 2, NULL, 0);
+    bool tft_output_ok = console_start_output_task();
+    bool serial_output_ok = kl11::start_serial_output_task();
+    LOG("console sink tasks: TFT=%s USB=%s",
+        tft_output_ok ? "ready" : "FAILED",
+        serial_output_ok ? "ready" : "FAILED");
+    if (!tft_output_ok || !serial_output_ok) {
+      LOGE("console sink task creation failed; PDP-11 start cancelled");
+      led(32, 0, 0);
+      return;
+    }
+    cpu_running = true;
   } else {
     tft_status(ROW_CPU, "CPU:   ",
                pdp_core::is_kek_engine() ? "kek not wired" : "alloc FAILED",
@@ -895,8 +904,7 @@ void setup() {
 
 // loop() runs on core 1 and IS the PDP-11: CPU emulation plus FTP and
 // settings-menu command handling. It never touches the TFT; render_task owns
-// the display and polls touch on core 0 so fast taps are not missed while the
-// kek CPU is running a long instruction slice.
+// the display, while dedicated core-0 tasks consume TFT, Telnet and USB output.
 // Touch handling lives at file scope so render_task can share the same
 // double-tap state with menu hit testing. The 750 ms window is wider than the
 // original 450 ms because users were missing the second tap of a fast
@@ -1035,10 +1043,8 @@ void loop() {
     return;
   }
 
-  // Running: feed the keyboard, run the PDP-11 in small slices, service FTP
-  // between slices, and
-  // drain the KL11->host output FIFOs (USB-Serial + TFT) so the 8 KB
-  // rings stay near empty during steady-state output.
+  // Running: feed the keyboard, run the PDP-11 in small slices, and service
+  // FTP between slices. Output sinks drain independently on core 0.
   for (int slice = 0; slice < 5; slice++) {
     while (Serial.available())
       console_key_push((uint8_t)Serial.read());   // -> Serial-in FIFO
@@ -1047,15 +1053,11 @@ void loop() {
     telnet_shell_poll();
     poll_pcping();
     pdp_core::run(1000);
-    console_drain_tft();         // TFT-out FIFO -> ANSI parser -> cell grid
-    kl11::drain_serial_out();    // Serial-out FIFO -> Serial.write
     poll_pcping();
   }
   ftp_poll();
   emu_control::poll();
   telnet_shell_poll();
-  console_drain_tft();
-  kl11::drain_serial_out();
 
   poll_pcping();
 

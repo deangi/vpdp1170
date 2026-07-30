@@ -11,13 +11,11 @@
 #include "telnet.h"
 
 #include <Arduino.h>
-#include "esp_attr.h"
+#include <atomic>
+#include "esp_heap_caps.h"
 #include <stdio.h>
 #include <string.h>
 
-#ifndef EXT_RAM_BSS_ATTR
-#define EXT_RAM_BSS_ATTR
-#endif
 
 namespace kl11 {
 
@@ -50,10 +48,14 @@ void charge_console_trace(const char* direction, uint8_t value) {
       direction, (unsigned)value, display, (unsigned)console_trace_count);
 }
 
-#define VPDP_KL11_FIFO_BYTES 8192
-EXT_RAM_BSS_ATTR static uint8_t serial_out_storage[VPDP_KL11_FIFO_BYTES];
+#define VPDP_KL11_FIFO_BYTES 131072
+static uint8_t serial_out_fallback[8192];
+static uint8_t* serial_out_storage = nullptr;
+static size_t serial_out_capacity = 0;
 static Fifo g_serial_out;
 static bool g_serial_out_inited = false;
+static TaskHandle_t g_serial_output_task = nullptr;
+static std::atomic<uint32_t> g_serial_dropped { 0 };
 
 #define VPDP_CONTROL_REPLY_BYTES 1024
 static uint8_t control_reply_storage[VPDP_CONTROL_REPLY_BYTES];
@@ -78,10 +80,22 @@ static size_t control_command_len = 0;
 uint32_t serial_in_delay_ms = 0;
 
 static void ensure_serial_out() {
-  if (!g_serial_out_inited) {
-    g_serial_out.init(serial_out_storage, VPDP_KL11_FIFO_BYTES);
-    g_serial_out_inited = true;
+  if (g_serial_out_inited) return;
+  serial_out_storage = static_cast<uint8_t*>(
+      heap_caps_malloc(VPDP_KL11_FIFO_BYTES,
+                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (serial_out_storage) {
+    serial_out_capacity = VPDP_KL11_FIFO_BYTES;
+    LOG("console USB FIFO: %u KB PSRAM",
+        (unsigned)(serial_out_capacity / 1024));
+  } else {
+    serial_out_storage = serial_out_fallback;
+    serial_out_capacity = sizeof(serial_out_fallback);
+    LOGE("console USB FIFO: PSRAM allocation failed; using %u KB DRAM",
+         (unsigned)(serial_out_capacity / 1024));
   }
+  g_serial_out.init(serial_out_storage, serial_out_capacity);
+  g_serial_out_inited = true;
 }
 
 static void ensure_control_reply() {
@@ -98,27 +112,63 @@ void reset() {
   control_prefix_pos = 0;
   control_prefix_first = 0;
   control_command_len = 0;
+  g_serial_dropped.store(0, std::memory_order_relaxed);
 }
 
-void drain_serial_out() {
+static size_t drain_serial_out(size_t limit) {
   if (g_serial_silenced) {
     g_serial_out.clear();
-    return;
+    return 0;
   }
+  size_t total = 0;
   const uint8_t* p;
   size_t n;
-  while ((n = g_serial_out.peek(&p)) > 0) {
+  while (total < limit && (n = g_serial_out.peek(&p)) > 0) {
+    size_t room = limit - total;
+    if (n > room) n = room;
     size_t w = Serial.write(p, n);
     if (w == 0) break;
     g_serial_out.consume(w);
+    total += w;
     if (w < n) break;
   }
+  return total;
+}
+
+static void serial_output_task(void*) {
+  for (;;) {
+    size_t drained = drain_serial_out(4096);
+    if (drained == 0)
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
+    else
+      taskYIELD();
+  }
+}
+
+bool start_serial_output_task() {
+  ensure_serial_out();
+  if (g_serial_output_task) return true;
+  return xTaskCreatePinnedToCore(serial_output_task, "usbout", 4096, nullptr, 1,
+                                 &g_serial_output_task, 0) == pdPASS;
 }
 
 void queue_serial_out(uint8_t out) {
   if (g_serial_silenced) return;
   ensure_serial_out();
-  g_serial_out.push(out);
+  bool was_empty = false;
+  if (!g_serial_out.push(out, &was_empty)) {
+    g_serial_dropped.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  if (was_empty && g_serial_output_task)
+    xTaskNotifyGive(g_serial_output_task);
+}
+
+void serial_output_stats(uint32_t* pending, uint32_t* dropped) {
+  ensure_serial_out();
+  if (pending) *pending = (uint32_t)g_serial_out.count();
+  if (dropped)
+    *dropped = g_serial_dropped.load(std::memory_order_relaxed);
 }
 
 bool queue_control_reply(const char* payload) {

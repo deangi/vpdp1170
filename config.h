@@ -2,8 +2,8 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vpdp1170"
-#define APP_VERSION     "V2.3"
-#define APP_BUILD_DATE  "2026-07-28"
+#define APP_VERSION     "V2.4"
+#define APP_BUILD_DATE  "2026-07-29"
 
 // ---- Board selection ----
 // Arduino IDE compiles each .cpp separately, so a #define in the .ino does NOT

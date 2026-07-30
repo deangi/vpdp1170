@@ -200,7 +200,6 @@ clock_trace = 0
 console_trace = 0
 trace       = false
 break       = 0
-v4b_quirks  = true
 kwp_enabled = false
 
 [disks]
@@ -283,12 +282,7 @@ allocation for operating systems that are not configured for a second TTY.
 | `du_trace` | Event count | Log the next N UDA50/MSCP initialization, ring, command, response, DMA, and interrupt events to USB serial, then stop automatically. `0` disables. |
 | `trace` | Boolean | Enables expensive per-instruction panic trace capture. Use only for debugging. |
 | `break` | Octal PC or `0` | Arm a PC breakpoint before guest boot. `0` / `off` / `clear` disables. Survives cold boot so early loops can be caught before telnet is available. |
-| `v4b_quirks` | Boolean | Absorbs selected missing-device probes for RSTS/E V4B compatibility. Default `true`. |
 | `kwp_enabled` | Boolean | Enables KW11-P programmable clock emulation. Default `false`. |
-
-`v4b_quirks = true` is the normal compatibility setting for RSTS/E V4B, RT-11,
-UNIX V6, and XXDP. Set it to `false` only when experimenting with systems that
-are confused by the compatibility probe absorbs.
 
 `kwp_enabled = true` enables CSR/CSB/CNTR behavior for the KW11-P programmable
 clock at `0172540`. Some OS hardware tests require this; some older systems are
@@ -866,7 +860,7 @@ Check:
 ### Guest OS reports missing or broken hardware
 
 Some PDP-11 operating systems probe devices that this emulator does not fully
-implement. Check `[diag] v4b_quirks` and `[diag] kwp_enabled`, and verify that
+implement. Check `[diag] kwp_enabled` and verify that
 the boot disk image matches the selected controller.
 
 ## Credits

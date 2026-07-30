@@ -265,7 +265,6 @@ clock_trace = 0               ; trace next N clock accesses/IRQs
 console_trace = 0             ; trace next N PDP console characters
 trace       = false           ; true only for panic/HALT diagnosis
 break       = 0               ; octal PC breakpoint before boot; 0 disables
-v4b_quirks  = true            ; RSTS V4B / RT-11 / V6 / XXDP
 kwp_enabled = false           ; true for RSTS V7 bring-up
 
 [disks]

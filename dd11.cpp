@@ -5,8 +5,6 @@
 
 namespace dd11 {
 
-bool v4b_quirks_enabled = true;
-
 static uint32_t io_trace_count = 0;
 
 void set_io_trace(uint32_t count) {
