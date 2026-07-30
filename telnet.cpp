@@ -5,7 +5,6 @@
 #include "telnet_shell.h"
 #include <WiFi.h>
 #include <atomic>
-#include "esp_heap_caps.h"
 
 // Telnet protocol bytes
 #define T_IAC   255
@@ -27,16 +26,17 @@ static bool        g_started = false;
 static uint16_t    g_port = 23;
 static char        g_client_ip[20] = {0};
 
-// 128 KB output FIFO (KEK/core 1 push, net task/core 0 drain) and 8 KB input
-// FIFO (net task/core 0 push, KEK/core 1 pop). Both storages live
-// in explicitly allocated PSRAM and each ring has one producer and consumer.
-#define VPDP_TELNET_OUT_FIFO_BYTES 131072
+// 8 KB output FIFO (KEK/core 1 push, net task/core 0 drain) and 8 KB input
+// FIFO (net task/core 0 push, KEK/core 1 pop). Guest KL11 backpressure reserves
+// enough room for the next character. Storage lives in internal RAM.
+#define VPDP_TELNET_OUT_FIFO_BYTES 8192
+#define VPDP_TELNET_DIAG_FIFO_BYTES 2048
 #define VPDP_TELNET_IN_FIFO_BYTES 8192
-static uint8_t telnet_out_fallback[8192];
-static uint8_t* telnet_out_storage = nullptr;
-static size_t telnet_out_capacity = 0;
+static uint8_t telnet_out_storage[VPDP_TELNET_OUT_FIFO_BYTES];
+static uint8_t telnet_diag_storage[VPDP_TELNET_DIAG_FIFO_BYTES];
 static uint8_t telnet_in_storage[VPDP_TELNET_IN_FIFO_BYTES];
 static Fifo g_telnet_out;
+static Fifo g_telnet_diag;
 static Fifo g_telnet_in;
 static bool g_fifos_inited = false;
 static std::atomic<uint32_t> g_telnet_dropped { 0 };
@@ -63,22 +63,12 @@ static void reset_rx_parser() {
 
 static void ensure_fifos_inited() {
   if (g_fifos_inited) return;
-  telnet_out_storage = static_cast<uint8_t*>(
-      heap_caps_malloc(VPDP_TELNET_OUT_FIFO_BYTES,
-                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  if (telnet_out_storage) {
-    telnet_out_capacity = VPDP_TELNET_OUT_FIFO_BYTES;
-    LOG("console Telnet FIFO: %u KB PSRAM",
-        (unsigned)(telnet_out_capacity / 1024));
-  } else {
-    telnet_out_storage = telnet_out_fallback;
-    telnet_out_capacity = sizeof(telnet_out_fallback);
-    LOGE("console Telnet FIFO: PSRAM allocation failed; using %u KB DRAM",
-         (unsigned)(telnet_out_capacity / 1024));
-  }
-  g_telnet_out.init(telnet_out_storage, telnet_out_capacity);
+  g_telnet_out.init(telnet_out_storage, sizeof(telnet_out_storage));
+  g_telnet_diag.init(telnet_diag_storage, sizeof(telnet_diag_storage));
   g_telnet_in.init(telnet_in_storage, VPDP_TELNET_IN_FIFO_BYTES);
   g_fifos_inited = true;
+  LOG("console Telnet FIFO: %u KB internal RAM",
+      (unsigned)(sizeof(telnet_out_storage) / 1024));
 }
 
 void telnet_begin(uint16_t port, bool enabled) {
@@ -111,6 +101,7 @@ static void on_connect() {
   send_iac(T_WONT, OPT_LINEMODE);
   send_iac(T_DO,   OPT_BINARY);
   g_telnet_out.clear();     // drop any stale output queued before connect
+  g_telnet_diag.clear();
   g_telnet_dropped.store(0, std::memory_order_relaxed);
 }
 
@@ -242,8 +233,26 @@ bool telnet_in_pop(uint8_t* out) {
   return g_telnet_in.pop(out);
 }
 
+static void drain_output_fifo(Fifo& fifo) {
+  const uint8_t* p;
+  size_t n;
+  while ((n = fifo.peek(&p)) > 0) {
+    size_t w = g_client.write(p, n);
+    if (w == 0) break;
+    fifo.consume(w);
+    if (w < n) break;
+  }
+}
+
 void telnet_poll() {
-  if (!g_started) return;
+  ensure_fifos_inited();
+  if (!g_started) {
+    // Endpoint disabled/unavailable: the sink owns discard policy. Keep the
+    // producer independent of connection state and prevent stale output.
+    g_telnet_out.clear();
+    g_telnet_diag.clear();
+    return;
+  }
 
   // Accept a new connection.
   if (g_server.hasClient()) {
@@ -272,43 +281,35 @@ void telnet_poll() {
       telnet_shell_output_consume(written);
       if (written < shell_bytes) break;
     }
-    // Flush queued console/diagnostic output in contiguous chunks from the
-    // FIFO. peek() returns the largest run that doesn't wrap, so at most
-    // two calls are needed to drain the ring. Diagnostics may arrive while
-    // the management shell is active, so this drain is not shell-gated.
-    // We stop early if write() can't take everything we offered (socket
-    // buffer full); the rest stays queued for the next telnet_poll().
-    const uint8_t* p;
-    size_t n;
-    while ((n = g_telnet_out.peek(&p)) > 0) {
-      size_t w = g_client.write(p, n);
-      if (w == 0) break;
-      g_telnet_out.consume(w);
-      if (w < n) break;
-    }
+    // Diagnostics remain visible in management-shell mode. Guest output is
+    // still produced into its FIFO, but the sink discards it while the shell
+    // owns this endpoint. This keeps all endpoint policy off the KEK core.
+    drain_output_fifo(g_telnet_diag);
+    if (telnet_shell_active())
+      g_telnet_out.clear();
+    else
+      drain_output_fifo(g_telnet_out);
   } else if (g_client) {                    // client went away
     g_client.stop();
     telnet_shell_disconnect();
     reset_rx_parser();
     g_client_ip[0] = 0;
     g_telnet_out.clear();
+    g_telnet_diag.clear();
     LOG("telnet: client disconnected");
   } else {
     // No client connected at all: drop any queued output so it doesn't
     // accumulate stale bytes that a future client would see on connect.
     g_telnet_out.clear();
+    g_telnet_diag.clear();
   }
 }
 
 void telnet_write(uint8_t c) {
-  // If telnet is disabled in config the FIFO would never drain, so
-  // drop bytes at the source. When enabled but no client is connected
-  // we still buffer; telnet_poll() then clears the FIFO each iteration
-  // so it never accumulates stale bytes a future client would see.
-  // Guest console output is suppressed while the management shell owns
-  // the session. IAC bytes in the data stream are escaped by emitting
-  // them twice (RFC 854). A full FIFO drops new bytes silently.
-  if (!g_started || telnet_shell_active()) return;
+  // Connection availability is deliberately not checked here. The network
+  // task drains/discards at the sink, keeping KEK's fan-out path uniform.
+  // IAC bytes in the data stream are escaped by emitting them twice
+  // (RFC 854). A full FIFO drops new bytes silently.
   if (!g_telnet_out.push(c)) {
     g_telnet_dropped.fetch_add(1, std::memory_order_relaxed);
     return;
@@ -318,14 +319,13 @@ void telnet_write(uint8_t c) {
 }
 
 void telnet_diag_write(uint8_t c) {
-  // Same FIFO as console output, but allowed during the management shell
-  // so HALT/reset diagnostics remain visible on an active Telnet session.
-  if (!g_started) return;
-  if (!g_telnet_out.push(c)) {
+  // Separate from guest output so the sink can discard guest bytes while
+  // preserving diagnostics during a management-shell session.
+  if (!g_telnet_diag.push(c)) {
     g_telnet_dropped.fetch_add(1, std::memory_order_relaxed);
     return;
   }
-  if (c == T_IAC && !g_telnet_out.push(T_IAC))
+  if (c == T_IAC && !g_telnet_diag.push(T_IAC))
     g_telnet_dropped.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -334,6 +334,11 @@ void telnet_output_stats(uint32_t* pending, uint32_t* dropped) {
   if (pending) *pending = (uint32_t)g_telnet_out.count();
   if (dropped)
     *dropped = g_telnet_dropped.load(std::memory_order_relaxed);
+}
+
+bool telnet_output_has_space(size_t bytes) {
+  ensure_fifos_inited();
+  return g_telnet_out.free_space() >= bytes;
 }
 
 void telnet_diag_text(const char* text) {

@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 #include "gfx.h"
 
@@ -20,6 +21,7 @@ bool console_start_output_task();
 
 // Output queue diagnostics.
 void console_output_stats(uint32_t* pending, uint32_t* dropped);
+bool console_output_has_space(size_t bytes);
 
 // Keyboard: bytes typed by the user (serial / telnet / touch), delivered
 // to the guest via the BIOS keyboard hook.

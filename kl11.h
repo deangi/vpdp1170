@@ -24,6 +24,10 @@ bool start_serial_output_task();
 void queue_serial_out(uint8_t out);
 void serial_output_stats(uint32_t* pending, uint32_t* dropped);
 
+// True when all three console sink FIFOs have enough room for the largest
+// possible expansion of one guest byte by the console-control parser.
+bool guest_output_ready();
+
 // Parse guest console output for the ESC ] VPDP ; ... ETX control channel
 // and forward printable bytes to TFT / Telnet / USB-Serial.
 void handle_guest_output(uint8_t out);

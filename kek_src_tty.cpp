@@ -234,15 +234,20 @@ void tty::service_deferred() {
   if (tx_busy) {
     if (++s_tx_poll >= TTY_TX_POLL_DIV) {
       s_tx_poll = 0;
-      tx_busy = false;
-      registers[tps] |= TTY_DONE;
-      g_tty_tx_ready_events++;
-      g_tty_last_tx_ready_ms = millis();
-      tty_trace("TXREADY", PDP11TTY_TPS, registers[tps]);
-      // Rising DONE while IE set → new sticky request (SIMH SET_INT).
-      tx_irq_asserted = false;
-      update_tx_interrupt();
-      tty_save_snapshot(registers, tx_busy);
+      // The guest sees transmitter DONE only when every sink FIFO has room.
+      // Consumers independently write or discard, so absent Telnet/USB
+      // endpoints cannot permanently stall the emulated KL11.
+      if (kl11::guest_output_ready()) {
+        tx_busy = false;
+        registers[tps] |= TTY_DONE;
+        g_tty_tx_ready_events++;
+        g_tty_last_tx_ready_ms = millis();
+        tty_trace("TXREADY", PDP11TTY_TPS, registers[tps]);
+        // Rising DONE while IE set → new sticky request (SIMH SET_INT).
+        tx_irq_asserted = false;
+        update_tx_interrupt();
+        tty_save_snapshot(registers, tx_busy);
+      }
     }
   } else if (!(registers[tps] & TTY_DONE)) {
     registers[tps] |= TTY_DONE;

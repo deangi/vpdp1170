@@ -72,6 +72,7 @@ public:
     return (h - t) & mask;
   }
   size_t capacity() const { return mask; }
+  size_t free_space() const { return capacity() - count(); }
   void clear() {
     tail.store(head.load(std::memory_order_acquire),
                std::memory_order_release);

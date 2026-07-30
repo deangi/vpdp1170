@@ -12,7 +12,6 @@
 
 #include <Arduino.h>
 #include <atomic>
-#include "esp_heap_caps.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -48,14 +47,16 @@ void charge_console_trace(const char* direction, uint8_t value) {
       direction, (unsigned)value, display, (unsigned)console_trace_count);
 }
 
-#define VPDP_KL11_FIFO_BYTES 131072
-static uint8_t serial_out_fallback[8192];
-static uint8_t* serial_out_storage = nullptr;
-static size_t serial_out_capacity = 0;
+#define VPDP_KL11_FIFO_BYTES 8192
+static uint8_t serial_out_storage[VPDP_KL11_FIFO_BYTES];
 static Fifo g_serial_out;
 static bool g_serial_out_inited = false;
 static TaskHandle_t g_serial_output_task = nullptr;
 static std::atomic<uint32_t> g_serial_dropped { 0 };
+
+// A failed VPDP control-prefix match can release several buffered prefix
+// bytes at once, and Telnet doubles IAC. Sixteen slots covers the worst case.
+static constexpr size_t OUTPUT_RESERVE = 16;
 
 #define VPDP_CONTROL_REPLY_BYTES 1024
 static uint8_t control_reply_storage[VPDP_CONTROL_REPLY_BYTES];
@@ -81,21 +82,10 @@ uint32_t serial_in_delay_ms = 0;
 
 static void ensure_serial_out() {
   if (g_serial_out_inited) return;
-  serial_out_storage = static_cast<uint8_t*>(
-      heap_caps_malloc(VPDP_KL11_FIFO_BYTES,
-                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  if (serial_out_storage) {
-    serial_out_capacity = VPDP_KL11_FIFO_BYTES;
-    LOG("console USB FIFO: %u KB PSRAM",
-        (unsigned)(serial_out_capacity / 1024));
-  } else {
-    serial_out_storage = serial_out_fallback;
-    serial_out_capacity = sizeof(serial_out_fallback);
-    LOGE("console USB FIFO: PSRAM allocation failed; using %u KB DRAM",
-         (unsigned)(serial_out_capacity / 1024));
-  }
-  g_serial_out.init(serial_out_storage, serial_out_capacity);
+  g_serial_out.init(serial_out_storage, sizeof(serial_out_storage));
   g_serial_out_inited = true;
+  LOG("console USB FIFO: %u KB internal RAM",
+      (unsigned)(sizeof(serial_out_storage) / 1024));
 }
 
 static void ensure_control_reply() {
@@ -116,7 +106,17 @@ void reset() {
 }
 
 static size_t drain_serial_out(size_t limit) {
-  if (g_serial_silenced) {
+  bool endpoint_unavailable = g_serial_silenced;
+// Native TinyUSB CDC has a stable connected flag. HWCDC/JTAG does not:
+// operator bool() can flap false for a few milliseconds on a healthy link.
+// Its write() path already applies bounded discard/recovery when unplugged.
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT && \
+    defined(ARDUINO_USB_MODE) && !ARDUINO_USB_MODE
+  endpoint_unavailable = endpoint_unavailable || !Serial;
+#endif
+  if (endpoint_unavailable) {
+    // Endpoint state belongs to this consumer. Discard promptly so an absent
+    // USB host cannot apply permanent guest console backpressure.
     g_serial_out.clear();
     return 0;
   }
@@ -153,7 +153,6 @@ bool start_serial_output_task() {
 }
 
 void queue_serial_out(uint8_t out) {
-  if (g_serial_silenced) return;
   ensure_serial_out();
   bool was_empty = false;
   if (!g_serial_out.push(out, &was_empty)) {
@@ -169,6 +168,13 @@ void serial_output_stats(uint32_t* pending, uint32_t* dropped) {
   if (pending) *pending = (uint32_t)g_serial_out.count();
   if (dropped)
     *dropped = g_serial_dropped.load(std::memory_order_relaxed);
+}
+
+bool guest_output_ready() {
+  ensure_serial_out();
+  return console_output_has_space(OUTPUT_RESERVE) &&
+         telnet_output_has_space(OUTPUT_RESERVE) &&
+         g_serial_out.free_space() >= OUTPUT_RESERVE;
 }
 
 bool queue_control_reply(const char* payload) {

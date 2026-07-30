@@ -11,7 +11,6 @@
 #include <Arduino.h>
 #include <atomic>
 #include <string.h>
-#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 
@@ -86,16 +85,13 @@ static uint8_t charset_designate_target = 0;
 #define GLYPH_TTEE  0x89
 #define GLYPH_CROSS 0x8A
 
-// ---- 8 KB serial-input FIFO (host USB-Serial -> KL11 TKB) and 64 KB
-//      TFT-output FIFO. The TFT output FIFO is deliberately larger so
-//      bursts cannot make a busy display task stall KEK. Payloads live in
-//      PSRAM; atomic indices and counters stay in internal DRAM. ----
+// ---- 8 KB serial-input FIFO (host USB-Serial -> KL11 TKB) and 8 KB
+//      TFT-output FIFO. Guest KL11 backpressure reserves enough room for the
+//      next character. Payload and atomic cursors live in internal RAM. ----
 #define VPDP_SERIAL_IN_FIFO_BYTES 8192
-#define VPDP_TFT_OUT_FIFO_BYTES 65536
+#define VPDP_TFT_OUT_FIFO_BYTES 8192
 static uint8_t serial_in_storage[VPDP_SERIAL_IN_FIFO_BYTES];
-static uint8_t tft_out_fallback[8192];
-static uint8_t* tft_out_storage = nullptr;
-static size_t tft_out_capacity = 0;
+static uint8_t tft_out_storage[VPDP_TFT_OUT_FIFO_BYTES];
 static Fifo g_serial_in;
 static Fifo g_tft_out;
 static TaskHandle_t g_tft_output_task = nullptr;
@@ -113,29 +109,15 @@ static void clear_row(int r, uint8_t attr) {
 }
 
 void console_init() {
-  if (!tft_out_storage) {
-    tft_out_storage = static_cast<uint8_t*>(
-        heap_caps_malloc(VPDP_TFT_OUT_FIFO_BYTES,
-                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (tft_out_storage) {
-      tft_out_capacity = VPDP_TFT_OUT_FIFO_BYTES;
-      LOG("console TFT FIFO: %u KB PSRAM",
-          (unsigned)(tft_out_capacity / 1024));
-    } else {
-      tft_out_storage = tft_out_fallback;
-      tft_out_capacity = sizeof(tft_out_fallback);
-      LOGE("console TFT FIFO: PSRAM allocation failed; using %u KB DRAM",
-           (unsigned)(tft_out_capacity / 1024));
-    }
-  }
-
   if (g_tft_output_task) {
     g_tft_reset_requested.store(true, std::memory_order_release);
     xTaskNotifyGive(g_tft_output_task);
     while (g_tft_reset_requested.load(std::memory_order_acquire))
       vTaskDelay(1);
   } else {
-    g_tft_out.init(tft_out_storage, tft_out_capacity);
+    g_tft_out.init(tft_out_storage, sizeof(tft_out_storage));
+    LOG("console TFT FIFO: %u KB internal RAM",
+        (unsigned)(sizeof(tft_out_storage) / 1024));
   }
 
   portENTER_CRITICAL(&g_con_mux);
@@ -526,6 +508,10 @@ void console_output_stats(uint32_t* pending, uint32_t* dropped) {
   if (pending) *pending = (uint32_t)g_tft_out.count();
   if (dropped)
     *dropped = g_tft_dropped.load(std::memory_order_relaxed);
+}
+
+bool console_output_has_space(size_t bytes) {
+  return g_tft_out.free_space() >= bytes;
 }
 
 // ---- keyboard (host USB-Serial -> KL11 input FIFO) ----
