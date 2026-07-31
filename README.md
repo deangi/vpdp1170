@@ -109,6 +109,9 @@ strips kek `DOLOG`) and sketch-root `build_opt.h` (`-DNDEBUG`, `-O2`).
 Optional startup microbenchmarks are gated by `VPDP1170_STARTUP_BENCHMARK`
 in `config.h`.
 
+For reproducible full-OS timing, prompt rules, continuous COM capture, and the
+shared-cache measurements, see the [operating-system boot benchmark notes](docs/boot-benchmark.md).
+
 The ESP32-S3 dual cores are pinned so display work never stalls the PDP-11
 (and guest disk I/O never stalls the TFT).
 
