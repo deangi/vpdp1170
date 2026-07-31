@@ -306,6 +306,9 @@ rp06::rp06(bus *const b, abool *const disk_read_activity, abool *const disk_writ
 
 rp06::~rp06()
 {
+	for (auto backend : fhs)
+		delete backend;
+	fhs.clear();
 }
 
 void rp06::begin()
@@ -331,11 +334,21 @@ void rp06::reset(const bool hard)
 		registers[reg_num(RP06_DT)] = rp06_drive_type(is_rp07);
 		registers[reg_num(RP06_SN)] = 000001;
 		int_cnt = 0;
+		int_cnt_total = 0;
 		deferred_active = false;
+		deferred_fnc = 0;
+		deferred_cs1 = 0;
+		deferred_wc = 0;
+		deferred_ba = 0;
+		deferred_da = 0;
+		deferred_dc = 0;
+		deferred_bae = 0;
 		deferred_delay = -1;
 		deferred_cs1_polls = 0;
 		deferred_wc_polls = 0;
 		control_active = false;
+		control_fnc = 0;
+		control_cs1 = 0;
 		control_delay = -1;
 		la_sector = 0;
 		if (b && b->getCpu())

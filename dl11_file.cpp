@@ -122,6 +122,12 @@ bool enabled() {
 
 void reset() {
   init_fifos();
+  input_fifo.clear();
+  output_fifo.clear();
+  input_eof = false;
+  input_eof_byte = -1;
+  input_notify = false;
+  output_append = true;
   rcsr = 0;
   rbuf = 0;
   xcsr = 0200;

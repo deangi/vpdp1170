@@ -49,6 +49,10 @@ public:
 
 	virtual bool begin(const bool disk_snapshots) = 0;
 
+	// Host adapters with read-ahead state override this. A cold emulator
+	// reboot calls it even when media path and size are unchanged.
+	virtual void invalidate_cache() {}
+
 	virtual bool read(const off_t offset, const size_t n, uint8_t *const target, const size_t sector_size) = 0;
 
 	virtual bool write(const off_t offset, const size_t n, const uint8_t *const from, const size_t sector_size) = 0;

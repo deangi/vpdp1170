@@ -232,6 +232,10 @@ void bus::init()
 void bus::reset(const bool hard)
 {
 	reset_unibus_map();
+	if (hard) {
+		microprogram_break_register = 0;
+		console_leds = 0;
+	}
 
 	if (mmu_)
 		mmu_->reset(hard);

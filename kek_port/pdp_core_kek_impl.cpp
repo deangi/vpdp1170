@@ -54,6 +54,8 @@ static uint32_t g_trace_remaining = 0;
 static uint64_t g_last_clock_instr = 0;
 static uint32_t g_last_wait_clock_ms = 0;
 static TaskHandle_t g_clock_task = nullptr;
+static std::atomic_bool g_reset_in_progress { false };
+static std::atomic_bool g_clock_service_active { false };
 
 // KW11-L tick rate in guest instructions (~60 Hz emulator time).
 // PDP-11/70 is listed at ~700 KIPS, so 700000/60 ≈ 11667 instr/tick.
@@ -135,12 +137,7 @@ public:
   host_slot_disk_backend(int slot, const char* device_name)
       : slot_(slot), device_name_(device_name ? device_name : "disk") {}
 
-  ~host_slot_disk_backend() override {
-    if (read_cache_) {
-      free(read_cache_);
-      read_cache_ = nullptr;
-    }
-  }
+  ~host_slot_disk_backend() override = default;
 
   std::string get_identifier() const override {
     const char* path = disk_path(slot_);
@@ -160,58 +157,18 @@ public:
             const size_t) override {
     if (!target || !disk_is_mounted(slot_)) return false;
     if (n == 0) return true;
-    refresh_cache_identity();
-
     const uint32_t request_offset = (uint32_t)offset;
     const uint32_t request_len = (uint32_t)n;
-    const uint32_t disk_bytes = disk_size_bytes(slot_);
-    if (read_cache_ &&
-        request_offset >= read_cache_offset_ &&
-        request_offset + request_len <= read_cache_offset_ + read_cache_len_) {
-      memcpy(target, read_cache_ + (request_offset - read_cache_offset_), request_len);
-      return true;
-    }
-
-    if (request_offset >= disk_bytes) {
-      memset(target, 0, request_len);
-      log_io("READ-ZERO", request_offset, request_len, true, request_len);
-      return true;
-    }
-
-    const uint32_t available = disk_bytes - request_offset;
-    const uint32_t read_len = std::min<uint32_t>(request_len, available);
-
-    if (request_len <= kReadCacheBytes && ensure_read_cache()) {
-      uint32_t fetch_len = std::min<uint32_t>(kReadCacheBytes, disk_bytes - request_offset);
-      if (fetch_len >= read_len) {
-        int got = disk_read(slot_, request_offset, read_cache_, fetch_len);
-        bool ok = got == (int)fetch_len;
-        log_io("READ", request_offset, fetch_len, ok, got);
-        if (ok) {
-          read_cache_offset_ = request_offset;
-          read_cache_len_ = fetch_len;
-          memcpy(target, read_cache_, read_len);
-          if (read_len < request_len)
-            memset(target + read_len, 0, request_len - read_len);
-          return true;
-        }
-      }
-    }
-
-    int got = disk_read(slot_, request_offset, target, read_len);
-    bool ok = got == (int)read_len;
-    if (ok && read_len < request_len)
-      memset(target + read_len, 0, request_len - read_len);
-    log_io(read_len < request_len ? "READ-PAD" : "READ",
-           request_offset, request_len, ok, got);
+    int got = disk_read(slot_, request_offset, target, request_len);
+    bool ok = got == (int)request_len;
+    log_io("READ", request_offset, request_len, ok, got);
     return ok;
   }
 
+  void invalidate_cache() override {}
   bool write(const off_t offset, const size_t n, const uint8_t *const from,
              const size_t) override {
     if (!from || !disk_is_mounted(slot_)) return false;
-    refresh_cache_identity();
-    invalidate_read_cache();
     int wrote = disk_write(slot_, (uint32_t)offset, from, (uint32_t)n);
     bool ok = wrote == (int)n;
     log_io("WRITE", offset, n, ok, wrote);
@@ -219,39 +176,6 @@ public:
   }
 
 private:
-  static constexpr uint32_t kReadCacheBytes = 32768;
-
-  bool ensure_read_cache() {
-    if (read_cache_) return true;
-    read_cache_ = (uint8_t*)ps_malloc(kReadCacheBytes);
-    if (!read_cache_) read_cache_ = (uint8_t*)malloc(kReadCacheBytes);
-    if (!read_cache_) {
-      LOGE("kek %s host read cache allocation failed (%u bytes)",
-           device_name_, (unsigned)kReadCacheBytes);
-      return false;
-    }
-    invalidate_read_cache();
-    return true;
-  }
-
-  void invalidate_read_cache() {
-    read_cache_offset_ = 0;
-    read_cache_len_ = 0;
-  }
-
-  void refresh_cache_identity() {
-    const char* path = disk_path(slot_);
-    const uint32_t disk_bytes = disk_size_bytes(slot_);
-    if (strncmp(cache_path_, path ? path : "", sizeof(cache_path_)) == 0 &&
-        cache_disk_bytes_ == disk_bytes) {
-      return;
-    }
-    strncpy(cache_path_, path ? path : "", sizeof(cache_path_) - 1);
-    cache_path_[sizeof(cache_path_) - 1] = 0;
-    cache_disk_bytes_ = disk_bytes;
-    invalidate_read_cache();
-  }
-
   void log_io(const char* op, off_t offset, size_t n, bool ok, int actual) {
     bool is_rl = strcmp(device_name_, "RL02") == 0;
     bool is_rp = strcmp(device_name_, "RP06") == 0 ||
@@ -280,11 +204,6 @@ private:
 
   int slot_;
   const char* device_name_;
-  uint8_t* read_cache_ = nullptr;
-  uint32_t read_cache_offset_ = 0;
-  uint32_t read_cache_len_ = 0;
-  uint32_t cache_disk_bytes_ = 0;
-  char cache_path_[64] = {0};
 };
 
 static void write_physical_bytes(uint32_t address, const char* text) {
@@ -345,17 +264,22 @@ static bool ensure_rl02_attached() {
 
 static bool ensure_rp06_attached() {
   if (!g_bus) return false;
-  if (g_rp06) return true;
 
-  // Always register the RH11/RP controller so a later UI/telnet mount of
-  // RP0 is visible without rebuilding the bus. Geometry follows rp0_type.
+  // Rebuild when pdpconfig changes RP geometry. The old implementation kept
+  // the first-created RP06/RP07 geometry across every emulator reboot.
+  static bool attached_is_rp07 = false;
   const bool is_rp07 = (cfg.disk_rp0_type == "rp07");
-  g_rp06 = new rp06(g_bus, &g_disk_read_activity, &g_disk_write_activity, is_rp07);
-  if (!g_rp06) return false;
-  g_rp06->access_disk_backends()->push_back(
+  if (g_rp06 && attached_is_rp07 == is_rp07) return true;
+
+  rp06* replacement =
+      new rp06(g_bus, &g_disk_read_activity, &g_disk_write_activity, is_rp07);
+  if (!replacement) return false;
+  replacement->access_disk_backends()->push_back(
       new host_slot_disk_backend(DRIVE_RP0, is_rp07 ? "RP07" : "RP06"));
-  g_rp06->begin();
-  g_bus->add_RP06(g_rp06);
+  replacement->begin();
+  g_bus->add_RP06(replacement);
+  g_rp06 = replacement;
+  attached_is_rp07 = is_rp07;
   LOG("kek %s attached to host RP0 slot: mounted=%d path=%s bytes=%u type=%s",
       is_rp07 ? "RP07" : "RP06",
       disk_is_mounted(DRIVE_RP0) ? 1 : 0,
@@ -364,16 +288,13 @@ static bool ensure_rp06_attached() {
   return true;
 }
 
-// DU0 previously called disk_read() per MSCP 512-byte sector (seek+SD every
-// time). RK/RL/RP already use host_slot_disk_backend's PSRAM read cache
-// (32 KB = 64 sectors). Route UDA media through the same path so sequential
-// MSCP reads hit cache after one SD fetch; writes invalidate.
+// DU0 routes through the same shared disk-layer cache as RK/RL/RP.
 static host_slot_disk_backend* g_du_backend = nullptr;
 
 static host_slot_disk_backend* du_backend() {
   if (!g_du_backend) {
     g_du_backend = new host_slot_disk_backend(DRIVE_DU0, "DU0");
-    LOG("kek DU0 media uses host read cache (32 KB, same as RK/RL/RP)");
+    LOG("kek DU0 media uses shared multi-block read cache");
   }
   return g_du_backend;
 }
@@ -525,9 +446,12 @@ static void clear_trace_ring() {
 static void clear_run_state_for_boot() {
   store_event(EVENT_NONE);
   g_paused = false;
+  g_bp_skip_once = false;
   g_trace_remaining = 0;
   g_last_clock_instr = 0;
   g_last_wait_clock_ms = 0;
+  g_disk_read_activity = false;
+  g_disk_write_activity = false;
   g_panic_trace_dumped = false;
   g_trace_frozen = false;
 }
@@ -1135,8 +1059,31 @@ static uint64_t guest_instruction_count_for_kwp() {
   return g_cpu ? g_cpu->get_instructions_executed_count() : 0;
 }
 
+static void begin_reset_transaction() {
+  g_reset_in_progress.store(true, std::memory_order_release);
+  while (g_clock_service_active.load(std::memory_order_acquire))
+    vTaskDelay(1);
+}
+
+static void end_reset_transaction() {
+  g_reset_in_progress.store(false, std::memory_order_release);
+}
+
 static void service_line_clock() {
-  if (!g_bus || !g_cpu || !g_bus->getKW11_L()) return;
+  if (!g_bus || !g_cpu || !g_bus->getKW11_L() ||
+      g_reset_in_progress.load(std::memory_order_acquire))
+    return;
+  g_clock_service_active.store(true, std::memory_order_release);
+  if (g_reset_in_progress.load(std::memory_order_acquire)) {
+    g_clock_service_active.store(false, std::memory_order_release);
+    return;
+  }
+
+  struct ClockServiceDone {
+    ~ClockServiceDone() {
+      g_clock_service_active.store(false, std::memory_order_release);
+    }
+  } done;
   if (g_tty) g_tty->service_deferred();
 
   // KW11-P counter advance (emulator-time via kek_kwp instruction counter).
@@ -1222,25 +1169,52 @@ uint32_t target_memory_bytes() {
   return target_kw * 2048u;
 }
 
+static void apply_target_memory_size() {
+  if (!g_bus) return;
+  const uint32_t target_kw =
+      std::min<uint32_t>(2044, std::max<uint32_t>(32, g_target_memory_kw));
+  const uint32_t pages =
+      std::min<uint32_t>(kFullMemoryPages - 1,
+                         std::max<uint32_t>(1, target_kw / 4));
+  const uint32_t wanted_bytes = pages * 8192u;
+  if (!g_bus->getRAM() || g_bus->get_memory_size() != wanted_bytes) {
+    LOG("kek reset: resizing guest RAM from %u to %u bytes",
+        (unsigned)(g_bus->getRAM() ? g_bus->get_memory_size() : 0),
+        (unsigned)wanted_bytes);
+    g_bus->set_memory_size((int)pages);
+  }
+}
+
+
+static void invalidate_all_disk_caches() {
+  disk_cache_invalidate_all();
+}
+
 void reset() {
   if (!g_cpu) return;
+  begin_reset_transaction();
   clear_run_state_for_boot();
   g_cpu->reset();
   kek_kwp::reset();
   clear_trace_ring();
   install_boot_stub();
+  end_reset_transaction();
 }
 
 void cold_boot() {
   if (!g_bus || !g_cpu) return;
+  begin_reset_transaction();
   clear_run_state_for_boot();
+  apply_target_memory_size();
   if (g_bus->getRAM())
     g_bus->getRAM()->reset(true);
+  invalidate_all_disk_caches();
   g_bus->reset(true);
   g_cpu->reset();
   kek_kwp::reset();
   clear_trace_ring();
   install_boot_stub();
+  end_reset_transaction();
 }
 
 static void service_deferred_devices() {

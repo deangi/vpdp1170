@@ -63,6 +63,11 @@ uint32_t    disk_size_bytes(int slot);    // 0 if not mounted
 // Byte-level transfer. Returns bytes transferred, or -1 on error.
 int disk_read (int slot, uint32_t byte_offset, void* buf, uint32_t bytes);
 int disk_write(int slot, uint32_t byte_offset, const void* buf, uint32_t bytes);
+// Shared read-only disk cache. Eight 8 KB blocks are shared by every mounted
+// slot and may hold different ranges of one image or ranges from several
+// images. Mount/dismount and intersecting writes invalidate blocks
+// automatically; a cold emulator reset uses disk_cache_invalidate_all().
+void disk_cache_invalidate_all();
 
 // Diagnostics counter (reads/writes since boot).
 void disk_stats(int slot, uint32_t* reads, uint32_t* writes);

@@ -589,6 +589,15 @@ static void draw_status_bar() {
 // bootstrap entry"; the ROM is responsible for loading the disk's first
 // block and jumping into it.
 static void start_cpu(bool cold) {
+  // Emulator reset is a transaction across both the guest hardware and the
+  // host adapters. Clear deferred commands, file-backed terminal state, and
+  // guest-facing console queues before the CPU can produce another byte.
+  emu_control::init();
+  dl11_file::disconnect_all();
+  dl11_file::reset();
+  kl11::reset();
+  telnet_reset_guest_io();
+
   if (cold) pdp_core::cold_boot();
   else      pdp_core::reset();
 

@@ -59,6 +59,7 @@ void tty::reset(const bool hard)
 	tx_ready_reported = true;
 	tx_busy = false;
 	tx_ready_at_us = 0;
+	tx_pending_byte = 0;
 }
 
 void tty::update_rx_interrupt()

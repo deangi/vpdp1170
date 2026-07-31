@@ -129,9 +129,17 @@ void kw11_l::begin(console *const cnsl)
 
 void kw11_l::reset(const bool hard)
 {
+	if (b && b->getCpu())
+		b->getCpu()->unqueue_interrupt(6, 0100);
 	if (hard) {
 		my_unique_lock lck(&lc_csr_lock);
 		lf_csr = 0;
+		total_ticks = 0;
+		enabled_ticks = 0;
+		int_triggered = 0;
+		prev_instructions_executed = 0;
+		max_instructions_count = 0;
+		last_instructions_count = 0;
 	}
 }
 

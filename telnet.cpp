@@ -40,6 +40,8 @@ static Fifo g_telnet_diag;
 static Fifo g_telnet_in;
 static bool g_fifos_inited = false;
 static std::atomic<uint32_t> g_telnet_dropped { 0 };
+static std::atomic<bool> g_poll_seen { false };
+static std::atomic<bool> g_guest_reset_requested { false };
 
 enum TelnetRxState : uint8_t {
   RX_DATA,
@@ -246,6 +248,20 @@ static void drain_output_fifo(Fifo& fifo) {
 
 void telnet_poll() {
   ensure_fifos_inited();
+  g_poll_seen.store(true, std::memory_order_release);
+  if (g_guest_reset_requested.load(std::memory_order_acquire)) {
+    // This task owns guest-input production and guest-output consumption.
+    // The emulator task is quiescent while it waits for this acknowledgement.
+    g_telnet_in.clear();
+    g_telnet_out.clear();
+    if (!telnet_shell_active()) {
+      while (g_client && g_client.available() > 0)
+        g_client.read();
+    }
+    reset_rx_parser();
+    g_telnet_dropped.store(0, std::memory_order_relaxed);
+    g_guest_reset_requested.store(false, std::memory_order_release);
+  }
   if (!g_started) {
     // Endpoint disabled/unavailable: the sink owns discard policy. Keep the
     // producer independent of connection state and prevent stale output.
@@ -302,6 +318,25 @@ void telnet_poll() {
     // accumulate stale bytes that a future client would see on connect.
     g_telnet_out.clear();
     g_telnet_diag.clear();
+  }
+}
+
+void telnet_reset_guest_io() {
+  ensure_fifos_inited();
+  if (g_poll_seen.load(std::memory_order_acquire)) {
+    g_guest_reset_requested.store(true, std::memory_order_release);
+    while (g_guest_reset_requested.load(std::memory_order_acquire))
+      vTaskDelay(1);
+  } else {
+    // Initial boot occurs before the network task is created.
+    g_telnet_in.clear();
+    g_telnet_out.clear();
+    if (!telnet_shell_active()) {
+      while (g_client && g_client.available() > 0)
+        g_client.read();
+    }
+    reset_rx_parser();
+    g_telnet_dropped.store(0, std::memory_order_relaxed);
   }
 }
 

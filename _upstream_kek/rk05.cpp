@@ -46,8 +46,15 @@ void rk05::begin()
 
 void rk05::reset(const bool hard)
 {
-	if (hard)
+	if (hard) {
 		memset(registers, 0x00, sizeof registers);
+		memset(xfer_buffer, 0x00, sizeof xfer_buffer);
+	}
+#if defined(ESP32)
+	irq_pending_ticks = 0;
+	if (b && b->getCpu())
+		b->getCpu()->unqueue_interrupt(5, 0220);
+#endif
 }
 
 FLASHMEM void rk05::show_state(console *const cnsl) const

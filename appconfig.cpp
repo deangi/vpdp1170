@@ -440,18 +440,47 @@ bool config_load_wifi(AppConfig& cfg) {
   return true;
 }
 
-bool config_load_pdp(AppConfig& cfg) {
-  // Disk paths: clear so a present file overrides; blank lines in the
-  // file leave the field empty (= dismounted), which is intended.
+static void reset_pdp_reload_state(AppConfig& cfg) {
+  // An emulator-only reload must start from the same PDP-domain defaults as
+  // a hard board reset. Preserve network service settings, which come from
+  // /wificonfig.ini and remain live across a guest reboot.
+  AppConfig defaults;
+  config_apply_compiled_defaults(defaults);
+
+  cfg.title = defaults.title;
+  cfg.mem_size_kw = defaults.mem_size_kw;
+  cfg.boot_input_len = 0;
+  cfg.serial1_enabled = defaults.serial1_enabled;
+
+  cfg.diag_pcping_sec = defaults.diag_pcping_sec;
+  cfg.diag_serialdelay_ms = defaults.diag_serialdelay_ms;
+  cfg.diag_io_trace = defaults.diag_io_trace;
+  cfg.diag_clock_trace = defaults.diag_clock_trace;
+  cfg.diag_console_trace = defaults.diag_console_trace;
+  cfg.diag_dl_trace = defaults.diag_dl_trace;
+  cfg.diag_rp_trace = defaults.diag_rp_trace;
+  cfg.diag_du_trace = defaults.diag_du_trace;
+  cfg.diag_trace = defaults.diag_trace;
+  cfg.diag_break_pc = defaults.diag_break_pc;
+  cfg.kwp_enabled = defaults.kwp_enabled;
+
+  // Missing or blank disk keys mean dismounted. DU0 must be cleared along
+  // with the older controllers; retaining it caused media from a previous
+  // profile to be reopened on every emulator reset.
   cfg.disk_a = "";
   cfg.disk_b = "";
   cfg.disk_c = "";
   cfg.disk_d = "";
   cfg.disk_rk0 = "";
   cfg.disk_rp0 = "";
-  cfg.disk_rp0_type = "rp06";
-  cfg.boot_input_len = 0;
-  cfg.serial1_enabled = false;
+  cfg.disk_du0 = "";
+  cfg.disk_rp0_type = defaults.disk_rp0_type;
+  cfg.boot_drive = defaults.boot_drive;
+  cfg.boot_kind = defaults.boot_kind;
+}
+
+bool config_load_pdp(AppConfig& cfg) {
+  reset_pdp_reload_state(cfg);
 
   bool existed = parse_config_file(cfg, PDP_CFG_PATH, CONFIG_EMULATOR);
   if (!existed) {

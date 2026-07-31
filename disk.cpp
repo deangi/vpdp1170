@@ -4,6 +4,7 @@
 #include "SD_FTP_Server/src/SD_FTP_Server.h"
 #include <Arduino.h>
 #include "sd_fs.h"
+#include <algorithm>
 #include <string.h>
 
 struct DriveSlot {
@@ -19,6 +20,108 @@ struct DriveSlot {
 
 static DriveSlot g_drv[DRIVE_COUNT];
 static char g_last_error[128] = {0};
+
+// Read-only, write-through shared cache. Blocks are aligned so two entries for
+// the same slot can never overlap. All callers hold SD_FTP_StorageGuard, which
+// also makes the metadata and LRU clock thread-safe without another lock.
+static constexpr uint32_t DISK_CACHE_BLOCK_BYTES = 8u * 1024u;
+static constexpr uint32_t DISK_CACHE_BLOCK_COUNT = 8u;
+static constexpr uint32_t DISK_CACHE_BYTES =
+    DISK_CACHE_BLOCK_BYTES * DISK_CACHE_BLOCK_COUNT;
+
+struct DiskCacheBlock {
+  uint8_t* data = nullptr;
+  int slot = -1;
+  uint32_t offset = 0;
+  uint32_t length = 0;
+  uint64_t age = 0;
+  bool valid = false;
+};
+
+static DiskCacheBlock g_cache[DISK_CACHE_BLOCK_COUNT];
+static uint8_t* g_cache_storage = nullptr;
+static uint64_t g_cache_age = 0;
+static bool g_cache_allocation_attempted = false;
+
+static bool disk_cache_ensure_locked() {
+  if (g_cache_storage) return true;
+  if (g_cache_allocation_attempted) return false;
+  g_cache_allocation_attempted = true;
+
+  bool in_psram = false;
+  if (psramFound()) {
+    g_cache_storage = static_cast<uint8_t*>(ps_malloc(DISK_CACHE_BYTES));
+    in_psram = g_cache_storage != nullptr;
+  }
+  if (!g_cache_storage)
+    g_cache_storage = static_cast<uint8_t*>(malloc(DISK_CACHE_BYTES));
+  if (!g_cache_storage) {
+    LOGE("disk cache: allocation failed (%u bytes)", (unsigned)DISK_CACHE_BYTES);
+    return false;
+  }
+
+  for (uint32_t i = 0; i < DISK_CACHE_BLOCK_COUNT; i++)
+    g_cache[i].data = g_cache_storage + i * DISK_CACHE_BLOCK_BYTES;
+  LOG("disk cache: %u x %u KB shared blocks (%u KB total, %s)",
+      (unsigned)DISK_CACHE_BLOCK_COUNT,
+      (unsigned)(DISK_CACHE_BLOCK_BYTES / 1024u),
+      (unsigned)(DISK_CACHE_BYTES / 1024u),
+      in_psram ? "PSRAM" : "internal RAM");
+  return true;
+}
+
+static void disk_cache_invalidate_all_locked() {
+  for (uint32_t i = 0; i < DISK_CACHE_BLOCK_COUNT; i++) {
+    g_cache[i].valid = false;
+    g_cache[i].slot = -1;
+    g_cache[i].offset = 0;
+    g_cache[i].length = 0;
+    g_cache[i].age = 0;
+  }
+  g_cache_age = 0;
+}
+
+static void disk_cache_invalidate_slot_locked(int slot) {
+  for (uint32_t i = 0; i < DISK_CACHE_BLOCK_COUNT; i++) {
+    if (g_cache[i].valid && g_cache[i].slot == slot)
+      g_cache[i].valid = false;
+  }
+}
+
+static void disk_cache_invalidate_range_locked(int slot, uint32_t offset,
+                                                uint32_t bytes) {
+  if (bytes == 0) return;
+  const uint64_t write_begin = offset;
+  const uint64_t write_end = write_begin + bytes;
+  for (uint32_t i = 0; i < DISK_CACHE_BLOCK_COUNT; i++) {
+    DiskCacheBlock& block = g_cache[i];
+    if (!block.valid || block.slot != slot) continue;
+    const uint64_t block_begin = block.offset;
+    const uint64_t block_end = block_begin + block.length;
+    if (write_begin < block_end && block_begin < write_end)
+      block.valid = false;
+  }
+}
+
+static DiskCacheBlock* disk_cache_find_locked(int slot, uint32_t block_offset) {
+  for (uint32_t i = 0; i < DISK_CACHE_BLOCK_COUNT; i++) {
+    DiskCacheBlock& block = g_cache[i];
+    if (block.valid && block.slot == slot && block.offset == block_offset) {
+      block.age = ++g_cache_age;
+      return &block;
+    }
+  }
+  return nullptr;
+}
+
+static DiskCacheBlock* disk_cache_victim_locked() {
+  DiskCacheBlock* victim = &g_cache[0];
+  for (uint32_t i = 0; i < DISK_CACHE_BLOCK_COUNT; i++) {
+    if (!g_cache[i].valid) return &g_cache[i];
+    if (g_cache[i].age < victim->age) victim = &g_cache[i];
+  }
+  return victim;
+}
 
 static void set_last_error(const char* text) {
   strncpy(g_last_error, text ? text : "", sizeof(g_last_error) - 1);
@@ -167,6 +270,7 @@ bool disk_mount_mode(int slot, const char* path, bool force_readonly) {
     g_drv[slot].file.flush();
     g_drv[slot].file.close();
   }
+  disk_cache_invalidate_slot_locked(slot);
   g_drv[slot].file     = f;
   g_drv[slot].mounted  = true;
   g_drv[slot].changed  = true;
@@ -189,6 +293,7 @@ bool disk_mount(int slot, const char* path) {
 void disk_dismount(int slot) {
   SD_FTP_StorageGuard guard;
   if (!slot_valid(slot)) return;
+  disk_cache_invalidate_slot_locked(slot);
   if (g_drv[slot].mounted) {
     g_drv[slot].file.flush();
     g_drv[slot].file.close();
@@ -218,6 +323,7 @@ bool disk_reopen_all() {
 
   {
     SD_FTP_StorageGuard guard;
+    disk_cache_invalidate_all_locked();
     for (int slot = 0; slot < DRIVE_COUNT; slot++) {
       saved[slot].mounted = g_drv[slot].mounted;
       saved[slot].readonly = g_drv[slot].readonly;
@@ -283,24 +389,82 @@ int disk_read(int slot, uint32_t byte_offset, void* buf, uint32_t bytes) {
     return (int)bytes;
   }
 
-  uint32_t available = d.size - byte_offset;
-  uint32_t read_len = bytes < available ? bytes : available;
-  if (!d.file.seek(byte_offset)) {
-    LOGE("disk_read[%s]: seek to %u failed", slot_name(slot), (unsigned)byte_offset);
-    return -1;
+  // Allocation failure is non-fatal: retain direct-read behavior.
+  if (!disk_cache_ensure_locked()) {
+    const uint32_t available = d.size - byte_offset;
+    const uint32_t read_len = bytes < available ? bytes : available;
+    if (!d.file.seek(byte_offset)) {
+      LOGE("disk_read[%s]: seek to %u failed",
+           slot_name(slot), (unsigned)byte_offset);
+      return -1;
+    }
+    const size_t n = d.file.read(out, read_len);
+    d.reads++;
+    if (n != read_len) {
+      LOGE("disk_read[%s]: short read %u/%u at off %u",
+           slot_name(slot), (unsigned)n, (unsigned)read_len,
+           (unsigned)byte_offset);
+      return -1;
+    }
+    if (read_len < bytes)
+      memset(out + read_len, 0, bytes - read_len);
+    return (int)bytes;
   }
-  size_t n = d.file.read(out, read_len);
-  d.reads++;
-  if (n != read_len) {
-    LOGE("disk_read[%s]: short read %u/%u at off %u",
-         slot_name(slot), (unsigned)n, (unsigned)read_len, (unsigned)byte_offset);
-    return -1;
+
+  uint32_t done = 0;
+  while (done < bytes) {
+    const uint64_t current64 = uint64_t(byte_offset) + done;
+    if (current64 >= d.size) {
+      memset(out + done, 0, bytes - done);
+      break;
+    }
+    const uint32_t current = (uint32_t)current64;
+    const uint32_t block_offset =
+        current & ~(DISK_CACHE_BLOCK_BYTES - 1u);
+    const uint32_t in_block = current - block_offset;
+
+    DiskCacheBlock* block = disk_cache_find_locked(slot, block_offset);
+    if (!block) {
+      block = disk_cache_victim_locked();
+      // Invalidate metadata before filling so a failed/partial SD read can
+      // never leave corrupted bytes addressable through an old cache key.
+      block->valid = false;
+      block->slot = -1;
+      block->length = 0;
+
+      const uint32_t fill_len =
+          std::min<uint32_t>(DISK_CACHE_BLOCK_BYTES, d.size - block_offset);
+      if (!d.file.seek(block_offset)) {
+        LOGE("disk_read[%s]: cache seek to %u failed",
+             slot_name(slot), (unsigned)block_offset);
+        return -1;
+      }
+      const size_t n = d.file.read(block->data, fill_len);
+      d.reads++;
+      if (n != fill_len) {
+        LOGE("disk_read[%s]: cache short read %u/%u at off %u",
+             slot_name(slot), (unsigned)n, (unsigned)fill_len,
+             (unsigned)block_offset);
+        return -1;
+      }
+      block->slot = slot;
+      block->offset = block_offset;
+      block->length = fill_len;
+      block->age = ++g_cache_age;
+      block->valid = true;
+    }
+
+    if (in_block >= block->length) {
+      memset(out + done, 0, bytes - done);
+      break;
+    }
+    const uint32_t copy_len = std::min<uint32_t>(bytes - done,
+                                             block->length - in_block);
+    memcpy(out + done, block->data + in_block, copy_len);
+    done += copy_len;
   }
-  if (read_len < bytes)
-    memset(out + read_len, 0, bytes - read_len);
   return (int)bytes;
 }
-
 int disk_write(int slot, uint32_t byte_offset, const void* buf, uint32_t bytes) {
   SD_FTP_StorageGuard guard;
   if (!disk_is_mounted(slot)) return -1;
@@ -311,6 +475,7 @@ int disk_write(int slot, uint32_t byte_offset, const void* buf, uint32_t bytes) 
          slot_name(slot), (unsigned)byte_offset, (unsigned)bytes, (unsigned)d.size);
     return -1;
   }
+  disk_cache_invalidate_range_locked(slot, byte_offset, bytes);
   if (!d.file.seek(byte_offset)) {
     LOGE("disk_write[%s]: seek to %u failed", slot_name(slot), (unsigned)byte_offset);
     return -1;
@@ -323,6 +488,11 @@ int disk_write(int slot, uint32_t byte_offset, const void* buf, uint32_t bytes) 
     return -1;
   }
   return (int)bytes;
+}
+
+void disk_cache_invalidate_all() {
+  SD_FTP_StorageGuard guard;
+  disk_cache_invalidate_all_locked();
 }
 
 void disk_stats(int slot, uint32_t* reads, uint32_t* writes) {

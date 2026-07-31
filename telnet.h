@@ -9,6 +9,7 @@
 
 void        telnet_begin(uint16_t port, bool enabled);
 void        telnet_poll();              // call every loop: accept + RX + flush TX
+void        telnet_reset_guest_io();    // discard guest-side input/output on reset
 void        telnet_write(uint8_t c);    // queue one console-output byte
 void        telnet_output_stats(uint32_t* pending, uint32_t* dropped);
 bool        telnet_output_has_space(size_t bytes);

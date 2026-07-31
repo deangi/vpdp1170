@@ -53,6 +53,7 @@ static Fifo g_serial_out;
 static bool g_serial_out_inited = false;
 static TaskHandle_t g_serial_output_task = nullptr;
 static std::atomic<uint32_t> g_serial_dropped { 0 };
+static std::atomic<bool> g_serial_reset_requested { false };
 
 // A failed VPDP control-prefix match can release several buffered prefix
 // bytes at once, and Telnet doubles IAC. Sixteen slots covers the worst case.
@@ -98,10 +99,28 @@ static void ensure_control_reply() {
 void reset() {
   ensure_serial_out();
   ensure_control_reply();
+
+  // The USB task owns the FIFO tail. Have that consumer discard pending
+  // guest output so reset never races a concurrent peek()/consume().
+  if (g_serial_output_task) {
+    g_serial_reset_requested.store(true, std::memory_order_release);
+    xTaskNotifyGive(g_serial_output_task);
+    while (g_serial_reset_requested.load(std::memory_order_acquire))
+      vTaskDelay(1);
+  } else {
+    g_serial_out.clear();
+  }
+
+  // Priority input and a partially matched VPDP escape command belong to
+  // the old guest and must not survive into the next boot.
+  g_control_reply.clear();
+  while (Serial.available() > 0)
+    Serial.read();
   control_state = CONTROL_IDLE;
   control_prefix_pos = 0;
   control_prefix_first = 0;
   control_command_len = 0;
+  control_command[0] = '\0';
   g_serial_dropped.store(0, std::memory_order_relaxed);
 }
 
@@ -137,6 +156,10 @@ static size_t drain_serial_out(size_t limit) {
 
 static void serial_output_task(void*) {
   for (;;) {
+    if (g_serial_reset_requested.load(std::memory_order_acquire)) {
+      g_serial_out.clear();
+      g_serial_reset_requested.store(false, std::memory_order_release);
+    }
     size_t drained = drain_serial_out(4096);
     if (drained == 0)
       ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));

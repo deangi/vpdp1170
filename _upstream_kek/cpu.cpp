@@ -98,6 +98,7 @@ void cpu::reset()
 	waiting = false;
 	instruction_active = false;
 	instruction_pc = 0;
+	delayed_trap.reset();
 	trap_pc_override.reset();
 	last_instruction_valid = false;
 	last_instruction_pc = 0;
@@ -107,7 +108,13 @@ void cpu::reset()
 	previous_instruction_pc = 0;
 	previous_instruction_word = 0;
 	previous_instruction_phys = 0;
-	kw11l_counter         = 0;
+	trap_counter = 0;
+	trap_counts.clear();
+	kw11l_counter = 0;
+#if defined(FREERTOS)
+	if (qi_q)
+		xQueueReset(qi_q);
+#endif
 }
 
 uint16_t cpu::get_register(const int nr) const

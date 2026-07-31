@@ -259,6 +259,11 @@ void rl02::reset(const bool hard)
 	deferred_device = 0;
 	deferred_poll_count = 0;
 	deferred_service_delay = -1;
+#if defined(ESP32)
+	irq_pending_ticks = 0;
+	if (b && b->getCpu())
+		b->getCpu()->unqueue_interrupt(5, 0160);
+#endif
 
 	track  = 0;
 	head   = 0;
