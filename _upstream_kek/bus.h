@@ -130,7 +130,10 @@ public:
 	void     set_debug_mode      () { console_switches |= 128; }
 	uint16_t get_console_leds    () { return console_leds;     }
 
-	void set_memory_size(const int n_pages);
+	// Set the visible PDP RAM size in 8 KB pages. When capacity_pages > 0,
+	// the host buffer is allocated (or retained) at that capacity so later
+	// smaller sizes reuse the same slab instead of free/ps_malloc.
+	void set_memory_size(const int n_pages, const int capacity_pages = 0);
 	uint32_t get_memory_size() const { return m->get_memory_size(); }
 
 	void add_ram   (memory *const m      );

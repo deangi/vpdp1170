@@ -1,0 +1,15 @@
+profile=unix6
+config=/pdpconfig-unixv6.ini
+started=2026-07-30T20:03:27.649513-07:00
+status=passed
+error=
+--- console transcript ---
+reset
+exit
+emulator reset scheduled (reload config, remount, zero RAM, cold boot)
+vpdp:/> Returning Telnet to the PDP-11 console.
+[vpdp1170] emulator reset: config=/pdpconfig.ini title="PDP 11 - Unix V6" boot=RK0 mem=252KW (EMU reboot)
+vpdp1170: kek PDP-11/70 adapter console OK; trying RK0 boot...
+@unix
+
+login: 

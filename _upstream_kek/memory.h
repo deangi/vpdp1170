@@ -19,14 +19,26 @@
 class memory
 {
 private:
-	const uint32_t size     { 0       };
+	// capacity: allocated host buffer size (bytes). size: logical PDP RAM
+	// visible to the bus (bytes). size is always <= capacity so a full-size
+	// PSRAM slab can be allocated once and reused for smaller guests.
+	uint32_t       capacity { 0       };
+	uint32_t       size     { 0       };
 	uint8_t       *m        { nullptr };
 
 public:
-	memory(const uint32_t size);
+	// Allocate capacity_bytes (or logical_size when capacity_bytes == 0).
+	// Does not zero the buffer; callers that need a clean slate use reset().
+	explicit memory(const uint32_t logical_size,
+	                const uint32_t capacity_bytes = 0);
 	~memory();
 
 	uint32_t get_memory_size() const { return size; }
+	uint32_t get_capacity() const { return capacity; }
+
+	// Change the visible PDP RAM size without freeing/reallocating. new_size
+	// is clamped to capacity. Does not clear memory.
+	void set_logical_size(const uint32_t new_size);
 
 	void reset(const bool hard);
 

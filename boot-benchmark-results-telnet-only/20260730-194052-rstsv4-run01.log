@@ -1,0 +1,35 @@
+profile=rstsv4
+config=/pdpconfig-rstsv4.ini
+started=2026-07-30T19:40:52.938029-07:00
+status=passed
+error=
+--- console transcript ---
+reset
+exit
+emulator reset scheduled (reload config, remount, zero RAM, cold boot)
+vpdp:/> [vpdp1170] emulator reset: config=/pdpconfig.ini title="PDP 11 RSTS 4B" boot=RK0 mem=124KW (EMU reboot)
+Returning Telnet to the PDP-11 console.
+vpdp1170: kek PDP-11/70 adapter console OK; trying RK0 boot...
+
+RSTS V04B-17 RSTSV4B
+
+OPTION?  START
+DD-MON-YY? 1-JAN-789
+HH:MM? 00:00
+RSTS4B - SYSTEM PACK MOUNTED
+ENABLE CRASH DUMP? Y
+DISABLING INTERFACE FOR KB01:
+CHAIN "INIT"
+CATASTROPHIC ERROR
+PROGRAM LOST-SORRY
+I/O CHANNEL NOT OPEN
+
+Ready
+
+
+SYSTEM INITIALIZATION PROGRAM
+
+END OF FILE ON DEVICE - INIT ASSUMED COMPLETE
+
+Ready
+

@@ -1135,7 +1135,13 @@ bool init() {
   const uint32_t target_kw = std::min<uint32_t>(2044, std::max<uint32_t>(32, g_target_memory_kw));
 
   const uint32_t pages = std::min<uint32_t>(kFullMemoryPages - 1, std::max<uint32_t>(1, target_kw / 4));
-  g_bus->set_memory_size((int)pages);
+  // Allocate the full 2MW (512 x 8 KB) PSRAM slab once. Later resets only
+  // change the logical size and clear the used range.
+  g_bus->set_memory_size((int)pages, (int)kFullMemoryPages);
+  LOG("kek guest RAM: logical=%u KW capacity=%u KW (%u bytes)",
+      (unsigned)(pages * 4),
+      (unsigned)(kFullMemoryPages * 4),
+      (unsigned)kFullMemoryBytes);
 
   g_cpu = new cpu(g_bus, &g_event);
   if (!g_cpu) return false;
@@ -1177,12 +1183,19 @@ static void apply_target_memory_size() {
       std::min<uint32_t>(kFullMemoryPages - 1,
                          std::max<uint32_t>(1, target_kw / 4));
   const uint32_t wanted_bytes = pages * 8192u;
-  if (!g_bus->getRAM() || g_bus->get_memory_size() != wanted_bytes) {
-    LOG("kek reset: resizing guest RAM from %u to %u bytes",
-        (unsigned)(g_bus->getRAM() ? g_bus->get_memory_size() : 0),
-        (unsigned)wanted_bytes);
-    g_bus->set_memory_size((int)pages);
+  if (!g_bus->getRAM()) {
+    g_bus->set_memory_size((int)pages, (int)kFullMemoryPages);
+    return;
   }
+  const uint32_t previous_bytes = g_bus->get_memory_size();
+  if (previous_bytes != wanted_bytes) {
+    LOG("kek reset: logical guest RAM %u -> %u bytes (capacity %u)",
+        (unsigned)previous_bytes,
+        (unsigned)wanted_bytes,
+        (unsigned)g_bus->getRAM()->get_capacity());
+  }
+  // Reuses the 2MW slab; does not free/realloc or clear.
+  g_bus->set_memory_size((int)pages);
 }
 
 
@@ -1206,6 +1219,8 @@ void cold_boot() {
   begin_reset_transaction();
   clear_run_state_for_boot();
   apply_target_memory_size();
+  // Single clear of the logical (configured) size only — capacity above
+  // that is retained across resets and left untouched.
   if (g_bus->getRAM())
     g_bus->getRAM()->reset(true);
   invalidate_all_disk_caches();

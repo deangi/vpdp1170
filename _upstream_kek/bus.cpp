@@ -208,16 +208,33 @@ uint32_t bus::translate_unibus_address(const uint32_t a) const
 	return (unibus_map[entry] + offset) & 017777777;
 }
 
-FLASHMEM void bus::set_memory_size(const int n_pages)
+FLASHMEM void bus::set_memory_size(const int n_pages, const int capacity_pages)
 {
 	uint32_t n_bytes = n_pages * 8192l;
+	uint32_t cap_bytes = (capacity_pages > 0 ? (uint32_t)capacity_pages
+	                                        : (uint32_t)n_pages) * 8192l;
+	if (cap_bytes < n_bytes)
+		cap_bytes = n_bytes;
+
+	// Reuse an existing slab whenever it is large enough. This avoids a
+	// free/ps_malloc of multi-megabyte PSRAM on every emulator reset.
+	if (m && m->get_capacity() >= n_bytes) {
+		m->set_logical_size(n_bytes);
+		mmu_->begin(m, c);
+		DOLOG(log_ss::LS_BUS,
+		      "Memory logical size now %u kB (%d pages); capacity %u kB",
+		      n_bytes / 1024, n_pages, m->get_capacity() / 1024);
+		return;
+	}
 
 	delete m;
-	m = new memory(n_bytes);
+	m = new memory(n_bytes, cap_bytes);
 
 	mmu_->begin(m, c);
 
-	DOLOG(log_ss::LS_BUS, "Memory is now %u kB (%d pages)", n_bytes / 1024, n_pages);
+	DOLOG(log_ss::LS_BUS,
+	      "Memory is now %u kB (%d pages); capacity %u kB",
+	      n_bytes / 1024, n_pages, cap_bytes / 1024);
 }
 
 void bus::init()

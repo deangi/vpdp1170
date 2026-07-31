@@ -157,6 +157,12 @@ static void tft_status(int row, const char* label, const char* value, uint16_t c
 }
 
 static void apply_runtime_pdp_config() {
+  // Guest RAM size must track /pdpconfig.ini on every emulator reset, not
+  // only during setup(). Without this, cold_boot() keeps the previous
+  // profile's g_target_memory_kw while the reset banner still prints the
+  // newly loaded cfg.mem_size_kw.
+  pdp_core::set_target_memory_kw((uint32_t)cfg.mem_size_kw);
+
   dd11::set_io_trace((uint32_t)(cfg.diag_io_trace < 0
                                   ? 0 : cfg.diag_io_trace));
   kw11::set_clock_trace((uint32_t)(cfg.diag_clock_trace < 0
