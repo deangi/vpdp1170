@@ -61,26 +61,34 @@ on reset, mount, dismount, reopen, and intersecting writes.
 
 All times below are seconds to the configured completion condition.
 
-| Profile | Pre-cache | Cache run 1 | Cache run 2 | Cache run 3 | Cache median | Median change |
-|---|---:|---:|---:|---:|---:|---:|
-| `rsx11mp46` | 41.449 | 41.132 | 41.075 | 41.029 | 41.075 | -0.9% |
-| `rt11v5` | 29.769 | 28.440 | 29.190 | 30.685 | 29.190 | -1.9% |
-| `unix6` | 5.708 | 4.837 | 4.830 | 16.576 | 4.837 | -15.3% |
-| `11mark` | 18.388 | 16.863 | 16.855 | 26.969 | 16.863 | -8.3% |
-| `rstsv4` | 2.964 | 2.119 | 2.275 | 12.466 | 2.275 | -23.2% |
-| `rsx11m` | 6.100 | 5.682 | 5.744 | 13.034 | 5.744 | -5.8% |
-| `rsx11mp46-pidp` | 47.365 | 46.135 | 45.330 | 53.737 | 46.135 | -2.6% |
-| `xxdp25` | 4.399 | 4.233 | 4.328 | 12.100 | 4.328 | -1.6% |
+| Profile | Pre-cache | Cache run 1 | Cache run 2 | Cache run 3 | Cache run 4 | Initial median | Median change |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `rsx11mp46` | 41.449 | 41.132 | 41.075 | 41.029 | 48.590 | 41.075 | -0.9% |
+| `rt11v5` | 29.769 | 28.440 | 29.190 | 30.685 | 39.168 | 29.190 | -1.9% |
+| `unix6` | 5.708 | 4.837 | 4.830 | 16.576 | 13.468 | 4.837 | -15.3% |
+| `11mark` | 18.388 | 16.863 | 16.855 | 26.969 | 24.215 | 16.863 | -8.3% |
+| `rstsv4` | 2.964 | 2.119 | 2.275 | 12.466 | 11.571 | 2.275 | -23.2% |
+| `rsx11m` | 6.100 | 5.682 | 5.744 | 13.034 | 17.844 | 5.744 | -5.8% |
+| `rsx11mp46-pidp` | 47.365 | 46.135 | 45.330 | 53.737 | 52.572 | 46.135 | -2.6% |
+| `xxdp25` | 4.399 | 4.233 | 4.328 | 12.100 | 11.369 | 4.328 | -1.6% |
 
 The pre-cache suite total was 156.142 seconds. Cache runs 1 and 2 totaled
 149.441 and 149.627 seconds. Run 3 totaled 206.596 seconds and developed a
-systematic host-side timing slowdown from Unix V6 onward, while guest output
-remained correct and the continuous serial log contained no disk, cache,
-odd-PC, or emulator-stop errors. Per-profile medians reduce the influence of
-that outlier and total 150.447 seconds, a 3.6% improvement over the comparison
-baseline.
+systematic host-side timing slowdown from Unix V6 onward. Run 4 totaled
+218.797 seconds and was in the slow timing regime from its first profile.
+Guest output remained correct and all continuous serial logs contained no
+disk, cache, odd-PC, or emulator-stop errors. A long-running host Arduino CLI
+process was present during the slow measurements and ended afterward, so host
+contention and delayed Telnet/USB servicing are plausible contributors.
 
-The three cache suites completed 24 of 24 boots. This is useful stability
+The `Initial median` column is the three-run median calculated before run 4;
+it reduces the influence of run 3 and totals 150.447 seconds, a 3.6%
+improvement over the comparison baseline. Runs 3 and 4 demonstrate that the
+current wall-clock harness has two distinct timing regimes, so the apparent
+cache speedup should be treated as directional until host load and console
+backpressure are controlled.
+
+The four cache suites completed 32 of 32 boots. This is useful stability
 evidence, but it does not prove that the earlier intermittent, sticky PiDP
 odd-PC restart fault is fixed; retain continuous serial capture during future
 suites.
