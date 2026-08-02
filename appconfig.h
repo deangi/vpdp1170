@@ -26,6 +26,21 @@ struct AppConfig {
   uint8_t boot_input[BOOT_INPUT_MAX];
   size_t  boot_input_len = 0;
 
+  // Prompt-driven boot answers. Each step waits for an expect substring in
+  // KL11 console output (case-insensitive), then injects the reply.
+  // INI form:  expect => reply || expect => reply
+  struct BootScriptStep {
+    static const size_t EXPECT_MAX = 96;
+    static const size_t REPLY_MAX  = 64;
+    uint8_t expect[EXPECT_MAX];
+    uint8_t reply[REPLY_MAX];
+    uint8_t expect_len = 0;
+    uint8_t reply_len  = 0;
+  };
+  static const size_t BOOT_SCRIPT_MAX_STEPS = 8;
+  BootScriptStep boot_script[BOOT_SCRIPT_MAX_STEPS];
+  uint8_t boot_script_count = 0;
+
   // [serial1]
   // Enables a second DL11-compatible TTY at 0176500. Its input and output
   // files are connected at runtime through TTY0 VPDP control commands.
@@ -158,7 +173,9 @@ bool config_write_default_wifi(const AppConfig& cfg);        // writes a fresh /
 bool config_write_default_pdp (const AppConfig& cfg);        // writes a fresh /pdpconfig.ini
 void config_apply_compiled_defaults(AppConfig& cfg);         // fills cfg with secrets.h + config.h defaults
 void config_set_boot_input(AppConfig& cfg, const String& encoded);
+void config_set_boot_script(AppConfig& cfg, const String& encoded);
 String config_escape_bytes(const uint8_t* bytes, size_t len);
+String config_format_boot_script(const AppConfig& cfg);
 
 // SD-to-SD byte copy used by the variant picker. Truncates dst.
 bool config_copy_file(const char* src, const char* dst);

@@ -12,7 +12,6 @@ static bool    was_down = false;
 void touch_init(GfxDisplay* display) {
   (void)display;
   ft.begin();
-  LOG("touch: FT6336U firmware id 0x%02X", ft.read_firmware_id());
 }
 
 bool touch_poll(int* x, int* y) {

@@ -38,6 +38,17 @@ TODO:
 25) done 7/28 - Performance: TURBO + -O2/-DNDEBUG; DU0 32KB read cache;
     documented Elecrow CrowPanel slower than Freenove because RGB DMA
     competes with guest RAM for OPI PSRAM bandwidth.
+26) working - Smarter boot_text? - some OS do not buffer up text so you have to wait for it to ask 
+    for like the date/time, etc. Stuff in fixed text, or variable like date/time 
+	boot_script="find => type\r"
+	
+27) note - Arduino builds can be very very slow - one cause might be OneDrive.
+28) note - top MIPS observed in CPU bound task like probing memory on startup - 0.42 MIPS
+29) working - Try boot with programmable clock - some OS may use it.   
+30) working - Try boot with TT1: enabled
+31) See if TT1 stuff is still part of the parsing
+32) Find/Design/test a way to transfer data into/out of guest file system.
+33) Investigate Decnet interface for 11M+?
 
 
 Disk Geometry - DEC, model numbers start with R (RK05), in an OS, individual drives start with D (DK0:)

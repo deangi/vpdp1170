@@ -48,11 +48,8 @@ static bool disk_cache_ensure_locked() {
   if (g_cache_allocation_attempted) return false;
   g_cache_allocation_attempted = true;
 
-  bool in_psram = false;
-  if (psramFound()) {
+  if (psramFound())
     g_cache_storage = static_cast<uint8_t*>(ps_malloc(DISK_CACHE_BYTES));
-    in_psram = g_cache_storage != nullptr;
-  }
   if (!g_cache_storage)
     g_cache_storage = static_cast<uint8_t*>(malloc(DISK_CACHE_BYTES));
   if (!g_cache_storage) {
@@ -62,11 +59,6 @@ static bool disk_cache_ensure_locked() {
 
   for (uint32_t i = 0; i < DISK_CACHE_BLOCK_COUNT; i++)
     g_cache[i].data = g_cache_storage + i * DISK_CACHE_BLOCK_BYTES;
-  LOG("disk cache: %u x %u KB shared blocks (%u KB total, %s)",
-      (unsigned)DISK_CACHE_BLOCK_COUNT,
-      (unsigned)(DISK_CACHE_BLOCK_BYTES / 1024u),
-      (unsigned)(DISK_CACHE_BYTES / 1024u),
-      in_psram ? "PSRAM" : "internal RAM");
   return true;
 }
 

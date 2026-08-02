@@ -89,6 +89,7 @@
 #include "dl11_file.h"
 #include "emu_control.h"
 #include "host_diag.h"
+#include "boot_script.h"
 
 static GfxDisplay tft;
 #if VPDP_HAS_WS2812
@@ -598,6 +599,7 @@ static void start_cpu(bool cold) {
   // Emulator reset is a transaction across both the guest hardware and the
   // host adapters. Clear deferred commands, file-backed terminal state, and
   // guest-facing console queues before the CPU can produce another byte.
+  boot_script_disarm();
   emu_control::init();
   dl11_file::disconnect_all();
   dl11_file::reset();
@@ -619,6 +621,7 @@ static void start_cpu(bool cold) {
     console_key_push(cfg.boot_input[i]);
   if (cfg.boot_input_len)
     LOG("console: injected %u boot input bytes", (unsigned)cfg.boot_input_len);
+  boot_script_arm(cfg);
   console_force_redraw();   // render_task repaints the whole console + status bar
 }
 
@@ -782,9 +785,7 @@ void setup() {
 #else
   tft.setRotation(VPDP_TFT_ROTATION);   // landscape 320x240
 #endif
-  LOG("drawing boot banner");
   tft_banner();
-  LOG("boot banner done");
 
   // PSRAM line first
   {
@@ -832,7 +833,6 @@ void setup() {
   bool selftest_ok = false;
   if (cpu_ok) {
     selftest_ok = pdp_core::selftest();
-    LOG("PDP core selftest: %s", selftest_ok ? "PASS" : "FAIL");
     tft_status(ROW_CPU, "CPU:   ",
                selftest_ok ? "selftest PASS" : "selftest FAIL",
                selftest_ok ? TFT_GREEN : TFT_RED);
@@ -900,9 +900,6 @@ void setup() {
     xTaskCreatePinnedToCore(net_task,    "net",     8192, NULL, 2, NULL, 0);
     bool tft_output_ok = console_start_output_task();
     bool serial_output_ok = kl11::start_serial_output_task();
-    LOG("console sink tasks: TFT=%s USB=%s",
-        tft_output_ok ? "ready" : "FAILED",
-        serial_output_ok ? "ready" : "FAILED");
     if (!tft_output_ok || !serial_output_ok) {
       LOGE("console sink task creation failed; PDP-11 start cancelled");
       led(32, 0, 0);
@@ -1001,6 +998,7 @@ void loop() {
   // are allowed to block briefly without stalling an emulated UART register.
   emu_control::poll();
   telnet_shell_poll();
+  boot_script_poll();
   if (emu_control::consume_reboot_request()) {
     LOG("EMU command: reboot PDP-11 from /pdpconfig.ini");
     dl11_file::disconnect_all();
@@ -1053,6 +1051,7 @@ void loop() {
   if (ui_is_open()) {
     emu_control::poll();
     telnet_shell_poll();
+    boot_script_poll();
     ftp_poll();
     delay(8);
     return;
@@ -1066,6 +1065,7 @@ void loop() {
     ftp_poll();                  // accept + FTP commands/data against SD root
     emu_control::poll();
     telnet_shell_poll();
+    boot_script_poll();
     poll_pcping();
     pdp_core::run(1000);
     poll_pcping();
@@ -1073,6 +1073,7 @@ void loop() {
   ftp_poll();
   emu_control::poll();
   telnet_shell_poll();
+  boot_script_poll();
 
   poll_pcping();
 

@@ -73,31 +73,29 @@ static String unquote_config_value(const String& val) {
   return val;
 }
 
-void config_set_boot_input(AppConfig& cfg, const String& encoded) {
-  cfg.boot_input_len = 0;
-  String s = unquote_config_value(encoded);
-
-  for (int i = 0; i < (int)s.length() &&
-                  cfg.boot_input_len < AppConfig::BOOT_INPUT_MAX; i++) {
-    uint8_t out = (uint8_t)s[i];
+// Decode escaped console text into raw bytes (shared by boot_input / boot_script).
+static size_t decode_escaped_bytes(const String& s, uint8_t* out, size_t out_max) {
+  size_t n = 0;
+  for (int i = 0; i < (int)s.length() && n < out_max; i++) {
+    uint8_t b = (uint8_t)s[i];
 
     if (s[i] == '^' && i + 1 < (int)s.length()) {
       char c = s[++i];
-      if (c == '?') out = 0x7f;
-      else          out = ((uint8_t)c) & 0x1f;
+      if (c == '?') b = 0x7f;
+      else          b = ((uint8_t)c) & 0x1f;
     } else if (s[i] == '\\' && i + 1 < (int)s.length()) {
       char c = s[++i];
       switch (c) {
-        case 'r': out = '\r'; break;
-        case 'n': out = '\n'; break;
-        case 't': out = '\t'; break;
-        case 'b': out = '\b'; break;
-        case 'f': out = '\f'; break;
-        case 'e': out = 0x1b; break;
-        case 's': out = ' ';  break;
-        case '\\': out = '\\'; break;
-        case '"': out = '"'; break;
-        case '\'': out = '\''; break;
+        case 'r': b = '\r'; break;
+        case 'n': b = '\n'; break;
+        case 't': b = '\t'; break;
+        case 'b': b = '\b'; break;
+        case 'f': b = '\f'; break;
+        case 'e': b = 0x1b; break;
+        case 's': b = ' ';  break;
+        case '\\': b = '\\'; break;
+        case '"': b = '"'; break;
+        case '\'': b = '\''; break;
         case 'x': {
           int v = 0;
           int digits = 0;
@@ -108,7 +106,7 @@ void config_set_boot_input(AppConfig& cfg, const String& encoded) {
             i++;
             digits++;
           }
-          out = (uint8_t)v;
+          b = (uint8_t)v;
           break;
         }
         default:
@@ -121,16 +119,100 @@ void config_set_boot_input(AppConfig& cfg, const String& encoded) {
               i++;
               digits++;
             }
-            out = (uint8_t)v;
+            b = (uint8_t)v;
           } else {
-            out = (uint8_t)c;
+            b = (uint8_t)c;
           }
           break;
       }
     }
 
-    cfg.boot_input[cfg.boot_input_len++] = out;
+    out[n++] = b;
   }
+  return n;
+}
+
+void config_set_boot_input(AppConfig& cfg, const String& encoded) {
+  cfg.boot_input_len = decode_escaped_bytes(unquote_config_value(encoded),
+                                            cfg.boot_input,
+                                            AppConfig::BOOT_INPUT_MAX);
+}
+
+static String trim_local(const String& s) {
+  int a = 0, b = (int)s.length();
+  while (a < b && isspace((uint8_t)s[a])) a++;
+  while (b > a && isspace((uint8_t)s[b - 1])) b--;
+  return s.substring(a, b);
+}
+
+void config_set_boot_script(AppConfig& cfg, const String& encoded) {
+  cfg.boot_script_count = 0;
+  String s = unquote_config_value(encoded);
+  s = trim_local(s);
+  if (s.length() == 0) return;
+
+  int start = 0;
+  while (start <= (int)s.length() &&
+         cfg.boot_script_count < AppConfig::BOOT_SCRIPT_MAX_STEPS) {
+    int sep = -1;
+    for (int i = start; i + 1 < (int)s.length(); i++) {
+      if (s[i] == '|' && s[i + 1] == '|') {
+        sep = i;
+        break;
+      }
+    }
+    String step = (sep < 0) ? s.substring(start) : s.substring(start, sep);
+    step = trim_local(step);
+    if (step.length() > 0) {
+      int arrow = step.indexOf("=>");
+      if (arrow < 0) {
+        LOGE("boot_script: step %u missing '=>' separator: %s",
+             (unsigned)cfg.boot_script_count, step.c_str());
+      } else {
+        String expect_s = trim_local(step.substring(0, arrow));
+        String reply_s  = trim_local(step.substring(arrow + 2));
+        AppConfig::BootScriptStep& out =
+            cfg.boot_script[cfg.boot_script_count];
+        out.expect_len = (uint8_t)decode_escaped_bytes(
+            expect_s, out.expect, AppConfig::BootScriptStep::EXPECT_MAX);
+        out.reply_len = (uint8_t)decode_escaped_bytes(
+            reply_s, out.reply, AppConfig::BootScriptStep::REPLY_MAX);
+        if (out.expect_len == 0 && out.reply_len == 0) {
+          LOGE("boot_script: ignoring empty step %u",
+               (unsigned)cfg.boot_script_count);
+        } else {
+          cfg.boot_script_count++;
+        }
+      }
+    }
+    if (sep < 0) break;
+    start = sep + 2;
+  }
+
+  // Warn if more steps were provided than we can store.
+  if (start < (int)s.length()) {
+    for (int i = start; i + 1 < (int)s.length(); i++) {
+      if (s[i] == '|' && s[i + 1] == '|') {
+        LOGE("boot_script: truncated to %u steps (max %u)",
+             (unsigned)AppConfig::BOOT_SCRIPT_MAX_STEPS,
+             (unsigned)AppConfig::BOOT_SCRIPT_MAX_STEPS);
+        break;
+      }
+    }
+  }
+}
+
+String config_format_boot_script(const AppConfig& cfg) {
+  String out;
+  for (uint8_t i = 0; i < cfg.boot_script_count; i++) {
+    if (i) out += " || ";
+    out += config_escape_bytes(cfg.boot_script[i].expect,
+                               cfg.boot_script[i].expect_len);
+    out += " => ";
+    out += config_escape_bytes(cfg.boot_script[i].reply,
+                               cfg.boot_script[i].reply_len);
+  }
+  return out;
 }
 
 String config_escape_bytes(const uint8_t* bytes, size_t len) {
@@ -214,6 +296,7 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.telnet_port    = TELNET_PORT;
 
   cfg.boot_input_len = 0;
+  cfg.boot_script_count = 0;
   cfg.serial1_enabled = false;
 
   cfg.ftp_enabled    = true;
@@ -280,6 +363,8 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
   } else if (section == "console") {
     if      (key == "boot_input" || key == "typeahead" || key == "boot_keys")
       config_set_boot_input(cfg, val);
+    else if (key == "boot_script")
+      config_set_boot_script(cfg, val);
   } else if (section == "serial1") {
     if      (key == "enabled") cfg.serial1_enabled = truthy(val);
   } else if (section == "ftp") {
@@ -450,6 +535,7 @@ static void reset_pdp_reload_state(AppConfig& cfg) {
   cfg.title = defaults.title;
   cfg.mem_size_kw = defaults.mem_size_kw;
   cfg.boot_input_len = 0;
+  cfg.boot_script_count = 0;
   cfg.serial1_enabled = defaults.serial1_enabled;
 
   cfg.diag_pcping_sec = defaults.diag_pcping_sec;
@@ -550,6 +636,10 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println("; PDP-11 boot/reset. Escapes: \\r \\n \\t \\e \\xHH \\ooo ^C ^[ ^?.");
   f.printf("boot_input = \"%s\"\r\n",
            config_escape_bytes(cfg.boot_input, cfg.boot_input_len).c_str());
+  f.println("; boot_script waits for prompt text (case-insensitive), then");
+  f.println("; injects the reply. Steps: expect => reply || expect => reply");
+  f.printf("boot_script = \"%s\"\r\n",
+           config_format_boot_script(cfg).c_str());
   f.println();
   f.println("[serial1]");
   f.println("; Optional second DL11-compatible TTY at 0176500. The TTY0 VPDP");
@@ -760,6 +850,10 @@ void config_print(const AppConfig& cfg) {
   LOG("[console] boot_input=\"%s\" (%u bytes)",
       config_escape_bytes(cfg.boot_input, cfg.boot_input_len).c_str(),
       (unsigned)cfg.boot_input_len);
+  LOG("[console] boot_script=\"%s\" (%u step%s)",
+      config_format_boot_script(cfg).c_str(),
+      (unsigned)cfg.boot_script_count,
+      cfg.boot_script_count == 1 ? "" : "s");
   LOG("[serial1] enabled=%s  CSR=776500  RX-vector=300  TX-vector=304",
       cfg.serial1_enabled ? "true" : "false");
   LOG("[ftp]     enabled=%s  port=%d  user=\"%s\" (password=%d chars)",

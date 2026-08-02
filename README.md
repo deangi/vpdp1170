@@ -255,7 +255,8 @@ enabled = true
 port    = 23
 
 [console]
-boot_input = ""               ; e.g. "unix\r" or "^CSTART\r"
+boot_input  = ""              ; e.g. "unix\r" or "^CSTART\r" (immediate typeahead)
+boot_script = ""              ; e.g. "login: => root\r || Password: => \r"
 
 [serial1]
 enabled = false               ; TT1 file-backed DL11 at 0176500
@@ -316,8 +317,10 @@ M9312-style boot ROM still boot from RK0 or RL0.
 - The TFT console comes up at boot; the same byte stream is available
   via `telnet <board-ip> 23` and on USB serial (115200 baud).
 - `/pdpconfig.ini` `[console] boot_input` can pre-load keystrokes after
-  each PDP-11 boot/reset. It accepts escapes such as `\r`, `\n`, `\e`,
-  `\x03`, `\033`, `^C`, `^[`, and `^?`.
+  each PDP reboot (typeahead). `boot_script` waits for prompt text
+  (case-insensitive) and injects replies: `expect => reply || ...`.
+  Both accept escapes such as `\r`, `\n`, `\e`, `\x03`, `\033`, `^C`,
+  `^[`, and `^?`.
 - The SD card root is available over FTP at `ftp://<board-ip>:21/`
   using the `[ftp]` credentials in `/wificonfig.ini`.
 - **Settings menu:** tap the screen or press the onboard button. From
@@ -370,7 +373,7 @@ or 10,485,760 bytes for RL02.
 
 `set` with no arguments displays the runtime-changeable settings. Supported
 assignments are `pcping`, `serialdelay`, `io_trace`, `clock_trace`,
-`console_trace`, `trace`, `break`, `title`, and `boot_input`;
+`console_trace`, `trace`, `break`, `title`, `boot_input`, and `boot_script`;
 `boot_text` is accepted as an alias for `boot_input`. For example:
 
 ```text
@@ -381,10 +384,11 @@ set console_trace=100
 set trace=false
 set break=04642
 set boot_input="hello\r"
+set boot_script="login: => root\r"
 ```
 
 These changes are not written to `/pdpconfig.ini` and are lost when the ESP32
-restarts. `boot_input` takes effect on the next PDP-11 reboot. `break` is also
+restarts. `boot_input` and `boot_script` take effect on the next PDP-11 reboot. `break` is also
 readable from `[diag] break=` in `/pdpconfig.ini` so it can be armed before
 early boot.
 

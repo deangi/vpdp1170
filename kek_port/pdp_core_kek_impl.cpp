@@ -294,7 +294,6 @@ static host_slot_disk_backend* g_du_backend = nullptr;
 static host_slot_disk_backend* du_backend() {
   if (!g_du_backend) {
     g_du_backend = new host_slot_disk_backend(DRIVE_DU0, "DU0");
-    LOG("kek DU0 media uses shared multi-block read cache");
   }
   return g_du_backend;
 }
@@ -328,8 +327,6 @@ static bool ensure_uda50_attached() {
   g_uda50->attach_media(nullptr, uda_media_read, uda_media_write, uda_media_size);
   g_bus->add_UDA50(g_uda50);
   g_uda50->set_trace(g_du_trace_count, nullptr, uda_trace_log);
-  LOG("kek UDA50 attached at 0172150-0172152, DU0 mounted=%d bytes=%u",
-      disk_is_mounted(DRIVE_DU0) ? 1 : 0, (unsigned)disk_size_bytes(DRIVE_DU0));
   return true;
 }
 
@@ -1344,19 +1341,8 @@ static bool diagnostic_run_required() {
 uint32_t run(uint32_t max_cycles) {
   // Select once per host slice; run_clean has no per-instruction diagnostic
   // operations or branches after template specialization.
-  const bool diagnostic = diagnostic_run_required();
-  static bool last_diagnostic = false;
-  static bool logged_path = false;
-  if (!logged_path || diagnostic != last_diagnostic) {
-    LOG("kek run path: %s (trace=%d rp_hist=%d live=%u)",
-        diagnostic ? "diagnostic" : "clean",
-        g_trace_enabled ? 1 : 0,
-        g_rp_trace_history_active ? 1 : 0,
-        (unsigned)g_trace_remaining);
-    last_diagnostic = diagnostic;
-    logged_path = true;
-  }
-  return diagnostic ? run_diagnostic(max_cycles) : run_clean(max_cycles);
+  return diagnostic_run_required() ? run_diagnostic(max_cycles)
+                                   : run_clean(max_cycles);
 }
 
 bool selftest() {
@@ -1381,9 +1367,6 @@ bool selftest() {
 
   const bool cpu_ok = g_cpu->get_register(0) == 0000005 &&
                       g_cpu->get_register(1) == 0000014;
-  LOG("kek UDA50 transport selftest: %s", uda_transport_ok ? "PASS" : "FAIL");
-  LOG("kek UDA50 MSCP selftest: %s", uda_mscp_ok ? "PASS" : "FAIL");
-  LOG("kek UDA50 media DMA selftest: %s", uda_media_ok ? "PASS" : "FAIL");
   return cpu_ok && uda_transport_ok && uda_mscp_ok && uda_media_ok;
 }
 

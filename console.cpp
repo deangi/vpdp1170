@@ -116,8 +116,6 @@ void console_init() {
       vTaskDelay(1);
   } else {
     g_tft_out.init(tft_out_storage, sizeof(tft_out_storage));
-    LOG("console TFT FIFO: %u KB internal RAM",
-        (unsigned)(sizeof(tft_out_storage) / 1024));
   }
 
   portENTER_CRITICAL(&g_con_mux);

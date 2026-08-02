@@ -4,6 +4,7 @@
 // FIFOs, serialdelay gate, VPDP escape-channel parser, and USB-Serial drain.
 #include "kl11.h"
 
+#include "boot_script.h"
 #include "console.h"
 #include "emu_control.h"
 #include "fifo.h"
@@ -85,8 +86,6 @@ static void ensure_serial_out() {
   if (g_serial_out_inited) return;
   g_serial_out.init(serial_out_storage, sizeof(serial_out_storage));
   g_serial_out_inited = true;
-  LOG("console USB FIFO: %u KB internal RAM",
-      (unsigned)(sizeof(serial_out_storage) / 1024));
 }
 
 static void ensure_control_reply() {
@@ -232,6 +231,7 @@ bool pop_priority_input(uint8_t* out) {
 }
 
 static void emit_console_byte(uint8_t out) {
+  boot_script_observe(out);
   console_feed(out);
   telnet_write(out);
   queue_serial_out(out);

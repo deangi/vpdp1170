@@ -338,6 +338,10 @@ static void show_runtime_settings() {
   output_printf("boot_input=\"%s\"\r\n",
                 config_escape_bytes(cfg.boot_input,
                                     cfg.boot_input_len).c_str());
+  output_printf("boot_script=\"%s\" (%u step%s)\r\n",
+                config_format_boot_script(cfg).c_str(),
+                (unsigned)cfg.boot_script_count,
+                cfg.boot_script_count == 1 ? "" : "s");
 }
 
 static void command_tty_stats() {
@@ -561,6 +565,14 @@ static void command_set(char* arguments) {
                   config_escape_bytes(cfg.boot_input,
                                       cfg.boot_input_len).c_str(),
                   (unsigned)cfg.boot_input_len);
+    return;
+  }
+  if (!strcasecmp(name, "boot_script")) {
+    config_set_boot_script(cfg, String(value));
+    output_printf("boot_script=\"%s\" (%u step%s; next PDP reboot, runtime only)\r\n",
+                  config_format_boot_script(cfg).c_str(),
+                  (unsigned)cfg.boot_script_count,
+                  cfg.boot_script_count == 1 ? "" : "s");
     return;
   }
   output_printf("error: setting is not runtime-changeable: %s\r\n", name);

@@ -188,6 +188,7 @@ title = PDP 11/70
 
 [console]
 boot_input = ""
+boot_script = ""
 
 [serial1]
 enabled = false
@@ -226,10 +227,23 @@ file keys.
 
 | Key | Values | Description |
 | --- | --- | --- |
-| `boot_input` | Quoted escaped text | Bytes injected into the KL11 input queue after each PDP-11 boot or reset. |
+| `boot_input` | Quoted escaped text | Bytes injected into the KL11 input queue after each PDP-11 boot or reset (typeahead). |
+| `boot_script` | Quoted step list | Prompt-driven answers. Each step waits for expect text in console output (case-insensitive), then injects the reply. |
 
-Accepted aliases for compatibility are `typeahead` and `boot_keys`, but
-`boot_input` is the canonical key.
+Accepted aliases for `boot_input` compatibility are `typeahead` and `boot_keys`, but
+`boot_input` is the canonical key. `boot_text` remains a Telnet alias for `boot_input`.
+
+`boot_script` syntax:
+
+```text
+expect => reply || expect => reply || ...
+```
+
+Up to 8 steps. Expect and reply use the same escapes as `boot_input`. Matching is
+always case-insensitive against KL11 console output. After a match, the reply is
+delayed by 500 ms so the guest can finish printing and accept input.
+`boot_input` (if set) is still injected immediately at reboot; `boot_script`
+then answers later prompts.
 
 Supported escapes:
 
@@ -257,6 +271,8 @@ Examples:
 boot_input = "unix\r"
 boot_input = "^CSTART\r"
 boot_input = "\x03START\r"
+boot_script = "Please enter time and date (HH:MM DD-MMM-YY) [S]: => 10:00 01-JAN-88\r || ENTER LINE WIDTH => 80\r"
+boot_script = "OPTION? => START\r || DD-MON-YY? => 1-JAN-79\r || HH:MM? => 00:00\r || ENABLE CRASH DUMP? => Y\r"
 ```
 
 ### `[serial1]`
@@ -377,12 +393,20 @@ controller initialization and I/O while diagnosing a boot.
 
 ### Startup Console Input
 
-Use `boot_input` to type the first boot command automatically. For example,
-UNIX V6 can be started with:
+Use `boot_input` for immediate typeahead (guests that buffer input), or
+`boot_script` when the OS only accepts answers after printing a prompt.
+For example, UNIX V6 can be started with:
 
 ```ini
 [console]
 boot_input = "unix\r"
+```
+
+RSX-style time/date (prompt-driven):
+
+```ini
+[console]
+boot_script = "Please enter time and date (HH:MM DD-MMM-YY) [S]: => 10:00 01-JAN-88\r || ENTER LINE WIDTH => 80\r"
 ```
 
 ## Network Services
@@ -493,8 +517,8 @@ Flush and offline/dismount the guest device before issuing the shell
 execution while the SD card is written.
 
 The runtime-changeable settings are `pcping`, `serialdelay`, `io_trace`,
-`clock_trace`, `console_trace`, `trace`, `break`, `title`, and `boot_input`.
-`boot_text` is accepted as an alias for `boot_input`.
+`clock_trace`, `console_trace`, `trace`, `break`, `title`, `boot_input`, and
+`boot_script`. `boot_text` is accepted as an alias for `boot_input`.
 
 ```text
 set
@@ -507,10 +531,11 @@ set trace=false
 set break=04642
 set title="PDP 11/70"
 set boot_input="hello\r"
+set boot_script="Please enter time and date => 10:00 01-JAN-88\r"
 ```
 
-The settings take effect immediately except `boot_input`, which is injected on
-the next PDP-11 reboot. `break` can also be set in `[diag]` so it is armed
+The settings take effect immediately except `boot_input` and `boot_script`,
+which are applied on the next PDP-11 reboot. `break` can also be set in `[diag]` so it is armed
 before early boot. They are not saved to `/pdpconfig.ini` and are lost
 when the ESP32 restarts. Hardware-discovery settings such as TT1, KW11-P, and
 compatibility mode still require editing the configuration file and restarting
