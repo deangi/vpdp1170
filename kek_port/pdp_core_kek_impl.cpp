@@ -218,9 +218,36 @@ static void write_physical_bytes(uint32_t address, const char* text) {
   }
 }
 
+static void detach_rk05() {
+  if (!g_rk05) return;
+  if (g_bus)
+    g_bus->add_rk05(nullptr);  // bus deletes the device
+  else
+    delete g_rk05;
+  g_rk05 = nullptr;
+  LOG("kek RK05 detached (RK0 not mounted)");
+}
+
+static void detach_rl02() {
+  if (!g_rl02) return;
+  if (g_bus)
+    g_bus->add_rl02(nullptr);
+  else
+    delete g_rl02;
+  g_rl02 = nullptr;
+  LOG("kek RL02 detached (no DL media mounted)");
+}
+
 static bool ensure_rk05_attached() {
   if (!g_bus) return false;
-  if (!disk_is_mounted(DRIVE_RK0)) return false;
+  // RSTS V7 (RL-only) and similar leave rk0 blank. A sticky RK05 left over
+  // from an earlier RT-11 / RSTS V4B session still answers at 177400 and can
+  // raise BR5 vector 220 — RSTS then halts with "Unexpected trap through
+  // the vector at 000220". Detach whenever RK0 media is absent.
+  if (!disk_is_mounted(DRIVE_RK0)) {
+    detach_rk05();
+    return false;
+  }
   if (g_rk05) return true;
 
   g_rk05 = new rk05(g_bus, &g_disk_read_activity, &g_disk_write_activity);
@@ -235,7 +262,6 @@ static bool ensure_rk05_attached() {
 
 static bool ensure_rl02_attached() {
   if (!g_bus) return false;
-  if (g_rl02) return true;
 
   bool any_mounted = false;
   for (int slot = DRIVE_A; slot <= DRIVE_D; slot++) {
@@ -244,7 +270,11 @@ static bool ensure_rl02_attached() {
       break;
     }
   }
-  if (!any_mounted) return false;
+  if (!any_mounted) {
+    detach_rl02();
+    return false;
+  }
+  if (g_rl02) return true;
 
   g_rl02 = new rl02(g_bus, &g_disk_read_activity, &g_disk_write_activity);
   if (!g_rl02) return false;
@@ -263,8 +293,37 @@ static bool ensure_rl02_attached() {
   return true;
 }
 
+static void detach_rp06() {
+  if (!g_rp06) return;
+  if (g_bus)
+    g_bus->add_RP06(nullptr);  // bus deletes the device
+  else
+    delete g_rp06;
+  g_rp06 = nullptr;
+  LOG("kek RP06/RP07 detached (RP0 not mounted)");
+}
+
+static void detach_uda50() {
+  if (!g_uda50) return;
+  if (g_bus)
+    g_bus->add_UDA50(nullptr);
+  else
+    delete g_uda50;
+  g_uda50 = nullptr;
+  LOG("kek UDA50 detached (DU0 not mounted)");
+}
+
 static bool ensure_rp06_attached() {
   if (!g_bus) return false;
+
+  // Same sticky-device hazard as RK05: an always-present RH70/RP06 at
+  // 176700 makes RSTS INIT probe Massbus interrupts / floating CSRs that
+  // Chuck Cranor's RL-only SIMH config never exposes. Detach when RP0 is
+  // blank so RL-only boots match the disk's intended machine.
+  if (!disk_is_mounted(DRIVE_RP0)) {
+    detach_rp06();
+    return false;
+  }
 
   // Rebuild when pdpconfig changes RP geometry. The old implementation kept
   // the first-created RP06/RP07 geometry across every emulator reboot.
@@ -319,15 +378,22 @@ static void uda_trace_log(void *, const char *line) {
 
 static bool ensure_uda50_attached() {
   if (!g_bus) return false;
+
+  // MSCP CSR presence shifts RSTS floating-address probes. Only claim the
+  // UDA50 window when DU0 media is mounted (same policy as RK/RP/RL).
+  if (!disk_is_mounted(DRIVE_DU0)) {
+    detach_uda50();
+    return false;
+  }
   if (g_uda50) return true;
 
-  // Phase 1 registers the controller even though no DU media backend or
-  // MSCP command processor is present yet.
   g_uda50 = new uda50(g_bus);
   if (!g_uda50) return false;
   g_uda50->attach_media(nullptr, uda_media_read, uda_media_write, uda_media_size);
   g_bus->add_UDA50(g_uda50);
   g_uda50->set_trace(g_du_trace_count, nullptr, uda_trace_log);
+  LOG("kek UDA50 attached to host DU0 slot: %s (%u bytes)",
+      disk_path(DRIVE_DU0), (unsigned)disk_size_bytes(DRIVE_DU0));
   return true;
 }
 
@@ -1350,10 +1416,17 @@ uint32_t run(uint32_t max_cycles) {
 
 bool selftest() {
   if (!init()) return false;
-  if (!ensure_uda50_attached()) return false;
-  const bool uda_transport_ok = g_uda50->transport_selftest();
-  const bool uda_mscp_ok = g_uda50->mscp_selftest();
-  const bool uda_media_ok = g_uda50->media_selftest();
+
+  // UDA/MSCP checks only when DU0 media is present. RL-only configs (RSTS7)
+  // intentionally leave DU0 blank; requiring UDA here used to skip telnet
+  // and guest boot entirely after detach-when-unmounted.
+  bool uda_ok = true;
+  if (ensure_uda50_attached()) {
+    const bool uda_transport_ok = g_uda50->transport_selftest();
+    const bool uda_mscp_ok = g_uda50->mscp_selftest();
+    const bool uda_media_ok = g_uda50->media_selftest();
+    uda_ok = uda_transport_ok && uda_mscp_ok && uda_media_ok;
+  }
 
   g_cpu->reset();
   g_cpu->setPC(01000);
@@ -1370,7 +1443,7 @@ bool selftest() {
 
   const bool cpu_ok = g_cpu->get_register(0) == 0000005 &&
                       g_cpu->get_register(1) == 0000014;
-  return cpu_ok && uda_transport_ok && uda_mscp_ok && uda_media_ok;
+  return cpu_ok && uda_ok;
 }
 
 

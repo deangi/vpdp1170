@@ -34,7 +34,7 @@ TODO:
 21) Investigate things to move to 11/40 project
 22) Investigate ways to "escape" from serial to inject shell commands and monitor commands
 23) done - Boot large PiDP 1Gb image
-24) future - boot unix7 and 211bsd
+24) done 8/2 - boot unix7 and 211bsd - FP11 fixes
 25) done 7/28 - Performance: TURBO + -O2/-DNDEBUG; DU0 32KB read cache;
     documented Elecrow CrowPanel slower than Freenove because RGB DMA
     competes with guest RAM for OPI PSRAM bandwidth.
@@ -49,6 +49,28 @@ TODO:
 31) See if TT1 stuff is still part of the parsing
 32) Find/Design/test a way to transfer data into/out of guest file system.
 33) Investigate Decnet interface for 11M+?
+
+
+8/3 - Boot status
+Name            drive   status     OS name     comments
+---------       ------  ---------  -------     ---------------------
+RSX11M46        RL02    working    RSX11M 4.6  has boot_script
+RT11V5          RK05    working    RT11 5.04   boot_text works
+UNIX6           RK05    working    Unix V6     has boot script
+UNIX7           RL02    working    Unix V7     needs boot script
+XXDP22          RL02    working    XXDP 2.2    has boot script
+XXDP25          RL02    working    XXDP 2.5    boot script not needed
+11MARK          RL02    working    RSX11M 4.8  has boot script
+211BSD          RL02    working    BSD 2.11 #3 needs boot script
+DOSBATCH11      RK05    working    V10-01A     needs boot script
+RSTSV4B         RK05    working    V04B-17     boot_text working
+RSX11M          RL02    working    RSX11M V4.0 boot script not needed 28kw base version
+RSX11MP46-PIDP  DU0     working    RSX11M+4.6  has boot script
+BSD211-PiDP     DU0     crash                  crash - odd PC at 10067
+211BSD-RP0      RP0     working    BSD 2.11 #5 needs boot script
+RSTSV7          RL01    working    RSTS/E V7   boots to Ready (8/3: RL IRQ, LP11, parity NXM)
+RSTSV7-FULL     RL01    working    RSTS/E V7   same as RSTSV7
+
 
 
 Disk Geometry - DEC, model numbers start with R (RK05), in an OS, individual drives start with D (DK0:)

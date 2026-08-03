@@ -20,9 +20,12 @@
 #define RL02_BAR 0174402  // bus address register
 #define RL02_DAR 0174404  // disk address register
 #define RL02_MPR 0174406  // multi purpose register
-#define RL02_BAE 0174410  // bus address extension register (RLV12-style)
+#define RL02_BAE 0174410  // bus address extension (RLV12/Q22 only)
 #define RL02_BASE  RL02_CSR
-#define RL02_END  (RL02_BAE + 2)
+// Unibus RL11 (PDP-11/70): registers stop at MPR. SIMH returns NXM for
+// RLBAE on Unibus/RLV11; answering BAE made RSTS INIT treat us as RLV12
+// and then fatal on the vector-160 interrupt probe.
+#define RL02_END  (RL02_MPR + 2)
 
 constexpr const int rl02_sectors_per_track = 40;
 constexpr const int rl02_track_count       = 512;
@@ -31,6 +34,9 @@ constexpr const int rl02_xfer_buffer_bytes = 4096;
 
 void rl02_set_trace(int count);
 int rl02_trace_remaining();
+#if defined(ESP32)
+void rl02_trace_vector_write(uint32_t pa, uint16_t value, uint16_t va);
+#endif
 
 class bus;
 
@@ -59,7 +65,14 @@ private:
 	int             deferred_service_delay { -1 };
 #if defined(ESP32)
 	int             irq_pending_ticks    { 0 };
-	static constexpr int IRQ_DELAY_TICKS = 2;
+	int             irq_spl_ok_ticks     { 0 };
+	// RSTS INIT: GETSTAT+IE completes under high SPL; later SPL drops and
+	// the poll loop at ~067xxx expects BR5. Deliver only when both are true
+	// (SPL < 5 and PC in the high poll range), after a short arm delay so
+	// the "expecting vector 160" flag is set. Too early → unexpected 160;
+	// never delivered → "does not interrupt" then unexpected 4.
+	static constexpr int IRQ_DELAY_TICKS = 96;
+	static constexpr int IRQ_SPL_ARM_TICKS = 3;
 #endif
 
 	abool *const disk_read_activity  { nullptr };

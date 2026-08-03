@@ -33,7 +33,8 @@
 #define ADDR_LFC  0177546  // line frequency
 #define ADDR_MAINT 0177750
 #define ADDR_CONSW 0177570
-#define ADDR_LP11CSR 0177514  // printer
+#define ADDR_LP11CSR 0177514  // printer CSR (LP11)
+#define ADDR_LP11DB  0177516  // printer data buffer
 
 #define ADDR_PSW      0177776
 #define ADDR_STACKLIM 0177774

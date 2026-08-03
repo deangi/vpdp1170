@@ -63,7 +63,9 @@ static uint32_t period_instr(uint8_t rate_idx)
 
 bool contains(uint16_t addr)
 {
-  return addr >= CSR_ADDR && addr < END_ADDR;
+  // When disabled, do not claim the CSR window — return NXM so guests
+  // (RSTS INIT) treat KW11-P as absent instead of "doesn't work".
+  return kwp::enabled && addr >= CSR_ADDR && addr < END_ADDR;
 }
 
 static uint8_t rate_index()

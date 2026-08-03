@@ -95,7 +95,6 @@ private:
 	console     *cnsl        { nullptr };
 
 	bool     check_pending_interrupts() const;  // needs the 'qi_lock'-lock
-	void     execute_any_pending_interrupt();
 	template <bool Diagnostic>
 	bool     step_impl();
 
@@ -183,6 +182,7 @@ public:
 	bool has_queued_interrupt(const uint8_t level, const uint16_t vector);
 	std::array<std::set<uint16_t>, 8> get_queued_interrupts() const;
 	bool check_if_interrupts_pending() const;
+	void execute_any_pending_interrupt();
 
 	void trap(uint16_t vector, const int new_ipl = -1, const bool is_interrupt = false);
 	void trap_at_current_pc(uint16_t vector);

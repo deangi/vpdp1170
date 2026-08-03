@@ -25,6 +25,7 @@
 #include "../kek_kwp.h"
 #include "../kw11.h"
 #include "../platform.h"
+#include "rl02.h"
 #endif
 
 
@@ -470,10 +471,15 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 		return word_mode == wm_byte ? kek_kwp::read_byte(a) : kek_kwp::read_word(a);
 #endif
 
-	if (a == ADDR_LP11CSR) { // printer, CSR register, LP11
-		uint16_t temp = 0x80;
+	if (a == ADDR_LP11CSR) { // printer CSR — DONE always set
+		uint16_t temp = 0200;
 		DOLOG(log_ss::LS_BUS_IO, "READ-I/O LP11 CSR: %o", temp);
 		return temp;
+	}
+
+	if (a == ADDR_LP11DB) { // printer data buffer (discard)
+		DOLOG(log_ss::LS_BUS_IO, "READ-I/O LP11 DB: 0");
+		return 0;
 	}
 
 	/// MMU ///
@@ -496,10 +502,9 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 	if (a >= ADDR_UNIBUS_MAP_START && a <= ADDR_UNIBUS_MAP_END)
 		return read_unibus_map_register(a, word_mode);
 
-	if (a >= 0172100 && a <= 0172137) {  // MM11-LP parity
-		DOLOG(log_ss::LS_BUS_IO, "READ-I/O MM11-LP parity (%06o): %o", a, 1);
-		return 1;
-	}
+	// No MM11-LP / MS11 parity CSRs (172100-172137). A prior stub returned
+	// 1 on read, which made RSTS INIT report "Parity CSR found, but not
+	// relating to memory" and fatal during START. Real absence is NXM.
 
 	if (word_mode == wm_byte) {
 		if (a == ADDR_PSW) { // PSW
@@ -644,6 +649,13 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 
 	const uint32_t physical_io_addr = mmu_->get_io_base() + ((uint32_t)a - 0160000);
 	DOLOG(log_ss::LS_BUS_IO, "READ-I/O UNHANDLED read %08o/%06o (%c), (base: %o)", physical_io_addr, a, word_mode == wm_byte ? 'B' : ' ', mmu_->get_io_base());
+#if defined(ESP32)
+	if (rl02_trace_remaining() > 0) {
+		// Visible on USB serial during RSTS bring-up (vector-4 / NXM hunts).
+		LOG("kek NXM-READ io=%06o phys=%08o pc=%06o",
+				(unsigned)a, (unsigned)physical_io_addr, (unsigned)c->getPC());
+	}
+#endif
 
 	mmu_->setCPUERRBit(4);  // CPUE_TMO = 0020
 	c->trap(004, -1, true);  // no-such-I/O probes must resume after the faulting instruction
@@ -874,6 +886,19 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 		return false;
 	}
 
+	// LP11 stub: reads already report DONE. Writes must not NXM — RSTS INIT
+	// probes LP0 at 177514 after RL, and a write timeout there is fatal
+	// (unlike deliberate NXM probes). Leave interrupt unimplemented for now;
+	// INIT will disable a non-interrupting LP and continue.
+	if (a == ADDR_LP11CSR) {
+		DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O LP11 CSR: %06o", value);
+		return false;
+	}
+	if (a == ADDR_LP11DB) {
+		DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O LP11 DB: %06o", value);
+		return false;
+	}
+
 #if defined(ESP32)
 	if (kek_kwp::contains(a)) {
 		word_mode == wm_byte ? kek_kwp::write_byte(a, value) : kek_kwp::write_word(a, value);
@@ -932,11 +957,6 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 		return false;
 	}
 
-	if (a >= 0172100 && a <= 0172137) {  // MM11-LP parity
-		DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O MM11-LP parity (%06o): %o", a, value);
-		return false;
-	}
-
 	/// MMU ///
 	if ((a >= ADDR_PDR_SV_START && a < ADDR_PAR_SV_END) ||
 			(a >= ADDR_PDR_K_START && a < ADDR_PAR_K_END) ||
@@ -975,6 +995,12 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 
 	const uint32_t physical_io_addr = mmu_->get_io_base() + ((uint32_t)a - 0160000);
 	DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O UNHANDLED %08o/%06o(%c): %06o (base: %o)", physical_io_addr, a, word_mode == wm_byte ? 'B' : 'W', value, mmu_->get_io_base());
+#if defined(ESP32)
+	if (rl02_trace_remaining() > 0) {
+		LOG("kek NXM-WRITE io=%06o val=%06o pc=%06o",
+				(unsigned)a, (unsigned)value, (unsigned)c->getPC());
+	}
+#endif
 
 	if (word_mode == wm_word && (a & 1)) [[unlikely]] {
 		DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O to %08o (value: %06o) - odd address!", a + mmu_->get_io_base(), value);
@@ -1014,6 +1040,14 @@ bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, const uint1
 	}
 
 	DOLOG(log_ss::LS_BUS, "WRITE to %06o/%07o %c %c: %06o", addr_in, m_offset, space == d_space ? 'D' : 'I', word_mode == wm_byte ? 'B' : 'W', value);
+
+#if defined(ESP32)
+	// RSTS INIT interrupt probes: log writes to RL vector 160/162 only.
+	if (word_mode == wm_word && (m_offset == 0160 || m_offset == 0162) &&
+	    rl02_trace_remaining() > 0) {
+		rl02_trace_vector_write(m_offset, value, addr_in);
+	}
+#endif
 
 	verify_pointer_bounds(m_offset, page_index);
 

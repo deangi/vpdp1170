@@ -76,6 +76,16 @@ int rl02_trace_remaining()
 	return rl02_trace_left;
 }
 
+#if defined(ESP32)
+void rl02_trace_vector_write(const uint32_t pa, const uint16_t value, const uint16_t va)
+{
+	if (rl02_trace_left <= 0)
+		return;
+	rl02_trace_left--;
+	LOG("kek RL02 VEC-WRITE pa=%06o va=%06o val=%06o", (unsigned)pa, (unsigned)va, (unsigned)value);
+}
+#endif
+
 static bool rl02_unit_is_rl02(const int unit)
 {
 #if defined(ESP32)
@@ -261,6 +271,7 @@ void rl02::reset(const bool hard)
 	deferred_service_delay = -1;
 #if defined(ESP32)
 	irq_pending_ticks = 0;
+	irq_spl_ok_ticks = 0;
 	if (b && b->getCpu())
 		b->getCpu()->unqueue_interrupt(5, 0160);
 #endif
@@ -386,6 +397,12 @@ uint16_t rl02::read_word(const uint16_t addr)
 
 			return value;
 		}
+
+#if defined(ESP32)
+		// While a completion IRQ is armed, still present CRDY=1 (DONE) the
+		// way SIMH rl_set_done does — DONE and INT request are simultaneous.
+		// Only withhold CRDY during an in-flight deferred data transfer.
+#endif
 
 		setBit(registers[reg], 0, rl02_unit_attached(device));  // drive ready (DRDY)
 		setBit(registers[reg], 7, true);                       // controller ready (CRDY)
@@ -583,15 +600,48 @@ void rl02::service_deferred()
 	}
 
 #if defined(ESP32)
-	if (irq_pending_ticks > 0 && --irq_pending_ticks == 0) {
-		if (registers[(RL02_CSR - RL02_BASE) / 2] & 64) {
-			rl02_trace("IRQ-DELIVER vec=160 BR5 CSR=%06o",
-					registers[(RL02_CSR - RL02_BASE) / 2]);
-			b->getCpu()->queue_interrupt(5, 0160);
-		}
-		else {
+	if (irq_pending_ticks > 0) {
+		if (!((registers[(RL02_CSR - RL02_BASE) / 2] & 64)) || !b || !b->getCpu()) {
+			irq_pending_ticks = 0;
+			irq_spl_ok_ticks = 0;
 			rl02_trace("IRQ-CANCEL IE cleared CSR=%06o",
 					registers[(RL02_CSR - RL02_BASE) / 2]);
+		}
+		else {
+			const int spl = b->getCpu()->getPSW_spl();
+			const uint16_t cpu_pc = b->getCpu()->getPC();
+			const bool spl_ok = spl < 5;
+			const bool in_poll = cpu_pc >= 060000;
+			irq_pending_ticks++;
+			if (spl_ok && in_poll)
+				irq_spl_ok_ticks++;
+			else
+				irq_spl_ok_ticks = 0;
+
+			const bool armed = irq_spl_ok_ticks >= IRQ_SPL_ARM_TICKS;
+			if (armed || irq_pending_ticks >= IRQ_DELAY_TICKS) {
+				setBit(registers[(RL02_CSR - RL02_BASE) / 2], 7, true);
+				const uint16_t vec_pc = b->read_physical(0160);
+				const uint16_t vec_ps = b->read_physical(0162);
+				rl02_trace("IRQ-DELIVER vec=160 BR5 CSR=%06o vec160=%06o/%06o cpuPC=%06o PS=%06o spl=%d poll=%d arm=%d ticks=%d",
+						registers[(RL02_CSR - RL02_BASE) / 2],
+						vec_pc, vec_ps, cpu_pc, b->getCpu()->getPSW(),
+						spl, in_poll ? 1 : 0, armed ? 1 : 0, irq_pending_ticks);
+				b->getCpu()->queue_interrupt(5, 0160);
+				// Take BR5 before the next guest instruction. INIT's poll
+				// loop often clears IE on the very next CSR write; if we
+				// only queue here, that write unqueues BR5 and the test
+				// fails ("does not interrupt") then unexpected trap 4.
+				b->getCpu()->execute_any_pending_interrupt();
+				irq_pending_ticks = 0;
+				irq_spl_ok_ticks = 0;
+			}
+			else if (irq_pending_ticks == 1 || (irq_pending_ticks % 16) == 0) {
+				rl02_trace("IRQ-WAIT CSR=%06o cpuPC=%06o PS=%06o spl=%d poll=%d arm_ticks=%d ticks=%d",
+						registers[(RL02_CSR - RL02_BASE) / 2],
+						cpu_pc, b->getCpu()->getPSW(),
+						spl, in_poll ? 1 : 0, irq_spl_ok_ticks, irq_pending_ticks);
+			}
 		}
 	}
 #endif
@@ -634,6 +684,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 	if (addr == RL02_CSR) {  // control status
 #if defined(ESP32)
 		irq_pending_ticks = 0;
+		irq_spl_ok_ticks = 0;
 		if (b && b->getCpu())
 			b->getCpu()->unqueue_interrupt(5, 0160);
 #endif
@@ -987,17 +1038,19 @@ command_done:
 			if (registers[(RL02_CSR - RL02_BASE) / 2] & 64) {  // interrupt enable?
 				DOLOG(log_ss::LS_DISK, "RL02: triggering interrupt");
 #if defined(ESP32)
-				irq_pending_ticks = IRQ_DELAY_TICKS;
-				rl02_trace("IRQ-SCHEDULE unit=%d vec=160 BR5 ticks=%d CSR=%06o",
-						device, IRQ_DELAY_TICKS,
-						registers[(RL02_CSR - RL02_BASE) / 2]);
+				setBit(registers[(RL02_CSR - RL02_BASE) / 2], 7, true);
+				irq_pending_ticks = 1;  // service_deferred counts up to IRQ_DELAY_TICKS
+				rl02_trace("IRQ-SCHEDULE unit=%d vec=160 BR5 (wait SPL<5) CSR=%06o",
+						device, registers[(RL02_CSR - RL02_BASE) / 2]);
 #else
+				setBit(registers[(RL02_CSR - RL02_BASE) / 2], 7, true);
 				rl02_trace("IRQ unit=%d vec=160 BR5 CSR=%06o",
 						device, registers[(RL02_CSR - RL02_BASE) / 2]);
 				b->getCpu()->queue_interrupt(5, 0160);
 #endif
 			}
 			else {
+				setBit(registers[(RL02_CSR - RL02_BASE) / 2], 7, true);
 				rl02_trace("NOIRQ unit=%d IE=0 CSR=%06o",
 						device, registers[(RL02_CSR - RL02_BASE) / 2]);
 			}

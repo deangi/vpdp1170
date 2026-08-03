@@ -1173,7 +1173,9 @@ double cpu::fp_to_double(const uint16_t *words) const
 		place *= 0.5;
 	}
 
-	double value = ldexp(mantissa, exponent - 0200 + 1);
+	// FP11-E: value = 0.1f × 2^(EXP−200₈). frexp mantissa is already in
+	// [0.5,1), so do not add an extra +1 (that doubled every conversion).
+	double value = ldexp(mantissa, exponent - 0200);
 	if (high & 0100000)
 		value = -value;
 	return value;
@@ -1196,7 +1198,8 @@ void cpu::double_to_fp(double value, uint16_t *words) const
 
 	int exp2 = 0;
 	double mantissa = frexp(value, &exp2);  // 0.5 <= mantissa < 1.0
-	int biased = exp2 - 1 + 0200;
+	// Inverse of fp_to_double: biased EXP = frexp_exp + 200₈.
+	int biased = exp2 + 0200;
 	if (biased <= 0 || biased > 0377)
 		return;
 
@@ -1310,24 +1313,28 @@ bool cpu::floating_point_instructions(const uint16_t instr)
 					return true;
 				}
 
-				case 2: {  // ABSF/ABSD
+				case 2: {  // ABSF/ABSD — in-place on FDST only (do not touch AC0)
 					uint16_t operand[4] = { 0, 0, 0, 0 };
 					fp_read_operand(dst_mode, dst_reg, operand, words);
 					operand[0] &= ~0100000;
 					fp_write_operand(dst_mode, dst_reg, operand, words);
-					memcpy(fp_ac[0], operand, sizeof(uint16_t) * words);
-					fp_set_fpsr_nz(0);
+					fpsr &= ~017;
+					if ((operand[0] | operand[1] | operand[2] | operand[3]) == 0)
+						fpsr |= 004;
 					return true;
 				}
 
-				case 3: {  // NEGF/NEGD
+				case 3: {  // NEGF/NEGD — in-place on FDST only (do not touch AC0)
 					uint16_t operand[4] = { 0, 0, 0, 0 };
 					fp_read_operand(dst_mode, dst_reg, operand, words);
 					if (operand[0] | operand[1] | operand[2] | operand[3])
 						operand[0] ^= 0100000;
 					fp_write_operand(dst_mode, dst_reg, operand, words);
-					memcpy(fp_ac[0], operand, sizeof(uint16_t) * words);
-					fp_set_fpsr_nz(0);
+					fpsr &= ~017;
+					if ((operand[0] | operand[1] | operand[2] | operand[3]) == 0)
+						fpsr |= 004;
+					else if (operand[0] & 0100000)
+						fpsr |= 010;
 					return true;
 				}
 			}
@@ -1343,16 +1350,16 @@ bool cpu::floating_point_instructions(const uint16_t instr)
 			return true;
 		}
 
-		case 003: { // MODF/MODD — product split: fraction→AC, integer→AC^1
-			// FP11-E: AC∨1 ← integer part of (AC)*(FSRC); AC ← fractional part.
-			// (Diagnostic CFPL: "FRAC IN AC0, INT IN AC1" for MODD AC1,AC0.)
+		case 003: { // MODF/MODD — product split: fraction→AC, integer→AC∨1
+			// FP11-E / SIMH: AC∨1 ← integer part of (AC)*(FSRC); AC ← fraction.
+			// Use OR not XOR so MODF AC1/AC3 still writes integer into AC1/AC3.
 			uint16_t operand[4] = { 0, 0, 0, 0 };
 			fp_read_operand(dst_mode, dst_reg, operand, words);
 			const double product =
 				fp_to_double(fp_ac[ac]) * fp_to_double(operand);
 			double int_part = 0.0;
 			const double frac_part = modf(product, &int_part);
-			const uint8_t ac_int = ac ^ 1u;
+			const uint8_t ac_int = uint8_t(ac | 1u);
 			double_to_fp(frac_part, fp_ac[ac]);
 			double_to_fp(int_part, fp_ac[ac_int]);
 			// Clear unused double words in single-precision mode.
@@ -1407,10 +1414,10 @@ bool cpu::floating_point_instructions(const uint16_t instr)
 			return true;
 		}
 
-		case 007: {  // CMPF/CMPD
+		case 007: {  // CMPF/CMPD — FN/FZ from (FSRC)−(AC), like integer CMP
 			uint16_t operand[4] = { 0, 0, 0, 0 };
 			fp_read_operand(dst_mode, dst_reg, operand, words);
-			double diff = fp_to_double(fp_ac[ac]) - fp_to_double(operand);
+			double diff = fp_to_double(operand) - fp_to_double(fp_ac[ac]);
 			fpsr &= ~017;
 			if (diff == 0.0)
 				fpsr |= 004;
@@ -1419,9 +1426,8 @@ bool cpu::floating_point_instructions(const uint16_t instr)
 			return true;
 		}
 
-		case 010: {  // STF/STD
+		case 010: {  // STF/STD — store only; condition codes unchanged
 			fp_write_operand(dst_mode, dst_reg, fp_ac[ac], words);
-			fp_set_fpsr_nz(ac);
 			return true;
 		}
 
@@ -1450,8 +1456,13 @@ bool cpu::floating_point_instructions(const uint16_t instr)
 			double value = fp_to_double(fp_ac[ac]);
 			int32_t ivalue = (int32_t)value;
 			if (fpsr & 0100) {
-				uint16_t out[2] = { (uint16_t)(ivalue >> 16), (uint16_t)ivalue };
-				fp_write_operand(dst_mode, dst_reg, out, 2);
+				// FL=1: mode 0 / #n use CPU Rn MSW only (SIMH WriteI).
+				if (dst_mode == 0)
+					set_register(dst_reg, (uint16_t)(ivalue >> 16));
+				else {
+					uint16_t out[2] = { (uint16_t)(ivalue >> 16), (uint16_t)ivalue };
+					fp_write_operand(dst_mode, dst_reg, out, 2);
+				}
 			}
 			else {
 				uint16_t out = (uint16_t)ivalue;
@@ -1470,9 +1481,12 @@ bool cpu::floating_point_instructions(const uint16_t instr)
 			return true;
 		}
 
-		case 014: {  // STCFD/STCDF: store converted float/double
-			uint16_t out[4] = { fp_ac[ac][0], fp_ac[ac][1], fp_ac[ac][2], fp_ac[ac][3] };
-			fp_write_operand(dst_mode, dst_reg, out, words);
+		case 014: {  // STCFD/STCDF: store in the *opposite* of current FD length
+			// SIMH GeteaFP(..., 12-lenf): FD=0 → store 4 words (D); FD=1 → 2 (F).
+			const int mem_words = (fpsr & 0200) ? 2 : 4;
+			// D→F truncates to high 2 words; F→D left-justifies with zero LSW.
+			uint16_t out[4] = { fp_ac[ac][0], fp_ac[ac][1], 0, 0 };
+			fp_write_operand(dst_mode, dst_reg, out, mem_words);
 			fp_set_fpsr_nz(ac);
 			return true;
 		}
@@ -1496,9 +1510,14 @@ bool cpu::floating_point_instructions(const uint16_t instr)
 		case 016: {  // LDCIF/LDCID: load converted integer/long
 			int32_t ivalue = 0;
 			if (fpsr & 0100) {
-				uint16_t in[2] = { 0, 0 };
-				fp_read_operand(dst_mode, dst_reg, in, 2);
-				ivalue = (int32_t(uint32_t(in[0]) << 16) | in[1]);
+				// FL=1: mode 0 loads Rn as MSW, LSW zero (SIMH ReadI).
+				if (dst_mode == 0)
+					ivalue = int32_t(uint32_t(get_register(dst_reg)) << 16);
+				else {
+					uint16_t in[2] = { 0, 0 };
+					fp_read_operand(dst_mode, dst_reg, in, 2);
+					ivalue = (int32_t(uint32_t(in[0]) << 16) | in[1]);
+				}
 			}
 			else {
 				auto g = getGAM(dst_mode, dst_reg, wm_word);
@@ -1509,10 +1528,14 @@ bool cpu::floating_point_instructions(const uint16_t instr)
 			return true;
 		}
 
-		case 017: {  // LDCDF/LDCFD: load converted float/double
+		case 017: {  // LDCDF/LDCFD: memory length is opposite of current FD
+			const int mem_words = (fpsr & 0200) ? 2 : 4;
 			uint16_t operand[4] = { 0, 0, 0, 0 };
-			fp_read_operand(dst_mode, dst_reg, operand, words);
-			memcpy(fp_ac[ac], operand, sizeof(uint16_t) * words);
+			fp_read_operand(dst_mode, dst_reg, operand, mem_words);
+			// F←D truncates to high 2 words; D←F left-justifies + clears low.
+			fp_ac[ac][0] = operand[0];
+			fp_ac[ac][1] = operand[1];
+			fp_ac[ac][2] = fp_ac[ac][3] = 0;
 			fp_set_fpsr_nz(ac);
 			return true;
 		}
