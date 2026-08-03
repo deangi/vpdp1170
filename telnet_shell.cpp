@@ -593,6 +593,8 @@ static void command_help() {
       "  mount <unit> <path> [ro]    mount RL0-RL3, RK0, or RP0\r\n"
       "  dismount <unit>             dismount a drive\r\n"
       "  rp <stop|start|status|regs> toggle RP0 STOP or dump RH70/RP06 state\r\n"
+      "  rl [status|regs]            dump RL11/RL02 CSR state (peek)\r\n"
+      "  clock                       dump KW11-L line-clock state (peek)\r\n"
       "  create <rk|rl01|rl02|rp04|rp05|rp06> <path> create an empty disk image\r\n"
       "  set [name=value]            show/change runtime settings\r\n"
       "  lights                      show console address/data lights\r\n"
@@ -614,16 +616,19 @@ static void monitor_help() {
       "  B                  show breakpoint\r\n"
       "  B012340            break when PC equals 012340\r\n"
       "  B clear            clear breakpoint\r\n"
-      "  D00100             dump 16 words starting at 00100\r\n"
-      "  D00100:00200       dump an inclusive address range\r\n"
-      "  M00100             dump 16 MMU/logical words starting at 00100\r\n"
-      "  M00100:00200       dump an inclusive MMU/logical range\r\n"
+      "  D00100             dump physical RAM (alias: MP)\r\n"
+      "  D00100:00200       dump an inclusive physical range\r\n"
+      "  MP00100            same as D (physical)\r\n"
+      "  MI00100            dump MMU I-space (current run mode)\r\n"
+      "  MI00100:00200      inclusive I-space range\r\n"
+      "  MD00100            dump MMU D-space (current run mode)\r\n"
+      "  MD00100:00200      inclusive D-space range (use for stacks)\r\n"
       "  U                  dump MMU registers and Unibus map\r\n"
       "  I                  dump RH70 registers (peek, no side effects)\r\n"
       "  H                  dump trace history to USB serial\r\n"
       "  T 1000             trace the next 1000 instructions to USB serial\r\n"
       "  W000100=012345     deposit one word in physical RAM\r\n"
-      "  R0=012345          set R0-R5, SP, PC, or PS\r\n"
+      "  R0=012345          set R0-R5, SP, PC, PS, or FPSR\r\n"
       "  >                  return to the management shell\r\n"
       "  ?                  show this help\r\n");
 }
@@ -732,6 +737,120 @@ static void command_rp(const char* action) {
   output_text("usage: rp <stop|start|status|regs>\r\n");
 }
 
+static const char* rl_command_name(int command) {
+  static const char* kNames[] = {
+      "NOP", "WCHK", "GETSTAT", "SEEK", "RDHDR", "WRITE", "READ", "READNH"};
+  if (command < 0 || command > 7) return "?";
+  return kNames[command];
+}
+
+static void dump_rl_registers() {
+  static const uint16_t kBase = 0174400u;
+  static const char* kNames[] = {"CSR", "BAR", "DAR", "MPR", "BAE"};
+  static constexpr unsigned kCount = sizeof(kNames) / sizeof(kNames[0]);
+
+  uint16_t values[kCount] = {};
+  for (unsigned i = 0; i < kCount; i++) {
+    if (!pdp_core::read_rl02_word((uint16_t)(kBase + i * 2u), &values[i])) {
+      output_text("error: RL11/RL02 is unavailable\r\n");
+      return;
+    }
+  }
+
+  output_text("RL11/RL02 registers (peek):\r\n");
+  output_printf("  %06o: CSR=%06o BAR=%06o DAR=%06o MPR=%06o\r\n",
+                (unsigned)kBase, (unsigned)values[0], (unsigned)values[1],
+                (unsigned)values[2], (unsigned)values[3]);
+  output_printf("  %06o: BAE=%06o", (unsigned)(kBase + 8u),
+                (unsigned)values[4]);
+  const uint16_t csr = values[0];
+  output_printf("  unit=%u cmd=%u(%s) IE=%u CRDY=%u DRDY=%u ERR=%u\r\n",
+                (unsigned)((csr >> 8) & 3), (unsigned)((csr >> 1) & 7),
+                rl_command_name((csr >> 1) & 7), (csr & 0100) ? 1 : 0,
+                (csr & 0200) ? 1 : 0, (csr & 0001) ? 1 : 0,
+                (csr & 0100000) ? 1 : 0);
+
+  int16_t track = 0;
+  uint8_t head = 0;
+  uint8_t sector = 0;
+  if (pdp_core::get_rl02_position(&track, &head, &sector)) {
+    output_printf("  position: track=%d head=%u sector=%u\r\n", (int)track,
+                  (unsigned)head, (unsigned)sector);
+  }
+
+  bool deferred = false;
+  int delay = 0;
+  int polls = 0;
+  int unit = 0;
+  int command = 0;
+  int irq_ticks = 0;
+  if (pdp_core::get_rl02_deferred(&deferred, &delay, &polls, &unit, &command,
+                                  &irq_ticks)) {
+    output_printf(
+        "  deferred=%s delay=%d polls=%d unit=%d cmd=%u(%s) irq_ticks=%d\r\n",
+        deferred ? "yes" : "no", delay, polls, unit, (unsigned)command,
+        rl_command_name(command), irq_ticks);
+  }
+
+  uint16_t psw = 0;
+  bool any_pending = false;
+  uint8_t counts[8] = {};
+  uint16_t vectors[8] = {};
+  if (pdp_core::get_interrupt_summary(&psw, &any_pending, counts, vectors)) {
+    output_printf("  CPU PC=%06o PS=%06o SPL=%u any_irq=%u queued:",
+                  (unsigned)pdp_core::pc(), (unsigned)psw,
+                  (unsigned)((psw >> 5) & 7), any_pending ? 1 : 0);
+    bool printed = false;
+    for (int level = 0; level < 8; level++) {
+      if (!counts[level]) continue;
+      output_printf(" BR%d=%06o", level, (unsigned)vectors[level]);
+      if (counts[level] > 1)
+        output_printf("(+%u)", (unsigned)(counts[level] - 1));
+      printed = true;
+    }
+    if (!printed) output_text(" none");
+    if (counts[5] && vectors[5] == 0160)
+      output_text(" (RL)");
+    output_text("\r\n");
+  }
+}
+
+static void command_rl(const char* action) {
+  if (!action || !*action || !strcasecmp(action, "status") ||
+      !strcasecmp(action, "stat") || !strcasecmp(action, "regs") ||
+      !strcasecmp(action, "registers")) {
+    dump_rl_registers();
+    return;
+  }
+  output_text("usage: rl [status|regs]\r\n");
+}
+
+static void command_clock() {
+  uint16_t csr = 0;
+  uint32_t since = 0;
+  bool irq_queued = false;
+  if (!pdp_core::get_kw11l_summary(&csr, &since, &irq_queued)) {
+    output_text("error: KW11-L is unavailable\r\n");
+    return;
+  }
+  output_printf("KW11-L LKS@177546=%06o  IE=%u DONE=%u  instr_since_tick=%u  irq100=%u\r\n",
+                (unsigned)csr, (csr & 0100) ? 1 : 0, (csr & 0200) ? 1 : 0,
+                (unsigned)since, irq_queued ? 1 : 0);
+
+  uint16_t psw = 0;
+  bool any_pending = false;
+  uint8_t counts[8] = {};
+  uint16_t vectors[8] = {};
+  if (pdp_core::get_interrupt_summary(&psw, &any_pending, counts, vectors)) {
+    output_printf("  CPU PC=%06o PS=%06o SPL=%u any_irq=%u",
+                  (unsigned)pdp_core::pc(), (unsigned)psw,
+                  (unsigned)((psw >> 5) & 7), any_pending ? 1 : 0);
+    if (counts[6] && vectors[6] == 0100)
+      output_text(" BR6=000100 (KW11-L)");
+    output_text("\r\n");
+  }
+}
+
 static void monitor_state() {
   uint16_t next_address = pdp_core::reg16(7);
   uint16_t next_opcode = 0;
@@ -741,12 +860,13 @@ static void monitor_state() {
                                                      sizeof(disassembly));
   output_printf(
       "state: PC=%06o R0=%06o R1=%06o R2=%06o R3=%06o "
-      "R4=%06o R5=%06o SP=%06o PS=%06o",
+      "R4=%06o R5=%06o SP=%06o PS=%06o FPSR=%06o",
       (unsigned)pdp_core::reg16(7),
       (unsigned)pdp_core::reg16(0), (unsigned)pdp_core::reg16(1),
       (unsigned)pdp_core::reg16(2), (unsigned)pdp_core::reg16(3),
       (unsigned)pdp_core::reg16(4), (unsigned)pdp_core::reg16(5),
-      (unsigned)pdp_core::reg16(6), (unsigned)pdp_core::psw());
+      (unsigned)pdp_core::reg16(6), (unsigned)pdp_core::psw(),
+      (unsigned)pdp_core::fpsr());
   if (have_next)
     output_printf(" NEXT=%06o:%06o  %s\r\n",
                   (unsigned)next_address, (unsigned)next_opcode,
@@ -760,11 +880,24 @@ static bool parse_monitor_octal(const char* text, uint32_t maximum,
   return parse_octal_value(text, maximum, result);
 }
 
-static void monitor_dump(const char* argument, bool logical) {
-  static constexpr uint32_t LAST_RAM_WORD = 0757776u;
+enum class MonitorDumpSpace { Physical, ISpace, DSpace };
+
+static const char* monitor_dump_space_name(MonitorDumpSpace space) {
+  switch (space) {
+    case MonitorDumpSpace::Physical: return "physical RAM";
+    case MonitorDumpSpace::ISpace: return "MMU I-space";
+    case MonitorDumpSpace::DSpace: return "MMU D-space";
+  }
+  return "memory";
+}
+
+static void monitor_dump(const char* argument, MonitorDumpSpace space) {
+  // 22-bit physical (up to 2044KW); old 0757776 cap hid stacks above 256KW.
+  static constexpr uint32_t LAST_RAM_WORD = 017777776u;
   static constexpr uint32_t LAST_LOGICAL_WORD = 0177776u;
   static constexpr uint32_t MAX_DUMP_WORDS = 512;
-  const uint32_t max_address = logical ? LAST_LOGICAL_WORD : LAST_RAM_WORD;
+  const bool physical = space == MonitorDumpSpace::Physical;
+  const uint32_t max_address = physical ? LAST_RAM_WORD : LAST_LOGICAL_WORD;
 
   char range[64];
   strncpy(range, argument ? argument : "", sizeof(range) - 1);
@@ -777,7 +910,7 @@ static void monitor_dump(const char* argument, bool logical) {
   if (!parse_monitor_octal(trim_in_place(range), max_address, &first) ||
       (first & 1)) {
     output_printf("error: invalid even %s address\r\n",
-                  logical ? "MMU/logical" : "physical RAM");
+                  monitor_dump_space_name(space));
     return;
   }
   if (separator) {
@@ -803,20 +936,30 @@ static void monitor_dump(const char* argument, bool logical) {
     unsigned count = 0;
     uint32_t line_address = address;
     while (count < 8 && address <= last) {
-      bool ok = logical
-          ? pdp_core::read_mmu_word((uint16_t)address, &values[count])
-          : pdp_core::read_physical_word(address, &values[count]);
+      bool ok = false;
+      if (physical) {
+        ok = pdp_core::read_physical_word(address, &values[count]);
+      } else {
+        ok = pdp_core::read_mmu_word((uint16_t)address, &values[count],
+                                    space == MonitorDumpSpace::DSpace);
+      }
       if (!ok) {
-        output_printf("error: %s memory examine failed at %06o\r\n",
-                      logical ? "MMU/logical" : "physical",
-                      (unsigned)address);
+        if (physical)
+          output_printf("error: %s examine failed at %08o\r\n",
+                        monitor_dump_space_name(space), (unsigned)address);
+        else
+          output_printf("error: %s examine failed at %06o\r\n",
+                        monitor_dump_space_name(space), (unsigned)address);
         return;
       }
       count++;
       address += 2;
     }
 
-    output_printf("%06o:", (unsigned)line_address);
+    if (physical)
+      output_printf("%08o:", (unsigned)line_address);
+    else
+      output_printf("%06o:", (unsigned)line_address);
     for (unsigned i = 0; i < 8; i++) {
       if (i < count)
         output_printf(" %06o", (unsigned)values[i]);
@@ -958,7 +1101,7 @@ static void monitor_write(const char* argument) {
 
   uint32_t address = 0;
   uint32_t value = 0;
-  if (!parse_monitor_octal(trim_in_place(assignment), 0757776u, &address) ||
+  if (!parse_monitor_octal(trim_in_place(assignment), 017777776u, &address) ||
       (address & 1) ||
       !parse_monitor_octal(trim_in_place(equals), 0177777u, &value)) {
     output_text("error: invalid octal address or word\r\n");
@@ -968,7 +1111,7 @@ static void monitor_write(const char* argument) {
     output_text("error: memory deposit failed\r\n");
     return;
   }
-  output_printf("%06o=%06o\r\n", (unsigned)address, (unsigned)value);
+  output_printf("%08o=%06o\r\n", (unsigned)address, (unsigned)value);
 }
 
 static void monitor_write_register(const char* command) {
@@ -977,7 +1120,7 @@ static void monitor_write_register(const char* command) {
   assignment[sizeof(assignment) - 1] = 0;
   char* equals = strchr(assignment, '=');
   if (!equals) {
-    output_text("usage: R0=012345, SP=012345, PC=012345, or PS=012345\r\n");
+    output_text("usage: R0=012345, SP=012345, PC=012345, PS=012345, or FPSR=012345\r\n");
     return;
   }
   *equals++ = 0;
@@ -1005,8 +1148,15 @@ static void monitor_write_register(const char* command) {
     }
     output_printf("PS=%06o\r\n", (unsigned)value);
     return;
+  } else if (!strcasecmp(name, "FPSR") || !strcasecmp(name, "FPS")) {
+    if (!pdp_core::set_fpsr((uint16_t)value)) {
+      output_text("error: FPSR write not supported by this CPU core\r\n");
+      return;
+    }
+    output_printf("FPSR=%06o\r\n", (unsigned)value);
+    return;
   } else {
-    output_text("error: register must be R0-R5, SP, PC, or PS\r\n");
+    output_text("error: register must be R0-R5, SP, PC, PS, or FPSR\r\n");
     return;
   }
 
@@ -1089,9 +1239,21 @@ static void execute_monitor_command(char* line) {
     pdp_core::monitor_dump_history();
     output_text("trace history requested; output goes to USB serial\r\n");
   } else if (command[0] == 'D' || command[0] == 'd') {
-    monitor_dump(command + 1, false);
+    monitor_dump(command + 1, MonitorDumpSpace::Physical);
+  } else if ((command[0] == 'M' || command[0] == 'm') &&
+             command[1] != 0) {
+    const char kind = command[1];
+    if (kind == 'P' || kind == 'p') {
+      monitor_dump(command + 2, MonitorDumpSpace::Physical);
+    } else if (kind == 'I' || kind == 'i') {
+      monitor_dump(command + 2, MonitorDumpSpace::ISpace);
+    } else if (kind == 'D' || kind == 'd') {
+      monitor_dump(command + 2, MonitorDumpSpace::DSpace);
+    } else {
+      output_text("usage: MI/MD/MP<addr>[:<addr>]  (or D for physical)\r\n");
+    }
   } else if (command[0] == 'M' || command[0] == 'm') {
-    monitor_dump(command + 1, true);
+    output_text("usage: MI/MD/MP<addr>[:<addr>]  (or D for physical)\r\n");
   } else if (!strcasecmp(command, "U")) {
     monitor_dump_mmu_unibus();
   } else if (!strcasecmp(command, "I")) {
@@ -1103,7 +1265,9 @@ static void execute_monitor_command(char* line) {
   } else if ((command[0] == 'R' || command[0] == 'r') ||
              !strncasecmp(command, "SP", 2) ||
              !strncasecmp(command, "PC", 2) ||
-             !strncasecmp(command, "PS", 2)) {
+             !strncasecmp(command, "PS", 2) ||
+             !strncasecmp(command, "FPSR", 4) ||
+             !strncasecmp(command, "FPS", 3)) {
     monitor_write_register(command);
   } else {
     output_text("unknown monitor command (type ?)\r\n");
@@ -1625,6 +1789,11 @@ static void execute_command(char* line) {
     command_dismount(count > 1 ? words[1] : nullptr);
   else if (!strcasecmp(words[0], "rp"))
     command_rp(count > 1 ? words[1] : nullptr);
+  else if (!strcasecmp(words[0], "rl") || !strcasecmp(words[0], "dl"))
+    command_rl(count > 1 ? words[1] : nullptr);
+  else if (!strcasecmp(words[0], "clock") || !strcasecmp(words[0], "kw11l") ||
+           !strcasecmp(words[0], "lks"))
+    command_clock();
   else if (!strcasecmp(words[0], "create"))
     command_create(count > 1 ? words[1] : nullptr,
                    count > 2 ? words[2] : nullptr);

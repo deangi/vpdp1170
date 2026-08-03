@@ -343,6 +343,24 @@ uint8_t rl02::read_byte(const uint16_t addr)
 	return v;
 }
 
+uint16_t rl02::peek_word(const uint16_t addr) const
+{
+	if (addr < RL02_BASE || addr >= RL02_END || (addr & 1))
+		return 0;
+
+	const int reg = (addr - RL02_BASE) / 2;
+	if (addr == RL02_CSR) {
+		uint16_t value = registers[reg];
+		const int device = (value >> 8) & 3;
+		setBit(value, 0, rl02_unit_attached(device));
+		setBit(value, 7, !deferred_data_active);
+		return value;
+	}
+	if (addr == RL02_MPR)
+		return mpr[0];
+	return registers[reg];
+}
+
 uint16_t rl02::read_word(const uint16_t addr)
 {
 	const int reg = (addr - RL02_BASE) / 2;
@@ -432,6 +450,32 @@ void rl02::update_bus_address(const uint32_t a)
 uint32_t rl02::calc_offset() const
 {
 	return (rl02_sectors_per_track * track * 2 + head * rl02_sectors_per_track + sector) * rl02_bytes_per_sector;
+}
+
+bool rl02::ensure_position_for_data(int device, uint8_t req_sector,
+				    uint8_t req_head, int req_track,
+				    const char *op)
+{
+	const int media_tracks = rl02_unit_track_count(device);
+	if (req_sector >= rl02_sectors_per_track || req_track >= media_tracks) {
+		registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 12) | (1 << 15);
+		rl02_trace("%s-HNF unit=%d media=%s track=%d sector=%u max_track=%d",
+				op, device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
+				req_track, req_sector, media_tracks - 1);
+		return false;
+	}
+	if (req_track != track || req_head != head) {
+		// Implied seek. 2.11BSD stand/rl.c does:
+		//   cn[drive] = chn;  /* assumes SEEK always worked */
+		// and never re-RHDR after HNF, so a single desync becomes an
+		// HNF storm (rlcs=112275 / OPI+HNF). Snap to the programmed DAR.
+		rl02_trace("%s-IMPLIED-SEEK unit=%d from trk=%d hd=%u to trk=%d hd=%u sec=%u",
+				op, device, track, head, req_track, req_head, req_sector);
+		track = (int16_t)req_track;
+		head = req_head;
+	}
+	sector = req_sector;
+	return true;
 }
 
 void rl02::update_dar()
@@ -639,18 +683,11 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			const uint8_t requested_sector = temp & 63;
 			const uint8_t requested_head = (temp >> 6) & 1;
 			const int requested_track = temp >> 7;
-			const int media_tracks = rl02_unit_track_count(device);
-			if (requested_sector >= rl02_sectors_per_track ||
-					requested_track >= media_tracks ||
-					requested_track != track || requested_head != head) {
-				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 12) | (1 << 15);
-				rl02_trace("WCHK-HNF unit=%d media=%s track=%d sector=%u max_track=%d",
-						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
-						requested_track, requested_sector, media_tracks - 1);
+			if (!ensure_position_for_data(device, requested_sector, requested_head,
+						     requested_track, "WCHK")) {
 				do_int = true;
 				goto command_done;
 			}
-			sector = requested_sector;
 
 			uint32_t temp_disk_offset = calc_offset();
 			uint32_t words_done = 0;
@@ -740,6 +777,7 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 					device, rl02_unit_is_rl02(device) ? "RL02" : "RL01", temp, track, new_track, cylinder_count);
 			track  = new_track;
 			head   = (temp & 000020) ? 1 : 0;
+			sector = 0;  // SIMH clears sector bits on seek
 
 //			update_dar();
 
@@ -770,18 +808,11 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			const uint8_t requested_sector = temp & 63;
 			const uint8_t requested_head = (temp >> 6) & 1;
 			const int requested_track = temp >> 7;
-			const int media_tracks = rl02_unit_track_count(device);
-			if (requested_sector >= rl02_sectors_per_track ||
-					requested_track >= media_tracks ||
-					requested_track != track || requested_head != head) {
-				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 12) | (1 << 15);
-				rl02_trace("WRITE-HNF unit=%d media=%s track=%d sector=%u max_track=%d",
-						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
-						requested_track, requested_sector, media_tracks - 1);
+			if (!ensure_position_for_data(device, requested_sector, requested_head,
+						     requested_track, "WRITE")) {
 				do_int = true;
 				goto command_done;
 			}
-			sector = requested_sector;
 
 			uint32_t temp_disk_offset = calc_offset();
 			uint32_t words_done       = 0;
@@ -858,27 +889,19 @@ void rl02::write_word(const uint16_t addr, uint16_t v)
 			const int requested_track = temp >> 7;
 			const int media_tracks = rl02_unit_track_count(device);
 			bool zero_read = false;
-			if (command == 6 && (requested_sector >= rl02_sectors_per_track ||
-					requested_track >= media_tracks ||
-					requested_track != track || requested_head != head)) {
-				registers[(RL02_CSR - RL02_BASE) / 2] |= (1 << 10) | (1 << 12) | (1 << 15);
-				rl02_trace("READ-HNF unit=%d media=%s track=%d sector=%u max_track=%d",
-						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",
-					requested_track, requested_sector, media_tracks - 1);
-				do_int = true;
-				goto command_done;
-			}
-			const uint16_t raw_dar = temp;
 			if (command == 6) {
-				sector = requested_sector;
-				head = requested_head;
-				track = requested_track;
+				if (!ensure_position_for_data(device, requested_sector, requested_head,
+							     requested_track, "READ")) {
+					do_int = true;
+					goto command_done;
+				}
 			}
 			else {
 				sector = requested_sector;
 				head = requested_head;
 				track = requested_track;
 			}
+			const uint16_t raw_dar = temp;
 			if (track >= media_tracks) {
 				rl02_trace("READ-ERR unit=%d media=%s track=%d beyond max=%d",
 						device, rl02_unit_is_rl02(device) ? "RL02" : "RL01",

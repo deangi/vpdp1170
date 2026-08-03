@@ -178,9 +178,13 @@ bool cpu::check_stack_limit_write(const gam_rc_t & g)
 	if (!g.stack_ref || !g.is_addr || getPSW_runmode() != 0)
 		return true;
 
+	// 11/70 stack limit compares the SP value after a push (autodecrement),
+	// not a deferred destination pointer. After mode 4/5 addressing SP has
+	// already been updated; use it so @-(SP) does not test the pointer.
+	const uint16_t sp_val = get_register(6);
 	const uint16_t slr = stack_limit_register & 0177400;
-	const bool red_zone = g.addr < (slr + 0340) || g.addr >= 0177776;
-	const bool yellow_zone = !red_zone && g.addr < (slr + 0400);
+	const bool red_zone = sp_val < (slr + 0340) || sp_val >= 0177776;
+	const bool yellow_zone = !red_zone && sp_val < (slr + 0400);
 
 	if (!red_zone && !yellow_zone)
 		return true;
@@ -563,7 +567,12 @@ gam_rc_t cpu::getGAM(const uint8_t mode, const uint8_t reg, const word_mode_t wo
 		return g;
 	}
 
-	g.stack_ref = reg == 6;
+	// Kernel stack-limit applies only to true pushes through SP
+	// (autodecrement). Modes like @(SP)+ write *through* a pointer
+	// popped from the stack; treating those destinations as stack
+	// references falsely triggers red-zone (seen on 2.11BSD boot:
+	// MOV R0,@(SP)+ with a low result pointer → SP forced to 4).
+	g.stack_ref = (reg == 6) && (mode == 4 || mode == 5);
 
 	d_i_space_t read_space = d_space;
 	int         run_mode   = getPSW_runmode();
@@ -1009,10 +1018,16 @@ bool cpu::fp_get_operand_address(const uint8_t mode, const uint8_t reg, const in
 			*addr = get_register(reg);
 			return true;
 
-		case 2:  // (Rn)+
+		case 2:  // (Rn)+  /  #n when Rn=PC
+			// FP11: #immediate always advances PC by one word (2 bytes),
+			// regardless of F/D or integer operand width — same as SIMH
+			// GeteaFP ("# is always length 2"). Other (Rn)+ use full width.
 			*addr = get_register(reg);
-			add_register(reg, reg == 7 ? 2 : bytes);
-			add_to_MMR1(reg, reg == 7 ? 2 : bytes);
+			{
+				const int advance = (reg == 7) ? 2 : bytes;
+				add_register(reg, advance);
+				add_to_MMR1(reg, advance);
+			}
 			return true;
 
 		case 3:  // @(Rn)+
@@ -1071,8 +1086,27 @@ bool cpu::fp_read_operand(const uint8_t mode, const uint8_t reg, uint16_t *words
 	if (!fp_get_operand_address(mode, reg, count, &addr))
 		return false;
 
+	// Match getGAM: PC-relative operand memory (modes 1/2/4 with R7)
+	// lives in I-space. Using D-space here made 2.11BSD init's
+	// MODF F0,(PC)+ abort on unmapped user D pages (SIGSEGV loop
+	// after "user mem", MMR2=031102, MMR0 abort).
+	// Modes 3/5/6/7 resolve to a D-space effective address.
+	const d_i_space_t space =
+		(reg == 7 && (mode == 1 || mode == 2 || mode == 4)) ? i_space : d_space;
+
+	// Immediate (#n, mode 2 / R7): only one instruction-stream word is
+	// part of the operand; remaining F/D words are zero (SIMH ReadFP
+	// for spec==027). Reading further would treat following opcodes as
+	// fraction bits and (with a wrong PC advance) skip them entirely.
+	if (mode == 2 && reg == 7) {
+		words[0] = b->read(addr, wm_word, getPSW_runmode(), i_space);
+		for (int i = 1; i < count; i++)
+			words[i] = 0;
+		return true;
+	}
+
 	for(int i=0; i<count; i++)
-		words[i] = b->read(addr + i * 2, wm_word, getPSW_runmode(), d_space);
+		words[i] = b->read(addr + i * 2, wm_word, getPSW_runmode(), space);
 
 	return true;
 }
@@ -1099,9 +1133,16 @@ bool cpu::fp_write_operand(const uint8_t mode, const uint8_t reg, const uint16_t
 	if (!fp_get_operand_address(mode, reg, count, &addr))
 		return false;
 
+	const d_i_space_t space =
+		(reg == 7 && (mode == 1 || mode == 2 || mode == 4)) ? i_space : d_space;
+
+	// Immediate destination: store high word only (SIMH WriteFP spec==027).
+	if (mode == 2 && reg == 7)
+		return b->write(addr, wm_word, words[0], getPSW_runmode(), i_space) == false;
+
 	bool ok = true;
 	for(int i=0; i<count; i++)
-		ok = b->write(addr + i * 2, wm_word, words[i], getPSW_runmode(), d_space) == false && ok;
+		ok = b->write(addr + i * 2, wm_word, words[i], getPSW_runmode(), space) == false && ok;
 
 	return ok;
 }
@@ -1293,8 +1334,46 @@ bool cpu::floating_point_instructions(const uint16_t instr)
 			break;
 		}
 
-		case 002:   // MULF/MULD
-		case 003:   // MODF/MODD
+		case 002: { // MULF/MULD
+			uint16_t operand[4] = { 0, 0, 0, 0 };
+			fp_read_operand(dst_mode, dst_reg, operand, words);
+			double result = fp_to_double(fp_ac[ac]) * fp_to_double(operand);
+			double_to_fp(result, fp_ac[ac]);
+			fp_set_fpsr_nz(ac);
+			return true;
+		}
+
+		case 003: { // MODF/MODD — product split: fraction→AC, integer→AC^1
+			// FP11-E: AC∨1 ← integer part of (AC)*(FSRC); AC ← fractional part.
+			// (Diagnostic CFPL: "FRAC IN AC0, INT IN AC1" for MODD AC1,AC0.)
+			uint16_t operand[4] = { 0, 0, 0, 0 };
+			fp_read_operand(dst_mode, dst_reg, operand, words);
+			const double product =
+				fp_to_double(fp_ac[ac]) * fp_to_double(operand);
+			double int_part = 0.0;
+			const double frac_part = modf(product, &int_part);
+			const uint8_t ac_int = ac ^ 1u;
+			double_to_fp(frac_part, fp_ac[ac]);
+			double_to_fp(int_part, fp_ac[ac_int]);
+			// Clear unused double words in single-precision mode.
+			if (!(fpsr & 0200)) {
+				fp_ac[ac][2] = fp_ac[ac][3] = 0;
+				fp_ac[ac_int][2] = fp_ac[ac_int][3] = 0;
+			}
+			// CC from fractional result in AC (FC=0; FZ/FN as usual).
+			fpsr &= ~017;
+			if (frac_part == 0.0)
+				fpsr |= 004;
+			else if (frac_part < 0.0)
+				fpsr |= 010;
+			// FV if integer part was lost to FP exponent overflow.
+			if (int_part != 0.0 &&
+			    (fp_ac[ac_int][0] | fp_ac[ac_int][1] |
+			     fp_ac[ac_int][2] | fp_ac[ac_int][3]) == 0)
+				fpsr |= 002;
+			return true;
+		}
+
 		case 004:   // ADDF/ADDD
 		case 006:   // SUBF/SUBD
 		case 011: { // DIVF/DIVD
@@ -1303,9 +1382,7 @@ bool cpu::floating_point_instructions(const uint16_t instr)
 			double lhs = fp_to_double(fp_ac[ac]);
 			double rhs = fp_to_double(operand);
 			double result = lhs;
-			if (fop == 002 || fop == 003)
-				result = lhs * rhs;
-			else if (fop == 004)
+			if (fop == 004)
 				result = lhs + rhs;
 			else if (fop == 006)
 				result = lhs - rhs;

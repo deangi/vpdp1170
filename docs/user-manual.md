@@ -544,16 +544,19 @@ the emulator.
 ### PDP-11 Monitor
 
 Enter `monitor` from the Telnet management shell. The monitor provides
-front-panel-style execution control and physical-memory examine/deposit
-commands. All addresses and values are octal.
+front-panel-style execution control and memory examine/deposit commands.
+All addresses and values are octal. Logical examines use the current PSW
+run mode (kernel / supervisor / user).
 
 | Command | Description |
 | --- | --- |
 | `P` | Pause the CPU after the current instruction and display its state. |
 | `S` | Execute exactly one instruction, remain paused, and display the new state. |
 | `C` | Continue normal CPU execution. |
-| `D00100` | Dump 16 words beginning at physical address `00100`. |
+| `D00100` / `MP00100` | Dump physical RAM beginning at `00100`. |
 | `D00100:00200` | Dump the inclusive physical-address range. |
+| `MI00100` | Dump MMU I-space (instruction) beginning at virtual `00100`. |
+| `MD00100` | Dump MMU D-space (data/stack) beginning at virtual `00100`. |
 | `T 1000` | Trace the next 1000 instructions to USB serial. |
 | `W000100=012345` | Store word `012345` at physical address `000100`. |
 | `>` | Leave monitor mode and return to the management shell. |
@@ -566,10 +569,12 @@ Memory output contains eight six-digit octal words per line followed by the 16
 corresponding bytes in little-endian order. Printable ASCII characters are
 shown; non-printable bytes appear as spaces.
 
-Memory commands operate on aligned 18-bit physical RAM addresses from
-`000000` through `0757776`. The I/O page is excluded so an examine or deposit
-cannot accidentally operate a device or raise a bus-error trap outside CPU
-execution. A range dump is limited to 512 words per command.
+Physical examines (`D` / `MP`) and deposits (`W`) accept aligned 22-bit RAM
+addresses through `017777776` (up to 2044KW). The I/O page is excluded so an
+examine or deposit cannot accidentally operate a device or raise a bus-error
+trap outside CPU execution. `MI` / `MD` take 16-bit virtual addresses through
+`0177776` and follow the current run-mode I or D map (with split I/D, use
+`MD` for stacks). A range dump is limited to 512 words per command.
 
 Returning to the management shell with `>` preserves the CPU's current
 running or paused state. Use `C` before leaving when execution should resume.

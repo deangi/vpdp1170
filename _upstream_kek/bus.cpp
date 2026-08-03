@@ -23,6 +23,7 @@
 
 #if defined(ESP32)
 #include "../kek_kwp.h"
+#include "../kw11.h"
 #include "../platform.h"
 #endif
 
@@ -456,8 +457,13 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 		return temp;
 	}
 
-	if (a == ADDR_LFC) // line frequency clock and status register
-		return kw11_l_->read_word(a);
+	if (a == ADDR_LFC) { // line frequency clock and status register
+		uint16_t temp = kw11_l_->read_word(a);
+#if defined(ESP32)
+		kw11::charge_clock_trace("guest-rd", temp);
+#endif
+		return temp;
+	}
 
 #if defined(ESP32)
 	if (kek_kwp::contains(a))
@@ -862,7 +868,9 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 
 	if (a == ADDR_LFC) { // line frequency clock and status register
 		kw11_l_->write_word(a, value);
-
+#if defined(ESP32)
+		kw11::charge_clock_trace("guest-wr", value);
+#endif
 		return false;
 	}
 

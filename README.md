@@ -399,8 +399,10 @@ values are octal:
 P                     pause after the current instruction
 S                     execute one instruction and remain paused
 C                     continue execution
-D00100                dump 16 words from physical address 00100
+D00100                dump physical RAM (alias: MP00100)
 D00100:00200          dump an inclusive physical address range
+MI00100               dump MMU I-space (current run mode)
+MD00100               dump MMU D-space (current run mode; stacks)
 T 1000                trace the next 1000 instructions to USB serial
 W000100=012345        deposit one word in physical RAM
 >                     return to the management shell
@@ -409,9 +411,10 @@ W000100=012345        deposit one word in physical RAM
 `P` and `S` display the PC, R0-R5, SP, PSW, and the address, opcode, and
 disassembly of the next instruction that `S` will execute. Memory dumps contain eight octal
 words and their 16-byte printable ASCII
-representation per line. Examine/deposit commands accept aligned physical RAM
-addresses through `0757776`; the PDP-11 I/O page is deliberately excluded.
-Each range dump is limited to 512 words. Leaving monitor mode does not
+representation per line. Physical examine/deposit (`D`/`MP`/`W`) accept aligned
+22-bit RAM addresses through `017777776`; the PDP-11 I/O page is deliberately
+excluded. `MI`/`MD` use 16-bit virtual addresses via the current run-mode I or D
+map. Each range dump is limited to 512 words. Leaving monitor mode does not
 automatically resume a paused CPU; use `C` when execution should continue.
 `T` takes a decimal instruction count; `T 0` cancels an active trace. Trace
 lines are written to USB serial in the same register/opcode format as the

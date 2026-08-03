@@ -74,6 +74,14 @@ private:
 	bool     data_command_pending(const uint16_t csr) const;
 	void     defer_data_command(const uint16_t csr, const uint8_t command, const int device);
 	void     complete_deferred_data_command();
+	// Sync heads to a data DAR when they disagree. Real RL11 returns HNF
+	// instead, but 2.11BSD's standalone driver assumes every SEEK worked and
+	// never re-reads the header after an error — a soft/hard position desync
+	// then HNF-storms (rlcs=112275). SIMH avoids some of this with per-unit
+	// TRK; we also tolerate a mismatch by implying the seek.
+	bool     ensure_position_for_data(int device, uint8_t req_sector,
+					  uint8_t req_head, int req_track,
+					  const char *op);
 
 public:
 	rl02(bus *const b, abool *const disk_read_activity, abool *const disk_write_activity);
@@ -91,6 +99,21 @@ public:
 
 	uint8_t  read_byte(const uint16_t addr) override;
 	uint16_t read_word(const uint16_t addr) override;
+	// Side-effect-free examine for monitors / telnet (no MPR shift, no poll).
+	uint16_t peek_word(const uint16_t addr) const;
+	bool     is_deferred_active() const { return deferred_data_active; }
+	int      deferred_delay_remaining() const { return deferred_service_delay; }
+	int      deferred_polls() const { return deferred_poll_count; }
+	uint8_t  deferred_cmd() const { return deferred_command; }
+	int      deferred_unit() const { return deferred_device; }
+#if defined(ESP32)
+	int      irq_ticks_remaining() const { return irq_pending_ticks; }
+#else
+	int      irq_ticks_remaining() const { return 0; }
+#endif
+	int16_t  current_track() const { return track; }
+	uint8_t  current_head() const { return head; }
+	uint8_t  current_sector() const { return sector; }
 
 	void write_byte(const uint16_t addr, const uint8_t  v) override;
 	void write_word(const uint16_t addr, const uint16_t v) override;

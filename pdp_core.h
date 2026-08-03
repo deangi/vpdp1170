@@ -31,10 +31,12 @@ inline uint32_t memory_size() { return pdp_core_kek::memory_size(); }
 inline uint16_t reg16(int idx) { return pdp_core_kek::reg16(idx); }
 inline uint16_t pc() { return pdp_core_kek::pc(); }
 inline uint16_t psw() { return pdp_core_kek::psw(); }
+inline uint16_t fpsr() { return pdp_core_kek::fpsr(); }
 inline bool set_reg16(int idx, uint16_t value) {
   return pdp_core_kek::set_reg16(idx, value);
 }
 inline bool set_psw(uint16_t value) { return pdp_core_kek::set_psw(value); }
+inline bool set_fpsr(uint16_t value) { return pdp_core_kek::set_fpsr(value); }
 inline uint32_t instruction_count() { return pdp_core_kek::instruction_count(); }
 inline bool next_instruction(uint16_t* address, uint16_t* opcode) {
   return pdp_core_kek::next_instruction(address, opcode);
@@ -48,8 +50,8 @@ inline bool read_physical_word(uint32_t address, uint16_t* value) {
 inline bool write_physical_word(uint32_t address, uint16_t value) {
   return pdp_core_kek::write_physical_word(address, value);
 }
-inline bool read_mmu_word(uint16_t address, uint16_t* value) {
-  return pdp_core_kek::read_mmu_word(address, value);
+inline bool read_mmu_word(uint16_t address, uint16_t* value, bool data_space) {
+  return pdp_core_kek::read_mmu_word(address, value, data_space);
 }
 inline bool read_rp06_word(uint16_t address, uint16_t* value) {
   return pdp_core_kek::read_rp06_word(address, value);
@@ -63,6 +65,17 @@ inline bool set_rp06_operator_stop(bool stopped) {
 }
 inline bool get_rp06_operator_stop(bool* stopped) {
   return pdp_core_kek::get_rp06_operator_stop(stopped);
+}
+inline bool read_rl02_word(uint16_t address, uint16_t* value) {
+  return pdp_core_kek::read_rl02_word(address, value);
+}
+inline bool get_rl02_deferred(bool* active, int* delay, int* polls, int* unit,
+                              int* command, int* irq_ticks) {
+  return pdp_core_kek::get_rl02_deferred(active, delay, polls, unit, command,
+                                         irq_ticks);
+}
+inline bool get_rl02_position(int16_t* track, uint8_t* head, uint8_t* sector) {
+  return pdp_core_kek::get_rl02_position(track, head, sector);
 }
 inline bool get_mmu_summary(uint16_t* mmr0, uint16_t* mmr1, uint16_t* mmr2,
                             uint16_t* mmr3, uint16_t* cpuerr, uint16_t* pir,

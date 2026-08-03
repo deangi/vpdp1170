@@ -29,6 +29,7 @@
 #include "../disk.h"
 #include "../appconfig.h"
 #include "../kek_kwp.h"
+#include "../kw11.h"
 #include "../platform.h"
 #include "../telnet.h"
 
@@ -1109,9 +1110,11 @@ static void service_line_clock() {
     uint16_t csr = clock->read_word(ADDR_LFC);
     csr |= 0200;                 // monitor bit / tick happened
     clock->write_word(ADDR_LFC, csr);
+    kw11::charge_clock_trace("tick", csr);
 
     if ((csr & 0100) && !g_cpu->has_queued_interrupt(6, 0100)) {
       g_cpu->queue_interrupt(6, 0100);
+      kw11::charge_clock_trace("irq-sched", csr, 0100);
     }
   }
 }
@@ -1527,6 +1530,10 @@ uint16_t psw() {
   return g_cpu ? g_cpu->getPSW() : 0;
 }
 
+uint16_t fpsr() {
+  return g_cpu ? g_cpu->getFPSR() : 0;
+}
+
 bool set_reg16(int idx, uint16_t value) {
   if (!g_cpu || idx < 0 || idx > 7) return false;
   g_cpu->set_register(idx, value);
@@ -1536,6 +1543,12 @@ bool set_reg16(int idx, uint16_t value) {
 bool set_psw(uint16_t value) {
   if (!g_cpu) return false;
   g_cpu->setPSW(value, false);
+  return true;
+}
+
+bool set_fpsr(uint16_t value) {
+  if (!g_cpu) return false;
+  g_cpu->setFPSR(value);
   return true;
 }
 
@@ -1564,11 +1577,15 @@ bool read_physical_word(uint32_t address, uint16_t* value) {
   return true;
 }
 
-bool read_mmu_word(uint16_t address, uint16_t* value) {
+bool read_mmu_word(uint16_t address, uint16_t* value, bool data_space) {
   if (!g_bus || !g_cpu || !value || (address & 1)) return false;
-  auto result = g_bus->peek_word(g_cpu->getPSW_runmode(), address);
-  if (!result.has_value()) return false;
-  *value = result.value();
+  auto meta =
+      g_bus->getMMU()->calculate_physical_address(g_cpu->getPSW_runmode(), address);
+  const uint32_t pa =
+      data_space ? meta.physical_data : meta.physical_instruction;
+  const uint32_t mem_size = g_bus->get_memory_size();
+  if (pa >= mem_size) return false;
+  *value = g_bus->read_physical(pa);
   return true;
 }
 
@@ -1586,6 +1603,35 @@ bool get_rp06_deferred(bool* active, int* delay, int* cs1_polls,
   *delay = g_rp06->deferred_delay_remaining();
   *cs1_polls = g_rp06->deferred_cs1_poll_count();
   *wc_polls = g_rp06->deferred_wc_poll_count();
+  return true;
+}
+
+bool read_rl02_word(uint16_t address, uint16_t* value) {
+  if (!g_rl02 || !value || (address & 1)) return false;
+  if (address < RL02_BASE || address >= RL02_END) return false;
+  *value = g_rl02->peek_word(address);
+  return true;
+}
+
+bool get_rl02_deferred(bool* active, int* delay, int* polls, int* unit,
+                       int* command, int* irq_ticks) {
+  if (!g_rl02 || !active || !delay || !polls || !unit || !command ||
+      !irq_ticks)
+    return false;
+  *active = g_rl02->is_deferred_active();
+  *delay = g_rl02->deferred_delay_remaining();
+  *polls = g_rl02->deferred_polls();
+  *unit = g_rl02->deferred_unit();
+  *command = g_rl02->deferred_cmd();
+  *irq_ticks = g_rl02->irq_ticks_remaining();
+  return true;
+}
+
+bool get_rl02_position(int16_t* track, uint8_t* head, uint8_t* sector) {
+  if (!g_rl02 || !track || !head || !sector) return false;
+  *track = g_rl02->current_track();
+  *head = g_rl02->current_head();
+  *sector = g_rl02->current_sector();
   return true;
 }
 

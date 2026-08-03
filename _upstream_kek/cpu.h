@@ -208,6 +208,9 @@ public:
 	uint16_t getPSW() const { return psw; }
 	void     setPSW(const uint16_t v, const bool limited);
 
+	uint16_t getFPSR() const { return fpsr; }
+	void     setFPSR(const uint16_t v) { fpsr = v & 0147777; }
+
 	uint16_t get_stack_limit_register() { return stack_limit_register; }
 	void     set_stack_limit_register(const uint16_t v) { stack_limit_register = v; }
 

@@ -23,20 +23,28 @@ uint32_t memory_size();
 uint16_t reg16(int idx);
 uint16_t pc();
 uint16_t psw();
+uint16_t fpsr();
 bool set_reg16(int idx, uint16_t value);
 bool set_psw(uint16_t value);
+bool set_fpsr(uint16_t value);
 uint32_t instruction_count();
 
 bool next_instruction(uint16_t* address, uint16_t* opcode);
 bool disassemble_next(char* buffer, size_t size);
 bool read_physical_word(uint32_t address, uint16_t* value);
 bool write_physical_word(uint32_t address, uint16_t value);
-bool read_mmu_word(uint16_t address, uint16_t* value);
+// Logical examine via current PSW run-mode maps. data_space selects D vs I
+// when split I/D is enabled for that mode; otherwise both resolve the same.
+bool read_mmu_word(uint16_t address, uint16_t* value, bool data_space);
 bool read_rp06_word(uint16_t address, uint16_t* value);
 bool get_rp06_deferred(bool* active, int* delay, int* cs1_polls,
                        int* wc_polls);
 bool set_rp06_operator_stop(bool stopped);
 bool get_rp06_operator_stop(bool* stopped);
+bool read_rl02_word(uint16_t address, uint16_t* value);
+bool get_rl02_deferred(bool* active, int* delay, int* polls, int* unit,
+                       int* command, int* irq_ticks);
+bool get_rl02_position(int16_t* track, uint8_t* head, uint8_t* sector);
 bool get_mmu_summary(uint16_t* mmr0, uint16_t* mmr1, uint16_t* mmr2,
                      uint16_t* mmr3, uint16_t* cpuerr, uint16_t* pir,
                      uint32_t* io_base);
