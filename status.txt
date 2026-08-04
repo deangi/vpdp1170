@@ -49,7 +49,7 @@ TODO:
 31) See if TT1 stuff is still part of the parsing
 32) Find/Design/test a way to transfer data into/out of guest file system.
 33) Investigate Decnet interface for 11M+?
-
+34) future - LP interface?
 
 8/3 - Boot status
 Name            drive   status     OS name     comments
@@ -57,7 +57,7 @@ Name            drive   status     OS name     comments
 RSX11M46        RL02    working    RSX11M 4.6  has boot_script
 RT11V5          RK05    working    RT11 5.04   boot_text works
 UNIX6           RK05    working    Unix V6     has boot script
-UNIX7           RL02    working    Unix V7     needs boot script
+UNIX7           RL02    working    Unix V7     has boot script
 XXDP22          RL02    working    XXDP 2.2    has boot script
 XXDP25          RL02    working    XXDP 2.5    boot script not needed
 11MARK          RL02    working    RSX11M 4.8  has boot script
@@ -69,7 +69,8 @@ RSX11MP46-PIDP  DU0     working    RSX11M+4.6  has boot script
 BSD211-PiDP     DU0     crash                  crash - odd PC at 10067
 211BSD-RP0      RP0     working    BSD 2.11 #5 needs boot script
 RSTSV7          RL01    working    RSTS/E V7   boots to Ready (8/3: RL IRQ, LP11, parity NXM)
-RSTSV7-FULL     RL01    working    RSTS/E V7   same as RSTSV7
+RSTSV7-FULL     RL01    working    RSTS/E V7   same as RSTSv7
+
 
 
 

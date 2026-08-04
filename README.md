@@ -1,18 +1,17 @@
 # vpdp1170 — a DEC PDP-11/70 emulator for the ESP32-S3 with a touch screen display.
 
-> Development status: V1.4 boots Unix V6, RSTS V4B, RT-11 V5.04,
-> RSX-11M V4.0 baseline, and RSX-11M V4.8 (124KW mapped) through the
-> `kek` PDP-11/70 adapter.
+> Development status: **V2.5** (2026-08-03). Guest OS boot matrix below
+> (RSTS/E V7 through Ready; Unix V6/V7; 2.11BSD on RL/RP; RSX-11M / M+;
+> RT-11; XXDP; DOSBATCH). See `status.txt` for the full working notes.
 > The ESP32 host side is inherited from `vpdp1140`: TFT console, touch menu,
 > Telnet, FTP, SD card configuration, monitor/shell, and disk image management.
 > The inherited 11/40-derived scaffold remains in the tree for reference and
 > fallback while the `kek` device set is brought across in phases.
 
 A **Freenove ESP32-S3 2.8" Display** board turned into a tiny DEC
-PDP-11/70 that boots **V6 Unix** from an SD-card disk image. The console
+PDP-11/70 that boots guest OSes from SD-card disk images. The console
 appears on the onboard TFT, on Telnet, and on USB-Serial — all three live
-simultaneously. Also boots RT-11 V5.04, RSTS V4B, RSX-11M V4.0, RSX-11M V4.8
-124KW, and XXDP.
+simultaneously.
 
 For full operating instructions, SD card setup, configuration-file reference,
 and menu documentation, see the [PDP 11/70 Emulator User Guide](docs/user-manual.md).
@@ -61,23 +60,29 @@ this project.
 
 ## Current Bring-Up Status
 
-The active Arduino sketch reports the selected CPU engine at boot and on the
-System Info screen. For V1.4 it should report the `kek PDP-11/70 adapter` with
-4 MB target memory. Unix V6, RSTS V4B, RT-11 V5.04, RSX-11M V4.0 baseline, and
-RSX-11M V4.8 (11Mark) boot and accept console input. RL01/RL02 support is wired
-through the kek RL controller for DL0-DL3 testing.
+As of **2026-08-03 (V2.5)**. The sketch reports the `kek PDP-11/70 adapter`
+with up to 4 MB target memory. Sample configs live under `PdpSdCard/pdpconfig-*.ini`.
 
-| Guest OS              | Disk image          | Result                            |
-|-----------------------|---------------------|-----------------------------------|
-| **V6 Unix**           | `unixv6.dsk` (RK05) | ✅ Boots to `@`, then `#` shell   |
-| **XXDP+ diagnostics** | `xxdp25.dsk` (RL02) | ✅ Boots to XXDP-SM `.` monitor    |
-| RT-11 SJ V5.04        | `rt11v5.dsk` (RK05) | ✅ Boots to . prompt, runs DIR   |
-| RSTS V4B              | `RSTS11v4B.dsk`     |✅ Boots to READY prompt          |
-| RSX-11M V4.0          | RL01/RL02 image      | ✅ Boots successfully            |
-| RSX-11M V4.8          | RL01/RL02 image      | ✅ Boots 124KW mapped system     |
+| Config / Name     | Drive | Status  | OS                    | Notes |
+|-------------------|-------|---------|-----------------------|-------|
+| RSX11M46          | RL02  | working | RSX-11M 4.6           | `boot_script` |
+| RT11V5            | RK05  | working | RT-11 5.04            | `boot_input` / typeahead |
+| UNIX6             | RK05  | working | Unix V6               | `boot_script` |
+| UNIX7             | RL02  | working | Unix V7               | `boot_script` |
+| XXDP22            | RL02  | working | XXDP 2.2              | `boot_script` |
+| XXDP25            | RL02  | working | XXDP 2.5              | boot script not needed |
+| 11MARK            | RL02  | working | RSX-11M 4.8           | `boot_script` |
+| 211BSD            | RL02  | working | 2.11BSD #3            | needs `boot_script` |
+| DOSBATCH11        | RK05  | working | V10-01A               | needs `boot_script` |
+| RSTSV4B           | RK05  | working | RSTS V04B-17          | `boot_input` working |
+| RSX11M            | RL02  | working | RSX-11M V4.0          | 28KW baseline; script not needed |
+| RSX11MP46-PIDP    | DU0   | working | RSX-11M+ 4.6          | `boot_script` |
+| BSD211-PiDP       | DU0   | crash   | —                     | odd PC at `10067` |
+| 211BSD-RP0        | RP0   | working | 2.11BSD #5            | needs `boot_script` |
+| RSTSV7            | RL01  | working | RSTS/E V7             | Ready (8/3: RL IRQ, LP11, parity NXM) |
+| RSTSV7-FULL       | RL01  | working | RSTS/E V7             | same as RSTSV7 |
 
-The Unix V6, RSTS V4B, RT-11 V5.04, RSX-11M V4.0 baseline, and RSX-11M V4.8
-rows are verified for V1.4. Broader validation on the kek PDP-11/70 path is ongoing.
+Working notes and older history: [`status.txt`](status.txt).
 
 ## Hardware
 
