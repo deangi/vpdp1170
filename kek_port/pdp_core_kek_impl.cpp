@@ -29,6 +29,8 @@
 #include "../disk.h"
 #include "../appconfig.h"
 #include "../kek_kwp.h"
+#include "../kek_lp11.h"
+#include "../lp11_capture.h"
 #include "../kw11.h"
 #include "../platform.h"
 #include "../telnet.h"
@@ -1155,6 +1157,13 @@ static void service_line_clock() {
   if (kek_kwp::take_interrupt())
     g_cpu->queue_interrupt(kek_kwp::BR_LEVEL, kek_kwp::VECTOR);
 
+  // LP11 print completion + BR4/200 when IE+DONE.
+  kek_lp11::tick();
+  if (kek_lp11::take_interrupt()) {
+    g_cpu->queue_interrupt(kek_lp11::BR_LEVEL, kek_lp11::VECTOR);
+    g_cpu->execute_any_pending_interrupt();
+  }
+
   const uint64_t now_instr = g_cpu->get_instructions_executed_count();
   if (g_last_clock_instr == 0) {
     g_last_clock_instr = now_instr;
@@ -1214,6 +1223,9 @@ bool init() {
   g_bus->add_cpu(g_cpu);
   kek_kwp::set_instruction_counter(guest_instruction_count_for_kwp);
   kek_kwp::reset();
+  kek_lp11::set_instruction_counter(guest_instruction_count_for_kwp);
+  lp11_capture::init();
+  kek_lp11::reset();
 
   g_tty = new tty(nullptr, g_bus);
   if (!g_tty) return false;
@@ -1275,6 +1287,8 @@ void reset() {
   clear_run_state_for_boot();
   g_cpu->reset();
   kek_kwp::reset();
+  g_cpu->unqueue_interrupt(kek_lp11::BR_LEVEL, kek_lp11::VECTOR);
+  kek_lp11::reset();
   clear_trace_ring();
   install_boot_stub();
   end_reset_transaction();
@@ -1293,6 +1307,8 @@ void cold_boot() {
   g_bus->reset(true);
   g_cpu->reset();
   kek_kwp::reset();
+  g_cpu->unqueue_interrupt(kek_lp11::BR_LEVEL, kek_lp11::VECTOR);
+  kek_lp11::reset();
   clear_trace_ring();
   install_boot_stub();
   end_reset_transaction();

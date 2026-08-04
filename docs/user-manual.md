@@ -45,6 +45,7 @@ disk before asking the emulator to detach its image.
 | RL disk | RL11 controller, up to two normal RL drives in common configurations, with four host slots available as `DL0`..`DL3` |
 | RP disk | Optional secondary RH11/RP04-RP06 disk as `RP0`; testing mode, not verified yet, and not currently bootable |
 | Clocks | KW11-L line clock and optional KW11-P programmable clock |
+| Line printer | LP11 at `0177514`/`0177516`, vector `0200` (BR4); print bytes captured to `/LPn.TXT` on the SD card |
 | Boot ROM | M9312-style boot stubs for RK0 and RL0 |
 
 The V1.1 bring-up path allocates the PDP-11/70 4 MB physical memory target in

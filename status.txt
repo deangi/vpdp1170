@@ -49,7 +49,8 @@ TODO:
 31) See if TT1 stuff is still part of the parsing
 32) Find/Design/test a way to transfer data into/out of guest file system.
 33) Investigate Decnet interface for 11M+?
-34) future - LP interface?
+34) done 8/3 - LP11 interface: DONE/IE + BR4/200; print capture to /LPn.TXT
+    (4KB FIFO, lp_consumer every 500ms, 1KB flush+close, 2s idle flush)
 
 8/3 - Boot status
 Name            drive   status     OS name     comments
@@ -68,7 +69,7 @@ RSX11M          RL02    working    RSX11M V4.0 boot script not needed 28kw base 
 RSX11MP46-PIDP  DU0     working    RSX11M+4.6  has boot script
 BSD211-PiDP     DU0     crash                  crash - odd PC at 10067
 211BSD-RP0      RP0     working    BSD 2.11 #5 needs boot script
-RSTSV7          RL01    working    RSTS/E V7   boots to Ready (8/3: RL IRQ, LP11, parity NXM)
+RSTSV7          RL01    working    RSTS/E V7   Ready; LP11 IRQ + /LPn.TXT capture
 RSTSV7-FULL     RL01    working    RSTS/E V7   same as RSTSv7
 
 

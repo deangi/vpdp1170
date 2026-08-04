@@ -79,7 +79,7 @@ with up to 4 MB target memory. Sample configs live under `PdpSdCard/pdpconfig-*.
 | RSX11MP46-PIDP    | DU0   | working | RSX-11M+ 4.6          | `boot_script` |
 | BSD211-PiDP       | DU0   | crash   | —                     | odd PC at `10067` |
 | 211BSD-RP0        | RP0   | working | 2.11BSD #5            | needs `boot_script` |
-| RSTSV7            | RL01  | working | RSTS/E V7             | Ready (8/3: RL IRQ, LP11, parity NXM) |
+| RSTSV7            | RL01  | working | RSTS/E V7             | Ready (LP11 interrupts; print → `/LPn.TXT`) |
 | RSTSV7-FULL       | RL01  | working | RSTS/E V7             | same as RSTSV7 |
 
 Working notes and older history: [`status.txt`](status.txt).

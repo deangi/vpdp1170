@@ -23,6 +23,7 @@
 
 #if defined(ESP32)
 #include "../kek_kwp.h"
+#include "../kek_lp11.h"
 #include "../kw11.h"
 #include "../platform.h"
 #include "rl02.h"
@@ -471,6 +472,14 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 		return word_mode == wm_byte ? kek_kwp::read_byte(a) : kek_kwp::read_word(a);
 #endif
 
+#if defined(ESP32)
+	if (kek_lp11::contains((uint16_t)a)) {
+		uint16_t temp = word_mode == wm_byte ? kek_lp11::read_byte((uint16_t)a)
+		                                    : kek_lp11::read_word((uint16_t)a);
+		DOLOG(log_ss::LS_BUS_IO, "READ-I/O LP11 %06o: %06o", a, temp);
+		return temp;
+	}
+#else
 	if (a == ADDR_LP11CSR) { // printer CSR — DONE always set
 		uint16_t temp = 0200;
 		DOLOG(log_ss::LS_BUS_IO, "READ-I/O LP11 CSR: %o", temp);
@@ -481,6 +490,7 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 		DOLOG(log_ss::LS_BUS_IO, "READ-I/O LP11 DB: 0");
 		return 0;
 	}
+#endif
 
 	/// MMU ///
 	if ((a >= ADDR_PDR_SV_START && a < ADDR_PAR_SV_END) ||
@@ -886,10 +896,26 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 		return false;
 	}
 
-	// LP11 stub: reads already report DONE. Writes must not NXM — RSTS INIT
-	// probes LP0 at 177514 after RL, and a write timeout there is fatal
-	// (unlike deliberate NXM probes). Leave interrupt unimplemented for now;
-	// INIT will disable a non-interrupting LP and continue.
+#if defined(ESP32)
+	if (kek_lp11::contains((uint16_t)a)) {
+		DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O LP11 %06o: %06o", a, value);
+		if (word_mode == wm_byte)
+			kek_lp11::write_byte((uint16_t)a, (uint8_t)value);
+		else
+			kek_lp11::write_word((uint16_t)a, value);
+		// Deliver BR4/200 synchronously (INIT LP probe times out if we
+		// wait for the 1 ms line-clock task). Match sam11 IE+DONE edge.
+		if (c) {
+			if (kek_lp11::take_interrupt()) {
+				c->queue_interrupt(kek_lp11::BR_LEVEL, kek_lp11::VECTOR);
+				c->execute_any_pending_interrupt();
+			} else if ((kek_lp11::read_word(kek_lp11::CSR_ADDR) & 0000100) == 0) {
+				c->unqueue_interrupt(kek_lp11::BR_LEVEL, kek_lp11::VECTOR);
+			}
+		}
+		return false;
+	}
+#else
 	if (a == ADDR_LP11CSR) {
 		DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O LP11 CSR: %06o", value);
 		return false;
@@ -898,6 +924,7 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 		DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O LP11 DB: %06o", value);
 		return false;
 	}
+#endif
 
 #if defined(ESP32)
 	if (kek_kwp::contains(a)) {
