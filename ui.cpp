@@ -373,7 +373,10 @@ static void activate(int idx) {        // idx = absolute item index
       else if (idx == 2) { scan_variants(PDP_CFG_PREFIX);  go(SC_PDP_PICKER);  }
       else if (idx == 3) go(SC_INFO);
       else if (idx == 4) go(SC_BRIGHT);
-      else if (idx == 5) { g_reboot = true; g_screen = SC_CLOSED; }
+      else if (idx == 5) {
+        g_confirm_esp_reset = false;   // emulator restart (not ESP.restart)
+        go(SC_CONFIRM_RESET);
+      }
       else if (idx == 6) {
         g_confirm_esp_reset = true;
         go(SC_CONFIRM_RESET);

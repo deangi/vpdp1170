@@ -240,9 +240,11 @@ Accepted aliases for `boot_input` compatibility are `typeahead` and `boot_keys`,
 expect => reply || expect => reply || ...
 ```
 
-Up to 8 steps. Expect and reply use the same escapes as `boot_input`. Matching is
-always case-insensitive against KL11 console output. After a match, the reply is
-delayed by 500 ms so the guest can finish printing and accept input.
+Up to 8 steps. Expect and reply use the same escapes as `boot_input`
+(`\r`, `\n`, `\t`, `\040` / `\s`, `\xHH`, `\ooo`, `^C`, …). Matching is
+case-insensitive for letters only — CR, LF, space, and other controls are
+matched exactly. After a match, the reply is delayed by 500 ms so the guest
+can finish printing and accept input.
 `boot_input` (if set) is still injected immediately at reboot; `boot_script`
 then answers later prompts.
 

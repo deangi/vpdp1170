@@ -138,17 +138,19 @@ void config_set_boot_input(AppConfig& cfg, const String& encoded) {
                                             AppConfig::BOOT_INPUT_MAX);
 }
 
-static String trim_local(const String& s) {
+// Trim only space/tab around boot_script separators. Do not use isspace():
+// CR/LF must survive so expect clauses can include \r \n (literal or escaped).
+static String trim_boot_script_ws(const String& s) {
   int a = 0, b = (int)s.length();
-  while (a < b && isspace((uint8_t)s[a])) a++;
-  while (b > a && isspace((uint8_t)s[b - 1])) b--;
+  while (a < b && (s[a] == ' ' || s[a] == '\t')) a++;
+  while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t')) b--;
   return s.substring(a, b);
 }
 
 void config_set_boot_script(AppConfig& cfg, const String& encoded) {
   cfg.boot_script_count = 0;
   String s = unquote_config_value(encoded);
-  s = trim_local(s);
+  s = trim_boot_script_ws(s);
   if (s.length() == 0) return;
 
   int start = 0;
@@ -162,15 +164,16 @@ void config_set_boot_script(AppConfig& cfg, const String& encoded) {
       }
     }
     String step = (sep < 0) ? s.substring(start) : s.substring(start, sep);
-    step = trim_local(step);
+    step = trim_boot_script_ws(step);
     if (step.length() > 0) {
       int arrow = step.indexOf("=>");
       if (arrow < 0) {
         LOGE("boot_script: step %u missing '=>' separator: %s",
              (unsigned)cfg.boot_script_count, step.c_str());
       } else {
-        String expect_s = trim_local(step.substring(0, arrow));
-        String reply_s  = trim_local(step.substring(arrow + 2));
+        // Expect/reply keep \r \n and \040/\s; only pad spaces around =>.
+        String expect_s = trim_boot_script_ws(step.substring(0, arrow));
+        String reply_s  = trim_boot_script_ws(step.substring(arrow + 2));
         AppConfig::BootScriptStep& out =
             cfg.boot_script[cfg.boot_script_count];
         out.expect_len = (uint8_t)decode_escaped_bytes(
@@ -228,10 +231,18 @@ String config_escape_bytes(const uint8_t* bytes, size_t len) {
       case 0x1b: out += "\\e"; break;
       case '\\': out += "\\\\"; break;
       case '"':  out += "\\\""; break;
+      case ' ':
+        // Leading/trailing spaces would be eaten by boot_script separator
+        // trim; always emit octal so expect clauses round-trip (\040).
+        if (i == 0 || i + 1 == len)
+          out += "\\040";
+        else
+          out += ' ';
+        break;
       default:
         if (c >= 32 && c < 127) out += (char)c;
         else {
-          snprintf(tmp, sizeof(tmp), "\\x%02X", c);
+          snprintf(tmp, sizeof(tmp), "\\%03o", (unsigned)c);
           out += tmp;
         }
         break;

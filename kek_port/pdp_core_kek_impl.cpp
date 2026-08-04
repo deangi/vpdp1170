@@ -1127,8 +1127,15 @@ static uint64_t guest_instruction_count_for_kwp() {
 
 static void begin_reset_transaction() {
   g_reset_in_progress.store(true, std::memory_order_release);
-  while (g_clock_service_active.load(std::memory_order_acquire))
+  const uint32_t start_ms = millis();
+  while (g_clock_service_active.load(std::memory_order_acquire)) {
+    // Do not hang forever if the clock task is stuck (e.g. rare race).
+    if (millis() - start_ms > 1000) {
+      LOGE("kek reset: clock service still active after 1s; continuing");
+      break;
+    }
     vTaskDelay(1);
+  }
 }
 
 static void end_reset_transaction() {

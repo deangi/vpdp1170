@@ -231,6 +231,8 @@ bool pop_priority_input(uint8_t* out) {
 }
 
 static void emit_console_byte(uint8_t out) {
+  // Guest CR padding and other NULs must not reach sinks or boot_script.
+  if (out == 0) return;
   boot_script_observe(out);
   console_feed(out);
   telnet_write(out);

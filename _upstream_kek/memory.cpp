@@ -3,6 +3,8 @@
 
 #if defined(ESP32)
 #include <Arduino.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #endif
 #include <algorithm>
 #include <cstdlib>
@@ -77,8 +79,22 @@ void memory::reset(const bool hard)
 {
 	// Clear only the visible PDP RAM. Capacity above size is retained for
 	// reuse across emulator resets and is left untouched.
-	if (hard && m && size)
-		memset(m, 0x00, size);
+	if (!(hard && m && size))
+		return;
+#if defined(ESP32)
+	// Chunked clear so a multi-megabyte PSRAM zero does not stall the
+	// FreeRTOS scheduler / UI / network for seconds without yielding.
+	constexpr uint32_t kChunk = 65536u;
+	for (uint32_t off = 0; off < size; ) {
+		const uint32_t n = std::min(kChunk, size - off);
+		memset(m + off, 0x00, n);
+		off += n;
+		if (off < size)
+			vTaskDelay(1);
+	}
+#else
+	memset(m, 0x00, size);
+#endif
 }
 
 #if IS_POSIX
