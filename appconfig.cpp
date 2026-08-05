@@ -132,6 +132,62 @@ static size_t decode_escaped_bytes(const String& s, uint8_t* out, size_t out_max
   return n;
 }
 
+bool config_parse_ipv4(const char* s, uint32_t* out_host_order) {
+  if (!s || !out_host_order) return false;
+  unsigned a = 0, b = 0, c = 0, d = 0;
+  if (sscanf(s, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) return false;
+  if (a > 255 || b > 255 || c > 255 || d > 255) return false;
+  *out_host_order = ((uint32_t)a << 24) | ((uint32_t)b << 16) |
+                    ((uint32_t)c << 8) | (uint32_t)d;
+  return true;
+}
+
+void config_format_ipv4(uint32_t host_order, char* buf, size_t buflen) {
+  if (!buf || buflen == 0) return;
+  snprintf(buf, buflen, "%u.%u.%u.%u",
+           (unsigned)((host_order >> 24) & 0xff),
+           (unsigned)((host_order >> 16) & 0xff),
+           (unsigned)((host_order >> 8) & 0xff),
+           (unsigned)(host_order & 0xff));
+}
+
+bool config_parse_mac(const char* s, uint8_t mac[6]) {
+  if (!s || !mac) return false;
+  unsigned b[6];
+  char sep1 = 0, sep2 = 0, sep3 = 0, sep4 = 0, sep5 = 0;
+  if (sscanf(s, "%2x%c%2x%c%2x%c%2x%c%2x%c%2x",
+             &b[0], &sep1, &b[1], &sep2, &b[2], &sep3,
+             &b[3], &sep4, &b[4], &sep5, &b[5]) != 11)
+    return false;
+  if (!(sep1 == sep2 && sep2 == sep3 && sep3 == sep4 && sep4 == sep5))
+    return false;
+  if (sep1 != '-' && sep1 != ':' && sep1 != '.') return false;
+  for (int i = 0; i < 6; i++) {
+    if (b[i] > 0xff) return false;
+    mac[i] = (uint8_t)b[i];
+  }
+  return true;
+}
+
+void config_format_mac(const uint8_t mac[6], char* buf, size_t buflen) {
+  if (!buf || buflen == 0) return;
+  if (!mac) {
+    buf[0] = 0;
+    return;
+  }
+  snprintf(buf, buflen, "%02X-%02X-%02X-%02X-%02X-%02X",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+void config_apply_ethernet_defaults(AppConfig& cfg) {
+  cfg.eth_enabled = false;
+  const uint8_t def_mac[6] = { 0x08, 0x00, 0x2B, 0x11, 0x70, 0x01 };
+  memcpy(cfg.eth_mac, def_mac, 6);
+  cfg.eth_guest_ip   = 0x0A0B0002u;  // 10.11.0.2
+  cfg.eth_guest_mask = 0xFFFFFF00u;  // 255.255.255.0
+  cfg.eth_gateway_ip = 0x0A0B0001u;  // 10.11.0.1
+}
+
 void config_set_boot_input(AppConfig& cfg, const String& encoded) {
   cfg.boot_input_len = decode_escaped_bytes(unquote_config_value(encoded),
                                             cfg.boot_input,
@@ -309,6 +365,7 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.boot_input_len = 0;
   cfg.boot_script_count = 0;
   cfg.serial1_enabled = false;
+  config_apply_ethernet_defaults(cfg);
 
   cfg.ftp_enabled    = true;
   cfg.ftp_port       = FTP_PORT;
@@ -378,6 +435,34 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
       config_set_boot_script(cfg, val);
   } else if (section == "serial1") {
     if      (key == "enabled") cfg.serial1_enabled = truthy(val);
+  } else if (section == "ethernet") {
+    if (key == "enabled") {
+      cfg.eth_enabled = truthy(val);
+    } else if (key == "mac") {
+      uint8_t mac[6];
+      if (config_parse_mac(val.c_str(), mac))
+        memcpy(cfg.eth_mac, mac, 6);
+      else
+        LOGE("ethernet: bad mac \"%s\"", val.c_str());
+    } else if (key == "guest_ip") {
+      uint32_t ip = 0;
+      if (config_parse_ipv4(val.c_str(), &ip))
+        cfg.eth_guest_ip = ip;
+      else
+        LOGE("ethernet: bad guest_ip \"%s\"", val.c_str());
+    } else if (key == "guest_mask" || key == "mask" || key == "netmask") {
+      uint32_t ip = 0;
+      if (config_parse_ipv4(val.c_str(), &ip))
+        cfg.eth_guest_mask = ip;
+      else
+        LOGE("ethernet: bad guest_mask \"%s\"", val.c_str());
+    } else if (key == "gateway_ip" || key == "gateway") {
+      uint32_t ip = 0;
+      if (config_parse_ipv4(val.c_str(), &ip))
+        cfg.eth_gateway_ip = ip;
+      else
+        LOGE("ethernet: bad gateway_ip \"%s\"", val.c_str());
+    }
   } else if (section == "ftp") {
     if      (key == "enabled")  cfg.ftp_enabled  = truthy(val);
     else if (key == "port")     cfg.ftp_port     = val.toInt();
@@ -548,6 +633,11 @@ static void reset_pdp_reload_state(AppConfig& cfg) {
   cfg.boot_input_len = 0;
   cfg.boot_script_count = 0;
   cfg.serial1_enabled = defaults.serial1_enabled;
+  cfg.eth_enabled = defaults.eth_enabled;
+  memcpy(cfg.eth_mac, defaults.eth_mac, 6);
+  cfg.eth_guest_ip = defaults.eth_guest_ip;
+  cfg.eth_guest_mask = defaults.eth_guest_mask;
+  cfg.eth_gateway_ip = defaults.eth_gateway_ip;
 
   cfg.diag_pcping_sec = defaults.diag_pcping_sec;
   cfg.diag_serialdelay_ms = defaults.diag_serialdelay_ms;
@@ -657,6 +747,25 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println("; command channel and direct SD file commands are always available;");
   f.println("; this setting enables only TT1 background file streaming.");
   f.printf("enabled = %s\r\n", cfg.serial1_enabled ? "true" : "false");
+  f.println();
+  f.println("[ethernet]");
+  f.println("; DEUNA Unibus Ethernet (L3 NAT onto WiFi STA). Default off.");
+  f.println("; When enabled, presents DEUNA at 174510 (vec 120, BR5).");
+  f.println("; Phase 2: CSR/port commands + TX sink. TCP/IP NAT comes later.");
+  f.println("; Guest uses a private subnet; host Telnet/FTP keep the STA IP.");
+  f.printf("enabled   = %s\r\n", cfg.eth_enabled ? "true" : "false");
+  {
+    char macbuf[24];
+    char ipbuf[16];
+    config_format_mac(cfg.eth_mac, macbuf, sizeof(macbuf));
+    f.printf("mac       = %s\r\n", macbuf);
+    config_format_ipv4(cfg.eth_guest_ip, ipbuf, sizeof(ipbuf));
+    f.printf("guest_ip  = %s\r\n", ipbuf);
+    config_format_ipv4(cfg.eth_guest_mask, ipbuf, sizeof(ipbuf));
+    f.printf("guest_mask = %s\r\n", ipbuf);
+    config_format_ipv4(cfg.eth_gateway_ip, ipbuf, sizeof(ipbuf));
+    f.printf("gateway_ip = %s\r\n", ipbuf);
+  }
   f.println();
   f.println("[diag]");
   f.println("; pcping      = seconds between host's periodic PC/register dump");
@@ -867,6 +976,17 @@ void config_print(const AppConfig& cfg) {
       cfg.boot_script_count == 1 ? "" : "s");
   LOG("[serial1] enabled=%s  CSR=776500  RX-vector=300  TX-vector=304",
       cfg.serial1_enabled ? "true" : "false");
+  {
+    char macbuf[24];
+    char gip[16], mask[16], gw[16];
+    config_format_mac(cfg.eth_mac, macbuf, sizeof(macbuf));
+    config_format_ipv4(cfg.eth_guest_ip, gip, sizeof(gip));
+    config_format_ipv4(cfg.eth_guest_mask, mask, sizeof(mask));
+    config_format_ipv4(cfg.eth_gateway_ip, gw, sizeof(gw));
+    LOG("[ethernet] enabled=%s  mac=%s  guest=%s/%s  gateway=%s%s",
+        cfg.eth_enabled ? "true" : "false", macbuf, gip, mask, gw,
+        cfg.eth_enabled ? "  DEUNA@174510" : "");
+  }
   LOG("[ftp]     enabled=%s  port=%d  user=\"%s\" (password=%d chars)",
       cfg.ftp_enabled ? "true" : "false", cfg.ftp_port,
       cfg.ftp_user.c_str(), (int)cfg.ftp_password.length());

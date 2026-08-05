@@ -51,6 +51,21 @@ TODO:
 33) Investigate Decnet interface for 11M+?
 34) done 8/3 - LP11 interface: DONE/IE + BR4/200; print capture to /LPn.TXT
     (4KB FIFO, lp_consumer every 500ms, 1KB flush+close, 2s idle flush)
+35) done 8/4 - DEUNA skeleton (phase 2): CSR 174510 / vec 120 / BR5 when
+    [ethernet] enabled; port commands + TX sink
+36) done 8/4 - DEUNA frame path + ARP (phase 3): fix TX OWN in desc word2;
+    eth_nat ARP replies for gateway_ip; RX ring inject
+37) done 8/5 - DEUNA L3 NAT (V2.6): gateway/STA ICMP + UDP/TCP/ICMP NAPT on
+    net_task; verified 2.11BSD ping, DNS, telnet, and ftp through STA
+
+ifconfig de0 10.11.0.2 netmask 255.255.255.0 up
+route add default 10.11.0.1 1
+netstat -r
+ifconfig de0
+ping -c 2 10.11.0.1
+ping -c 3 192.168.7.245
+ping -c 3 192.168.4.1
+ping -c 3 8.8.8.8
 
 8/3 - Boot status
 Name            drive   status     OS name     comments

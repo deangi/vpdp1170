@@ -12,6 +12,7 @@
 #include "pdp_core.h"
 #include "platform.h"
 #include "telnet.h"
+#include "kek_deuna.h"
 
 #include <Arduino.h>
 #include "sd_fs.h"
@@ -342,6 +343,19 @@ static void show_runtime_settings() {
                 config_format_boot_script(cfg).c_str(),
                 (unsigned)cfg.boot_script_count,
                 cfg.boot_script_count == 1 ? "" : "s");
+  {
+    char macbuf[24];
+    char gip[16], mask[16], gw[16];
+    config_format_mac(cfg.eth_mac, macbuf, sizeof(macbuf));
+    config_format_ipv4(cfg.eth_guest_ip, gip, sizeof(gip));
+    config_format_ipv4(cfg.eth_guest_mask, mask, sizeof(mask));
+    config_format_ipv4(cfg.eth_gateway_ip, gw, sizeof(gw));
+    output_printf("ethernet=%s\r\n", cfg.eth_enabled ? "true" : "false");
+    output_printf("ethernet_mac=%s\r\n", macbuf);
+    output_printf("ethernet_guest_ip=%s\r\n", gip);
+    output_printf("ethernet_guest_mask=%s\r\n", mask);
+    output_printf("ethernet_gateway_ip=%s\r\n", gw);
+  }
 }
 
 static void command_tty_stats() {
@@ -573,6 +587,85 @@ static void command_set(char* arguments) {
                   config_format_boot_script(cfg).c_str(),
                   (unsigned)cfg.boot_script_count,
                   cfg.boot_script_count == 1 ? "" : "s");
+    return;
+  }
+  if (!strcasecmp(name, "ethernet") ||
+      !strcasecmp(name, "ethernet_enabled")) {
+    bool parsed;
+    if (!parse_bool_value(value, &parsed)) {
+      output_text("error: ethernet must be true/false or on/off\r\n");
+      return;
+    }
+    cfg.eth_enabled = parsed;
+    kek_deuna::set_enabled(cfg.eth_enabled);
+    output_printf("ethernet=%s (next PDP reboot attaches DEUNA at 174510)\r\n",
+                  cfg.eth_enabled ? "true" : "false");
+    return;
+  }
+  if (!strcasecmp(name, "ethernet_mac")) {
+    uint8_t mac[6];
+    String v = unquote_shell_value(value);
+    if (!config_parse_mac(v.c_str(), mac)) {
+      output_printf("error: bad ethernet_mac \"%s\" "
+                    "(want aa-bb-cc-dd-ee-ff)\r\n", v.c_str());
+      return;
+    }
+    memcpy(cfg.eth_mac, mac, 6);
+    kek_deuna::set_mac(cfg.eth_mac);
+    char macbuf[24];
+    config_format_mac(cfg.eth_mac, macbuf, sizeof(macbuf));
+    output_printf("ethernet_mac=%s (next PDP reboot; runtime only)\r\n",
+                  macbuf);
+    return;
+  }
+  if (!strcasecmp(name, "ethernet_guest_ip")) {
+    uint32_t ip = 0;
+    String v = unquote_shell_value(value);
+    if (!config_parse_ipv4(v.c_str(), &ip)) {
+      output_printf("error: bad ethernet_guest_ip \"%s\"\r\n", v.c_str());
+      return;
+    }
+    cfg.eth_guest_ip = ip;
+    kek_deuna::set_network(cfg.eth_guest_ip, cfg.eth_guest_mask,
+                           cfg.eth_gateway_ip);
+    char ipbuf[16];
+    config_format_ipv4(ip, ipbuf, sizeof(ipbuf));
+    output_printf("ethernet_guest_ip=%s (next PDP reboot; runtime only)\r\n",
+                  ipbuf);
+    return;
+  }
+  if (!strcasecmp(name, "ethernet_guest_mask") ||
+      !strcasecmp(name, "ethernet_mask")) {
+    uint32_t ip = 0;
+    String v = unquote_shell_value(value);
+    if (!config_parse_ipv4(v.c_str(), &ip)) {
+      output_printf("error: bad ethernet_guest_mask \"%s\"\r\n", v.c_str());
+      return;
+    }
+    cfg.eth_guest_mask = ip;
+    kek_deuna::set_network(cfg.eth_guest_ip, cfg.eth_guest_mask,
+                           cfg.eth_gateway_ip);
+    char ipbuf[16];
+    config_format_ipv4(ip, ipbuf, sizeof(ipbuf));
+    output_printf("ethernet_guest_mask=%s (next PDP reboot; runtime only)\r\n",
+                  ipbuf);
+    return;
+  }
+  if (!strcasecmp(name, "ethernet_gateway_ip") ||
+      !strcasecmp(name, "ethernet_gateway")) {
+    uint32_t ip = 0;
+    String v = unquote_shell_value(value);
+    if (!config_parse_ipv4(v.c_str(), &ip)) {
+      output_printf("error: bad ethernet_gateway_ip \"%s\"\r\n", v.c_str());
+      return;
+    }
+    cfg.eth_gateway_ip = ip;
+    kek_deuna::set_network(cfg.eth_guest_ip, cfg.eth_guest_mask,
+                           cfg.eth_gateway_ip);
+    char ipbuf[16];
+    config_format_ipv4(ip, ipbuf, sizeof(ipbuf));
+    output_printf("ethernet_gateway_ip=%s (next PDP reboot; runtime only)\r\n",
+                  ipbuf);
     return;
   }
   output_printf("error: setting is not runtime-changeable: %s\r\n", name);

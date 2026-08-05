@@ -24,6 +24,7 @@
 #if defined(ESP32)
 #include "../kek_kwp.h"
 #include "../kek_lp11.h"
+#include "../kek_deuna.h"
 #include "../kw11.h"
 #include "../platform.h"
 #include "rl02.h"
@@ -479,6 +480,12 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 		DOLOG(log_ss::LS_BUS_IO, "READ-I/O LP11 %06o: %06o", a, temp);
 		return temp;
 	}
+	if (kek_deuna::contains((uint16_t)a)) {
+		uint16_t temp = word_mode == wm_byte ? kek_deuna::read_byte((uint16_t)a)
+		                                    : kek_deuna::read_word((uint16_t)a);
+		DOLOG(log_ss::LS_BUS_IO, "READ-I/O DEUNA %06o: %06o", a, temp);
+		return temp;
+	}
 #else
 	if (a == ADDR_LP11CSR) { // printer CSR — DONE always set
 		uint16_t temp = 0200;
@@ -911,6 +918,22 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 				c->execute_any_pending_interrupt();
 			} else if ((kek_lp11::read_word(kek_lp11::CSR_ADDR) & 0000100) == 0) {
 				c->unqueue_interrupt(kek_lp11::BR_LEVEL, kek_lp11::VECTOR);
+			}
+		}
+		return false;
+	}
+	if (kek_deuna::contains((uint16_t)a)) {
+		DOLOG(log_ss::LS_BUS_IO, "WRITE-I/O DEUNA %06o: %06o", a, value);
+		if (word_mode == wm_byte)
+			kek_deuna::write_byte((uint16_t)a, (uint8_t)value);
+		else
+			kek_deuna::write_word((uint16_t)a, value);
+		if (c) {
+			if (kek_deuna::take_interrupt()) {
+				c->queue_interrupt(kek_deuna::BR_LEVEL, kek_deuna::VECTOR);
+				c->execute_any_pending_interrupt();
+			} else if ((kek_deuna::read_word(kek_deuna::BASE_ADDR) & 0000100) == 0) {
+				c->unqueue_interrupt(kek_deuna::BR_LEVEL, kek_deuna::VECTOR);
 			}
 		}
 		return false;

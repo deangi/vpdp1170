@@ -194,6 +194,13 @@ boot_script = ""
 [serial1]
 enabled = false
 
+[ethernet]
+enabled    = false
+mac        = 08-00-2B-11-70-01
+guest_ip   = 10.11.0.2
+guest_mask = 255.255.255.0
+gateway_ip = 10.11.0.1
+
 [diag]
 pcping      = 5
 serialdelay = 20
@@ -288,6 +295,41 @@ TT1 uses receive vector `0300`, transmit vector `0304`, and BR4. Files are
 connected at runtime through private commands sent by a PDP program on TTY0.
 Keeping this disabled avoids changing device discovery and floating-vector
 allocation for operating systems that are not configured for a second TTY.
+
+### `[ethernet]`
+
+DEUNA Unibus Ethernet (CSR `174510`, vector `0120`, BR5) with L3 NAT onto
+the ESP32 WiFi STA address. Default is off. Host Telnet/FTP keep the STA DHCP
+address; the guest uses a private subnet when enabled. DECnet is later.
+
+When `enabled=true`, DEUNA is present. Guest TX frames are processed; ARP
+requests for `gateway_ip` get replies (gateway MAC `02-00-2B-11-70-00`),
+ICMP echo to the gateway (and the STA address) is answered locally, and
+off-subnet IPv4 UDP/TCP/ICMP is NAPT'd onto the WiFi STA. Guest TX only
+queues work; lwIP/`esp_ping` runs on the host `net_task` (same pattern as
+ICMP) so the PDP core never touches sockets.
+
+Guest bring-up example (after `ifconfig` / default route):
+
+```text
+ping -c 3 8.8.8.8
+echo "nameserver 8.8.8.8" >/etc/resolv.conf
+# UDP DNS via resolver; TCP clients on a full /usr (e.g. mount /dev/xp0c /usr):
+#   /usr/ucb/telnet 142.251.33.206 80
+#   /usr/ucb/ftp ...
+```
+
+| Key | Values | Description |
+| --- | --- | --- |
+| `enabled` | Boolean | Present DEUNA at `174510` when true. |
+| `mac` | `aa-bb-cc-dd-ee-ff` | Guest DEUNA MAC (`:` or `-` separators). Default `08-00-2B-11-70-01`. |
+| `guest_ip` | Dotted IPv4 | Guest address on the private segment. Default `10.11.0.2`. |
+| `guest_mask` | Dotted IPv4 | Guest netmask. Default `255.255.255.0`. Aliases: `mask`, `netmask`. |
+| `gateway_ip` | Dotted IPv4 | ESP-facing gateway on that segment. Default `10.11.0.1`. Alias: `gateway`. |
+
+Telnet runtime keys: `ethernet`, `ethernet_mac`, `ethernet_guest_ip`,
+`ethernet_guest_mask`, `ethernet_gateway_ip` (apply on next PDP reboot;
+not written to `pdpconfig.ini` unless you edit the file).
 
 ### `[diag]`
 
@@ -520,8 +562,10 @@ Flush and offline/dismount the guest device before issuing the shell
 execution while the SD card is written.
 
 The runtime-changeable settings are `pcping`, `serialdelay`, `io_trace`,
-`clock_trace`, `console_trace`, `trace`, `break`, `title`, `boot_input`, and
-`boot_script`. `boot_text` is accepted as an alias for `boot_input`.
+`clock_trace`, `console_trace`, `trace`, `break`, `title`, `boot_input`,
+`boot_script`, `ethernet`, `ethernet_mac`, `ethernet_guest_ip`,
+`ethernet_guest_mask`, and `ethernet_gateway_ip`. `boot_text` is accepted as
+an alias for `boot_input`.
 
 ```text
 set
@@ -535,10 +579,14 @@ set break=04642
 set title="PDP 11/70"
 set boot_input="hello\r"
 set boot_script="Please enter time and date => 10:00 01-JAN-88\r"
+set ethernet=on
+set ethernet_guest_ip=10.11.0.2
 ```
 
-The settings take effect immediately except `boot_input` and `boot_script`,
-which are applied on the next PDP-11 reboot. `break` can also be set in `[diag]` so it is armed
+The settings take effect immediately except `boot_input`, `boot_script`, and
+the `ethernet*` keys, which are applied on the next PDP-11 reboot. Enabling
+`ethernet` attaches DEUNA at `174510` after that reboot with ARP, gateway
+ICMP, and STA NAPT (UDP/TCP/ICMP). `break` can also be set in `[diag]` so it is armed
 before early boot. They are not saved to `/pdpconfig.ini` and are lost
 when the ESP32 restarts. Hardware-discovery settings such as TT1, KW11-P, and
 compatibility mode still require editing the configuration file and restarting

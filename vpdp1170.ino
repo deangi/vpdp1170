@@ -79,6 +79,8 @@
 #include "dd11.h"  // dd11::set_io_trace()
 #include "kw11.h"
 #include "kwp.h"   // kwp::enabled gate
+#include "kek_deuna.h"
+#include "eth_nat.h"
 #include "disk.h"
 #include "console.h"
 #include "telnet.h"
@@ -179,6 +181,17 @@ static void apply_runtime_pdp_config() {
   pdp_core::set_rp_trace((uint32_t)(cfg.diag_rp_trace < 0
                                       ? 0 : cfg.diag_rp_trace));
   kwp::enabled             = cfg.kwp_enabled;
+  kek_deuna::set_enabled(cfg.eth_enabled);
+  kek_deuna::set_mac(cfg.eth_mac);
+  kek_deuna::set_network(cfg.eth_guest_ip, cfg.eth_guest_mask,
+                         cfg.eth_gateway_ip);
+  if (WiFi.status() == WL_CONNECTED) {
+    IPAddress ip = WiFi.localIP();
+    eth_nat::set_sta_ip(((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) |
+                        ((uint32_t)ip[2] << 8) | (uint32_t)ip[3]);
+  } else {
+    eth_nat::set_sta_ip(0);
+  }
   pdp_core::set_trace(cfg.diag_trace);
   if (cfg.diag_break_pc != 0)
     pdp_core::monitor_break_set_pc(cfg.diag_break_pc);
@@ -248,11 +261,16 @@ static void wifi_connect() {
     LOG("WiFi connected, IP=%s", WiFi.localIP().toString().c_str());
     tft_status(ROW_WIFI, "WiFi:  ", ssid, TFT_GREEN);
     tft_status(ROW_IP,   "IP:    ", WiFi.localIP().toString().c_str(), TFT_GREEN);
+    IPAddress ip = WiFi.localIP();
+    eth_nat::set_sta_ip(((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) |
+                        ((uint32_t)ip[2] << 8) | (uint32_t)ip[3]);
+    LOG("WiFi gateway=%s", WiFi.gatewayIP().toString().c_str());
     boot_state = BOOT_OK;
   } else {
     LOGE("WiFi connect timed out");
     tft_status(ROW_WIFI, "WiFi:  ", "FAILED", TFT_RED);
     tft_status(ROW_IP,   "IP:    ", "(none)", TFT_RED);
+    eth_nat::set_sta_ip(0);
     boot_state = BOOT_FAIL;
   }
 }
@@ -706,6 +724,7 @@ static void net_task(void* arg) {
   uint32_t wifi_ms = 0;
   for (;;) {
     telnet_poll();
+    eth_nat::host_poll();
 
     uint32_t now = millis();
     if (now - wifi_ms >= 10000) {
@@ -718,6 +737,11 @@ static void net_task(void* arg) {
           st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) {
         LOGE("WiFi link down (status=%d) - reconnecting", (int)st);
         WiFi.reconnect();
+        eth_nat::set_sta_ip(0);
+      } else if (st == WL_CONNECTED) {
+        IPAddress ip = WiFi.localIP();
+        eth_nat::set_sta_ip(((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) |
+                            ((uint32_t)ip[2] << 8) | (uint32_t)ip[3]);
       }
     }
     vTaskDelay(pdMS_TO_TICKS(2));

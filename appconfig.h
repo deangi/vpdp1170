@@ -46,6 +46,17 @@ struct AppConfig {
   // files are connected at runtime through TTY0 VPDP control commands.
   bool serial1_enabled = false;
 
+  // [ethernet]
+  // DEUNA Unibus Ethernet (CSR 174510, vec 120, BR5) with L3 NAT onto
+  // the ESP32 WiFi STA IP. Default off. When enabled: DEUNA + ARP + ICMP
+  // echo for gateway_ip, plus userspace NAPT (UDP/TCP/ICMP) onto STA.
+  bool    eth_enabled = false;
+  uint8_t eth_mac[6] = { 0x08, 0x00, 0x2B, 0x11, 0x70, 0x01 };  // DEC OUI + marker
+  // IPv4 addresses in host byte order (e.g. 10.11.0.2 -> 0x0A0B0002).
+  uint32_t eth_guest_ip   = 0x0A0B0002u;  // 10.11.0.2
+  uint32_t eth_guest_mask = 0xFFFFFF00u;  // 255.255.255.0
+  uint32_t eth_gateway_ip = 0x0A0B0001u;  // 10.11.0.1 (ESP-facing gateway)
+
   // [ftp]
   // FTP server exposing the SD card root. Control channel uses ftp_port;
   // passive data uses ftp_port+1.
@@ -176,6 +187,13 @@ void config_set_boot_input(AppConfig& cfg, const String& encoded);
 void config_set_boot_script(AppConfig& cfg, const String& encoded);
 String config_escape_bytes(const uint8_t* bytes, size_t len);
 String config_format_boot_script(const AppConfig& cfg);
+
+// Ethernet config helpers (dotted IPv4; MAC as aa-bb-cc-dd-ee-ff or :).
+bool config_parse_ipv4(const char* s, uint32_t* out_host_order);
+void config_format_ipv4(uint32_t host_order, char* buf, size_t buflen);
+bool config_parse_mac(const char* s, uint8_t mac[6]);
+void config_format_mac(const uint8_t mac[6], char* buf, size_t buflen);
+void config_apply_ethernet_defaults(AppConfig& cfg);
 
 // SD-to-SD byte copy used by the variant picker. Truncates dst.
 bool config_copy_file(const char* src, const char* dst);

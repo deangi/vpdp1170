@@ -1,6 +1,6 @@
 # vpdp1170 — a DEC PDP-11/70 emulator for the ESP32-S3 with a touch screen display.
 
-> Development status: **V2.5** (2026-08-03). Guest OS boot matrix below
+> Development status: **V2.6** (2026-08-05). Guest OS boot matrix below
 > (RSTS/E V7 through Ready; Unix V6/V7; 2.11BSD on RL/RP; RSX-11M / M+;
 > RT-11; XXDP; DOSBATCH). See `status.txt` for the full working notes.
 > The ESP32 host side is inherited from `vpdp1140`: TFT console, touch menu,
@@ -60,7 +60,7 @@ this project.
 
 ## Current Bring-Up Status
 
-As of **2026-08-03 (V2.5)**. The sketch reports the `kek PDP-11/70 adapter`
+As of **2026-08-05 (V2.6)**. The sketch reports the `kek PDP-11/70 adapter`
 with up to 4 MB target memory. Sample configs live under `PdpSdCard/pdpconfig-*.ini`.
 
 | Config / Name     | Drive | Status  | OS                    | Notes |
@@ -378,8 +378,10 @@ or 10,485,760 bytes for RL02.
 
 `set` with no arguments displays the runtime-changeable settings. Supported
 assignments are `pcping`, `serialdelay`, `io_trace`, `clock_trace`,
-`console_trace`, `trace`, `break`, `title`, `boot_input`, and `boot_script`;
-`boot_text` is accepted as an alias for `boot_input`. For example:
+`console_trace`, `trace`, `break`, `title`, `boot_input`, `boot_script`,
+`ethernet`, `ethernet_mac`, `ethernet_guest_ip`, `ethernet_guest_mask`, and
+`ethernet_gateway_ip`; `boot_text` is accepted as an alias for `boot_input`.
+For example:
 
 ```text
 set pcping=1
@@ -390,10 +392,12 @@ set trace=false
 set break=04642
 set boot_input="hello\r"
 set boot_script="login: => root\r"
+set ethernet=on
 ```
 
 These changes are not written to `/pdpconfig.ini` and are lost when the ESP32
-restarts. `boot_input` and `boot_script` take effect on the next PDP-11 reboot. `break` is also
+restarts. `boot_input`, `boot_script`, and the `ethernet*` keys take effect on
+the next PDP-11 reboot. `break` is also
 readable from `[diag] break=` in `/pdpconfig.ini` so it can be armed before
 early boot.
 

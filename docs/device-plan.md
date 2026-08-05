@@ -31,7 +31,8 @@ The working rule is:
 | TM11 tape | kek | not present in active vpdp1140 | `tm-11.cpp/.h` | New capability; useful for UNIX install/diagnostics later. |
 | DC11 | kek | not present in active vpdp1140 | `dc11.cpp/.h` | New capability; evaluate after basic console boot. |
 | DZ11 | kek | not present in active vpdp1140 | `dz11.cpp/.h` | New capability; useful for multi-user UNIX after core boot. |
-| DEQNA | kek reference only | not present in active vpdp1140 | `deqna.cpp/.h` | Defer; network device emulation is later-phase work. |
+| DEQNA | kek reference only | not present in active vpdp1140 | `deqna.cpp/.h` | Prefer DEUNA for Unibus; defer until ethernet config lands. |
+| DEUNA | vpdp `kek_deuna` + `eth_nat` | when `[ethernet] enabled` | SIMH XU | Phase 5: ARP + gateway ICMP + STA NAPT (UDP/TCP/ICMP). |
 | Disk backends | hybrid | SD_MMC disk image code | file/NBD/ESP32 disk backend code | Use vpdp SD mounting UI; adapt backend calls to kek devices. |
 | Telnet/FTP/UI/menu/status/shell/monitor | vpdp1140 | mature ESP32 host services | not applicable | Keep vpdp host code. |
 | VPDP escape commands / SD file bridge | vpdp1140 | implemented host service | not applicable | Keep vpdp host code. |
@@ -77,7 +78,8 @@ The working rule is:
 6. **New kek devices**
    - Add TM11 tape after disks are stable.
    - Add DC11/DZ11 for multi-user UNIX.
-   - Defer DEQNA/network devices until core OS targets are stable.
+   - Ethernet: DEUNA + ARP + gateway ICMP + userspace NAPT onto STA
+     (UDP/TCP/ICMP). DECnet later. Default remains off.
 
 7. **Validation**
    - Start with CPU/MMU diagnostics and XXDP.
