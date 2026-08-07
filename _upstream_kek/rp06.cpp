@@ -318,42 +318,43 @@ void rp06::begin()
 
 void rp06::reset(const bool hard)
 {
-	if (hard) {
-		memset(registers, 0x00, sizeof registers);
-		registers[reg_num(RP06_CS1)] = uint16_t(rp06::cs1_bits::RDY);
-		operator_stopped = false;
-		volume_valid = true;
-		report_dva_after_start = false;
-		last_block_status = false;
-		bad_header_valid = false;
-		bad_header_dc = 0;
-		bad_header_da = 0;
-		pack_ack_transient_ticks = 0;
-		registers[reg_num(RP06_DS)] = rp06_drive_status(operator_stopped, volume_valid);
-		registers[reg_num(RP06_AS)] = 000000;
-		registers[reg_num(RP06_DT)] = rp06_drive_type(is_rp07);
-		registers[reg_num(RP06_SN)] = 000001;
-		int_cnt = 0;
-		int_cnt_total = 0;
-		deferred_active = false;
-		deferred_fnc = 0;
-		deferred_cs1 = 0;
-		deferred_wc = 0;
-		deferred_ba = 0;
-		deferred_da = 0;
-		deferred_dc = 0;
-		deferred_bae = 0;
-		deferred_delay = -1;
-		deferred_cs1_polls = 0;
-		deferred_wc_polls = 0;
-		control_active = false;
-		control_fnc = 0;
-		control_cs1 = 0;
-		control_delay = -1;
-		la_sector = 0;
-		if (b && b->getCpu())
-			b->getCpu()->unqueue_interrupt(5, 0254);
-	}
+	(void)hard;
+	// SIMH rp_reset / Unibus INIT: cancel I/O, clear IRQ, re-init CS1/DS.
+	// Soft must not be a no-op — in-flight Massbus state survives otherwise.
+	memset(registers, 0x00, sizeof registers);
+	registers[reg_num(RP06_CS1)] = uint16_t(rp06::cs1_bits::RDY);
+	operator_stopped = false;
+	volume_valid = true;
+	report_dva_after_start = false;
+	last_block_status = false;
+	bad_header_valid = false;
+	bad_header_dc = 0;
+	bad_header_da = 0;
+	pack_ack_transient_ticks = 0;
+	registers[reg_num(RP06_DS)] = rp06_drive_status(operator_stopped, volume_valid);
+	registers[reg_num(RP06_AS)] = 000000;
+	registers[reg_num(RP06_DT)] = rp06_drive_type(is_rp07);
+	registers[reg_num(RP06_SN)] = 000001;
+	int_cnt = 0;
+	int_cnt_total = 0;
+	deferred_active = false;
+	deferred_fnc = 0;
+	deferred_cs1 = 0;
+	deferred_wc = 0;
+	deferred_ba = 0;
+	deferred_da = 0;
+	deferred_dc = 0;
+	deferred_bae = 0;
+	deferred_delay = -1;
+	deferred_cs1_polls = 0;
+	deferred_wc_polls = 0;
+	control_active = false;
+	control_fnc = 0;
+	control_cs1 = 0;
+	control_delay = -1;
+	la_sector = 0;
+	if (b && b->getCpu())
+		b->getCpu()->unqueue_interrupt(5, 0254);
 }
 
 FLASHMEM void rp06::show_state(console *const cnsl) const

@@ -19,6 +19,16 @@
 #define UNLOCK_TCPIP_CORE()
 #endif
 
+// Chatty per-packet / per-flow diagnostics. Keep LOGE for real failures.
+#ifndef ETH_NAT_VERBOSE
+#define ETH_NAT_VERBOSE 0
+#endif
+#if ETH_NAT_VERBOSE
+#define ETH_NAT_LOG(...) LOG(__VA_ARGS__)
+#else
+#define ETH_NAT_LOG(...) ((void)0)
+#endif
+
 // Guest ICMP echo is forwarded with esp_ping (SOCK_RAW recv is unreliable
 // on ESP32 — replies are eaten by the stack and never surface to recvfrom).
 
@@ -470,7 +480,7 @@ void drain_udp_out_queue() {
     pbuf_free(p);
     UNLOCK_TCPIP_CORE();
     if (err == ERR_OK) {
-      LOG("eth_nat: UDP %u -> %u.%u.%u.%u:%u (%u B)", (unsigned)sport,
+      ETH_NAT_LOG("eth_nat: UDP %u -> %u.%u.%u.%u:%u (%u B)", (unsigned)sport,
           (unsigned)((dst >> 24) & 0xff), (unsigned)((dst >> 16) & 0xff),
           (unsigned)((dst >> 8) & 0xff), (unsigned)(dst & 0xff),
           (unsigned)dport, (unsigned)plen);
@@ -522,7 +532,7 @@ void on_ping_success(esp_ping_handle_t hdl, void* args) {
   // 2.11BSD stores id/seq in host order; log host values (byte-swap of BE read).
   const uint16_t id_h = (uint16_t)((id >> 8) | (id << 8));
   const uint16_t seq_h = (uint16_t)((seq >> 8) | (seq << 8));
-  LOG("eth_nat: ICMP reply id=%u seq=%u from %u.%u.%u.%u -> guest",
+  ETH_NAT_LOG("eth_nat: ICMP reply id=%u seq=%u from %u.%u.%u.%u -> guest",
       (unsigned)id_h, (unsigned)seq_h,
       (unsigned)((remote >> 24) & 0xff),
       (unsigned)((remote >> 16) & 0xff),
@@ -534,7 +544,7 @@ void on_ping_timeout(esp_ping_handle_t hdl, void* args) {
   (void)hdl;
   NatEntry* e = (NatEntry*)args;
   if (!e) return;
-  LOG("eth_nat: ICMP timeout id=%u seq=%u %u.%u.%u.%u",
+  ETH_NAT_LOG("eth_nat: ICMP timeout id=%u seq=%u %u.%u.%u.%u",
       (unsigned)e->guest_port, (unsigned)e->remote_port,
       (unsigned)((e->remote_ip >> 24) & 0xff),
       (unsigned)((e->remote_ip >> 16) & 0xff),
@@ -795,7 +805,7 @@ err_t tcp_connected_cb(void* arg, struct tcp_pcb* tpcb, err_t err) {
   e->tcp_phase = TP_ESTABLISHED;
   e->last_ms = millis();
   tcp_send_to_guest(e, TH_SYN | TH_ACK, nullptr, 0, e->h_isn, e->g_seq);
-  LOG("eth_nat: TCP connected %u.%u.%u.%u:%u",
+  ETH_NAT_LOG("eth_nat: TCP connected %u.%u.%u.%u:%u",
       (unsigned)((e->remote_ip >> 24) & 0xff),
       (unsigned)((e->remote_ip >> 16) & 0xff),
       (unsigned)((e->remote_ip >> 8) & 0xff),
@@ -990,7 +1000,7 @@ void drain_tcp_out_queue() {
         free_entry_locked(e);
         portEXIT_CRITICAL(&mux);
       } else {
-        LOG("eth_nat: TCP SYN %u -> %u.%u.%u.%u:%u", (unsigned)sport,
+        ETH_NAT_LOG("eth_nat: TCP SYN %u -> %u.%u.%u.%u:%u", (unsigned)sport,
             (unsigned)((dst >> 24) & 0xff), (unsigned)((dst >> 16) & 0xff),
             (unsigned)((dst >> 8) & 0xff), (unsigned)(dst & 0xff),
             (unsigned)dport);
@@ -1048,7 +1058,7 @@ void handle_arp(const uint8_t* frame, size_t len) {
   memcpy(a + 18, frame + 6, 6);
   memcpy(a + 24, arp + 14, 4);
   if (enqueue_rx(reply, MIN_FRAME))
-    LOG("eth_nat: ARP reply gateway");
+    ETH_NAT_LOG("eth_nat: ARP reply gateway");
 }
 
 // Synthesize ICMP echo reply as if from reply_src (gateway or STA hairpin).
@@ -1078,7 +1088,7 @@ void local_icmp_echo(const uint8_t* ip, size_t ihl, size_t ip_len,
   wr16be(ricmp + 2, inet_checksum(ricmp, ip_len - ihl));
 
   if (enqueue_rx(reply, 14 + ip_len))
-    LOG("eth_nat: ICMP echo reply (%s) -> guest", why);
+    ETH_NAT_LOG("eth_nat: ICMP echo reply (%s) -> guest", why);
 }
 
 void handle_ip(const uint8_t* frame, size_t len) {
@@ -1126,7 +1136,7 @@ void handle_ip(const uint8_t* frame, size_t len) {
     nat_tcp_out(src, dst, l4, l4_len);
   else if (proto == PROTO_ICMP) {
     if (nat_icmp_out(src, dst, ip, ihl, ip_len))
-      LOG("eth_nat: ICMP echo fwd %u.%u.%u.%u",
+      ETH_NAT_LOG("eth_nat: ICMP echo fwd %u.%u.%u.%u",
           (unsigned)((dst >> 24) & 0xff), (unsigned)((dst >> 16) & 0xff),
           (unsigned)((dst >> 8) & 0xff), (unsigned)(dst & 0xff));
   }
@@ -1226,7 +1236,7 @@ void set_sta_ip(uint32_t sta_ip_host) {
   if (sta_ip != sta_ip_host) {
     sta_ip = sta_ip_host;
     if (sta_ip) {
-      LOG("eth_nat: STA IP %u.%u.%u.%u",
+      ETH_NAT_LOG("eth_nat: STA IP %u.%u.%u.%u",
           (unsigned)((sta_ip >> 24) & 0xff),
           (unsigned)((sta_ip >> 16) & 0xff),
           (unsigned)((sta_ip >> 8) & 0xff),

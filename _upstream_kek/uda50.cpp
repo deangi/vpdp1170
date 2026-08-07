@@ -167,10 +167,17 @@ void uda50::post_initialization_interrupt()
 
 void uda50::post_ring_interrupt(const ring_t &ring)
 {
-	tracef("RING IRQ vector=%03o base=%08o index=%u flag@%08o", interrupt_vector, (unsigned)ring.base, ring.index, (unsigned)(communication_address + ring.interrupt_offset));
+	// Always raise the soft ring-transition flag in the communications area
+	// so polling drivers (rauboot, standalone MSCP) can see completion.
+	// Only post a Unibus interrupt when the host enabled IE during STEP1 —
+	// otherwise vector 154 is often still boot-block garbage and we jump
+	// into random code (PiDP 2.11BSD odd-PC at 010067).
+	tracef("RING IRQ enabled=%u vector=%03o base=%08o index=%u flag@%08o",
+			interrupt_enabled ? 1u : 0u, interrupt_vector, (unsigned)ring.base,
+			ring.index, (unsigned)(communication_address + ring.interrupt_offset));
 	const uint16_t one = 1;
 	b->write_unibus_word(communication_address + ring.interrupt_offset, one);
-	if (interrupt_vector && b->getCpu())
+	if (interrupt_enabled && interrupt_vector && b->getCpu())
 		b->getCpu()->queue_interrupt(5, interrupt_vector);
 }
 

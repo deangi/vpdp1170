@@ -92,6 +92,7 @@
 #include "emu_control.h"
 #include "host_diag.h"
 #include "boot_script.h"
+#include "boot_input.h"
 
 static GfxDisplay tft;
 #if VPDP_HAS_WS2812
@@ -618,6 +619,7 @@ static void start_cpu(bool cold) {
   // host adapters. Clear deferred commands, file-backed terminal state, and
   // guest-facing console queues before the CPU can produce another byte.
   boot_script_disarm();
+  boot_input_disarm();
   emu_control::init();
   dl11_file::disconnect_all();
   dl11_file::reset();
@@ -635,10 +637,7 @@ static void start_cpu(bool cold) {
   // ROM into high memory and cpu_set_pc() to its entry point here.
 
   console_init();
-  for (size_t i = 0; i < cfg.boot_input_len; i++)
-    console_key_push(cfg.boot_input[i]);
-  if (cfg.boot_input_len)
-    LOG("console: injected %u boot input bytes", (unsigned)cfg.boot_input_len);
+  boot_input_arm(cfg);
   boot_script_arm(cfg);
   console_force_redraw();   // render_task repaints the whole console + status bar
 }
@@ -944,9 +943,14 @@ void setup() {
 // Touch handling lives at file scope so render_task can share the same
 // double-tap state with menu hit testing. The 750 ms window is wider than the
 // original 450 ms because users were missing the second tap of a fast
-// double-tap when the timer rolled over.
+// double-tap when the timer rolled over. UI_DOUBLE_TAP_MIN_MS rejects a
+// bounce that still slips past touch.cpp debounce as two near-instant edges.
 static uint32_t g_last_tap_ms = 0;
-#define UI_DOUBLE_TAP_MS 750
+static int      g_last_tap_x  = 0;
+static int      g_last_tap_y  = 0;
+#define UI_DOUBLE_TAP_MS     750
+#define UI_DOUBLE_TAP_MIN_MS 120
+#define UI_DOUBLE_TAP_MAX_DIST_SQ (80 * 80)
 
 // Poll the touchscreen once. When the menu is open, route the tap into
 // the menu; when closed, accumulate it as a double-tap candidate that
@@ -961,12 +965,21 @@ static void poll_touch_once() {
     return;
   }
   uint32_t now = millis();
-  if ((uint32_t)(now - g_last_tap_ms) < UI_DOUBLE_TAP_MS) {
-    ui_open_locked();
-    g_last_tap_ms = 0;
-  } else {
-    g_last_tap_ms = now;
+  const uint32_t dt = (uint32_t)(now - g_last_tap_ms);
+  if (g_last_tap_ms != 0 &&
+      dt >= UI_DOUBLE_TAP_MIN_MS &&
+      dt < UI_DOUBLE_TAP_MS) {
+    const int dx = tx - g_last_tap_x;
+    const int dy = ty - g_last_tap_y;
+    if (dx * dx + dy * dy <= UI_DOUBLE_TAP_MAX_DIST_SQ) {
+      ui_open_locked();
+      g_last_tap_ms = 0;
+      return;
+    }
   }
+  g_last_tap_ms = now;
+  g_last_tap_x  = tx;
+  g_last_tap_y  = ty;
 }
 
 static void poll_pcping() {
@@ -1010,12 +1023,24 @@ void loop() {
   if (!cpu_running) { delay(100); return; }
 
   static bool     boot_done = false;
-  static bool     btn_prev  = true;
+  static bool     btn_stable = true;
+  static uint32_t btn_change_ms = 0;
 
   // Onboard button (GPIO0, active low): press opens the menu.
-  bool btn_now = digitalRead(BUTTON_PIN);
-  if (btn_prev && !btn_now && !ui_is_open()) ui_open_locked();
-  btn_prev = btn_now;
+  // Debounce: ignore chatter shorter than ~40 ms (BOOT pin is noisy with USB).
+  bool btn_raw = digitalRead(BUTTON_PIN);
+  uint32_t btn_now_ms = millis();
+  if (btn_raw != btn_stable) {
+    if (btn_change_ms == 0) btn_change_ms = btn_now_ms;
+    if ((uint32_t)(btn_now_ms - btn_change_ms) >= 40) {
+      if (btn_stable && !btn_raw && !ui_is_open())
+        ui_open_locked();
+      btn_stable = btn_raw;
+      btn_change_ms = 0;
+    }
+  } else {
+    btn_change_ms = 0;
+  }
 
   // Execute deferred VPDP control commands outside the CPU instruction path.
   // This is where SD file operations, runtime media changes, and TT1 file I/O
@@ -1023,6 +1048,7 @@ void loop() {
   emu_control::poll();
   telnet_shell_poll();
   boot_script_poll();
+  boot_input_poll();
   if (emu_control::consume_reboot_request()) {
     LOG("EMU command: reboot PDP-11 from /pdpconfig.ini");
     dl11_file::disconnect_all();
@@ -1076,6 +1102,7 @@ void loop() {
     emu_control::poll();
     telnet_shell_poll();
     boot_script_poll();
+    boot_input_poll();
     ftp_poll();
     delay(8);
     return;
@@ -1090,6 +1117,7 @@ void loop() {
     emu_control::poll();
     telnet_shell_poll();
     boot_script_poll();
+    boot_input_poll();
     poll_pcping();
     pdp_core::run(1000);
     poll_pcping();
@@ -1098,6 +1126,7 @@ void loop() {
   emu_control::poll();
   telnet_shell_poll();
   boot_script_poll();
+  boot_input_poll();
 
   poll_pcping();
 

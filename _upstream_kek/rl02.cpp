@@ -250,12 +250,14 @@ void rl02::begin()
 
 void rl02::reset(const bool hard)
 {
-	if (hard) {
-		memset(registers,   0x00, sizeof registers  );
+	// SIMH rl_reset: rlcs = CSR_DONE; rlda/rlba/rlbae/rlmp* = 0; CLR_INT.
+	// Soft Unibus INIT must clear IE/sticky CSR, not only cancel deferred I/O.
+	memset(registers, 0x00, sizeof registers);
+	registers[0] = 0200;  // CRDY / DONE
+	memset(mpr, 0x00, sizeof mpr);
+	bae_active = false;
+	if (hard)
 		memset(xfer_buffer, 0x00, sizeof xfer_buffer);
-		memset(mpr,         0x00, sizeof mpr        );
-		bae_active = false;
-	}
 
 	deferred_data_active = false;
 	deferred_execute = false;

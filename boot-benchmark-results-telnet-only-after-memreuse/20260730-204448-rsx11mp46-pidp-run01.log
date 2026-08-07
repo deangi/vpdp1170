@@ -1,23 +1,0 @@
-profile=rsx11mp46-pidp
-config=/pdpconfig-rsx11mp46-pidp.ini
-started=2026-07-30T20:44:48.069204-07:00
-status=passed
-error=
---- console transcript ---
-reset
-exit
-emulator reset scheduled (reload config, remount, zero RAM, cold boot)
-vpdp:/> [vpdp1170] emulator reset: config=/pdpconfig.ini title="RSX11M+4.6" boot=DU0 mem=1920KW (EMU reboot)
-Returning Telnet to the PDP-11 console.
-vpdp1170: kek PDP-11/70 adapter console OK; trying DU0 boot...
-
-
-
-RSX-11M-PLUS V4.6  BL87   1920.KW  System:"PIDP  "
->RED DU:=SY:
->RED DU:=LB:
->RED DU:=SP:
->MOU DU0:"RSX11MPBL87"
->@DU:[1,2]STARTUP
->CON SET SYS $TKPS=60.
->* Please enter time and date (HH:MM DD-MMM-YYYY) [S T:1M]: 

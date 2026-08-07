@@ -22,9 +22,21 @@ struct AppConfig {
   // [console]
   // Bytes injected into the KL11 input queue after each PDP-11 boot/reset.
   // Parsed from escaped text in /pdpconfig.ini, e.g. "unix\r" or "\003".
+  // Optional <<seconds>> markers (0.1..120) split typeahead into delayed
+  // segments; see boot_input.cpp.
   static const size_t BOOT_INPUT_MAX = 256;
   uint8_t boot_input[BOOT_INPUT_MAX];
   size_t  boot_input_len = 0;
+
+  struct BootInputSegment {
+    static const size_t DATA_MAX = 64;
+    uint32_t delay_ms = 0;   // wait before injecting data[]
+    uint8_t  data[DATA_MAX];
+    uint8_t  data_len = 0;
+  };
+  static const size_t BOOT_INPUT_MAX_SEGMENTS = 16;
+  BootInputSegment boot_input_segments[BOOT_INPUT_MAX_SEGMENTS];
+  uint8_t boot_input_segment_count = 0;
 
   // Prompt-driven boot answers. Each step waits for an expect substring in
   // KL11 console output (case-insensitive), then injects the reply.
@@ -186,6 +198,7 @@ void config_apply_compiled_defaults(AppConfig& cfg);         // fills cfg with s
 void config_set_boot_input(AppConfig& cfg, const String& encoded);
 void config_set_boot_script(AppConfig& cfg, const String& encoded);
 String config_escape_bytes(const uint8_t* bytes, size_t len);
+String config_format_boot_input(const AppConfig& cfg);
 String config_format_boot_script(const AppConfig& cfg);
 
 // Ethernet config helpers (dotted IPv4; MAC as aa-bb-cc-dd-ee-ff or :).

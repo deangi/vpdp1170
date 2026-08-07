@@ -2387,6 +2387,11 @@ bool cpu::misc_operations(const uint16_t instr)
 				// hard=true wiped the MMU map and broke RSX M+4.6 device probe
 				// (RESET @700, MMR3←060, MMR0←1 → abort storm → SP=4 → HALT).
 				b->reset(false);
+				// 11/70 RESET clears STKLIM (SIMH pdp11_cpu.c OP_RESET). Without
+				// this, 2.11BSD's post-fsck reboot re-enters the bootblock with
+				// SLR still at intstk-256; SP≈004134 then red-stacks on the
+				// first JSR (HALT at a just-zeroed PC after emergency SP=4).
+				stack_limit_register = 0;
 				init_interrupt_queue();
 			}
 			return true;

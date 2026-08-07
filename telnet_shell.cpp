@@ -337,8 +337,7 @@ static void show_runtime_settings() {
     output_text("break=0\r\n");
   output_printf("title=\"%s\"\r\n", cfg.title.c_str());
   output_printf("boot_input=\"%s\"\r\n",
-                config_escape_bytes(cfg.boot_input,
-                                    cfg.boot_input_len).c_str());
+                config_format_boot_input(cfg).c_str());
   output_printf("boot_script=\"%s\" (%u step%s)\r\n",
                 config_format_boot_script(cfg).c_str(),
                 (unsigned)cfg.boot_script_count,
@@ -575,10 +574,11 @@ static void command_set(char* arguments) {
   if (!strcasecmp(name, "boot_input") ||
       !strcasecmp(name, "boot_text")) {
     config_set_boot_input(cfg, String(value));
-    output_printf("boot_input=\"%s\" (%u bytes; next PDP reboot, runtime only)\r\n",
-                  config_escape_bytes(cfg.boot_input,
-                                      cfg.boot_input_len).c_str(),
-                  (unsigned)cfg.boot_input_len);
+    output_printf("boot_input=\"%s\" (%u bytes, %u segment%s; next PDP reboot, runtime only)\r\n",
+                  config_format_boot_input(cfg).c_str(),
+                  (unsigned)cfg.boot_input_len,
+                  (unsigned)cfg.boot_input_segment_count,
+                  cfg.boot_input_segment_count == 1 ? "" : "s");
     return;
   }
   if (!strcasecmp(name, "boot_script")) {

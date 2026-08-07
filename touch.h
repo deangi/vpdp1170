@@ -9,6 +9,7 @@
 // Pass &tft so CrowPanel can call LGFX::getTouch(). Freenove ignores it.
 void touch_init(GfxDisplay* display = nullptr);
 
-// Poll the panel. Returns true exactly once per new touch-down ("tap"),
-// writing the tap location into *x,*y. Call once per main-loop iteration.
+// Poll the panel. Returns true once per confirmed contact (after a short
+// press debounce), writing the tap location into *x,*y. Call once per
+// main-loop / render-task iteration.
 bool touch_poll(int* x, int* y);

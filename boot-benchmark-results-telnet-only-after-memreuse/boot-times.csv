@@ -1,9 +1,0 @@
-started,profile,run,config,status,boot_seconds,observed_seconds,quiet_seconds,bytes_received,error,transcript
-2026-07-30T20:43:06.071871-07:00,rsx11mp46,1,/pdpconfig-rsx11mp46.ini,passed,40.627,41.683,1.0,447,,boot-benchmark-results-telnet-only-after-memreuse\20260730-204306-rsx11mp46-run01.log
-2026-07-30T20:43:50.684530-07:00,rt11v5,1,/pdpconfig-rt11v5.ini,passed,7.805,8.890,1.0,1537,,boot-benchmark-results-telnet-only-after-memreuse\20260730-204350-rt11v5-run01.log
-2026-07-30T20:44:02.359161-07:00,unix6,1,/pdpconfig-unixv6.ini,passed,4.802,5.852,1.0,321,,boot-benchmark-results-telnet-only-after-memreuse\20260730-204402-unix6-run01.log
-2026-07-30T20:44:11.056848-07:00,11mark,1,/pdpconfig-11mark.ini,passed,17.651,18.705,1.0,545,,boot-benchmark-results-telnet-only-after-memreuse\20260730-204411-11mark-run01.log
-2026-07-30T20:44:32.500282-07:00,rstsv4,1,/pdpconfig-rstsv4.ini,passed,1.979,3.051,1.0,641,,boot-benchmark-results-telnet-only-after-memreuse\20260730-204432-rstsv4-run01.log
-2026-07-30T20:44:38.520341-07:00,rsx11m,1,/pdpconfig-rsx11m.ini,passed,5.648,6.703,1.0,478,,boot-benchmark-results-telnet-only-after-memreuse\20260730-204438-rsx11m-run01.log
-2026-07-30T20:44:48.069204-07:00,rsx11mp46-pidp,1,/pdpconfig-rsx11mp46-pidp.ini,passed,44.592,45.658,1.0,533,,boot-benchmark-results-telnet-only-after-memreuse\20260730-204448-rsx11mp46-pidp-run01.log
-2026-07-30T20:45:36.565949-07:00,xxdp25,1,/pdpconfig-xxdp25.ini,passed,4.449,5.500,1.0,504,,boot-benchmark-results-telnet-only-after-memreuse\20260730-204536-xxdp25-run01.log

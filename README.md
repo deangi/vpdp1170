@@ -1,6 +1,6 @@
 # vpdp1170 — a DEC PDP-11/70 emulator for the ESP32-S3 with a touch screen display.
 
-> Development status: **V2.6** (2026-08-05). Guest OS boot matrix below
+> Development status: **V2.7** (2026-08-06). Guest OS boot matrix below
 > (RSTS/E V7 through Ready; Unix V6/V7; 2.11BSD on RL/RP; RSX-11M / M+;
 > RT-11; XXDP; DOSBATCH). See `status.txt` for the full working notes.
 > The ESP32 host side is inherited from `vpdp1140`: TFT console, touch menu,
@@ -60,7 +60,7 @@ this project.
 
 ## Current Bring-Up Status
 
-As of **2026-08-05 (V2.6)**. The sketch reports the `kek PDP-11/70 adapter`
+As of **2026-08-06 (V2.7)**. The sketch reports the `kek PDP-11/70 adapter`
 with up to 4 MB target memory. Sample configs live under `PdpSdCard/pdpconfig-*.ini`.
 
 | Config / Name     | Drive | Status  | OS                    | Notes |
@@ -260,7 +260,7 @@ enabled = true
 port    = 23
 
 [console]
-boot_input  = ""              ; e.g. "unix\r" or "^CSTART\r" (immediate typeahead)
+boot_input  = ""              ; e.g. "unix\r", "^CSTART\r", or "<<2.5>>START\r<<2>>\r"
 boot_script = ""              ; e.g. "login: => root\r || Password: => \r"
 
 [serial1]
@@ -322,8 +322,10 @@ M9312-style boot ROM still boot from RK0 or RL0.
 - The TFT console comes up at boot; the same byte stream is available
   via `telnet <board-ip> 23` and on USB serial (115200 baud).
 - `/pdpconfig.ini` `[console] boot_input` can pre-load keystrokes after
-  each PDP reboot (typeahead). `boot_script` waits for prompt text
-  (case-insensitive) and injects replies: `expect => reply || ...`.
+  each PDP reboot (typeahead). Optional `<<seconds>>` markers (0.1–120)
+  insert delays between bursts, e.g. `"<<2.5>>START\r<<2>>\r"`.
+  `boot_script` waits for prompt text (case-insensitive) and injects
+  replies: `expect => reply || ...`.
   Both accept escapes such as `\r`, `\n`, `\e`, `\x03`, `\033`, `^C`,
   `^[`, and `^?`.
 - The SD card root is available over FTP at `ftp://<board-ip>:21/`
@@ -391,6 +393,7 @@ set console_trace=100
 set trace=false
 set break=04642
 set boot_input="hello\r"
+set boot_input="<<2.5>>START\r<<2>>\r"
 set boot_script="login: => root\r"
 set ethernet=on
 ```

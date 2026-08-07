@@ -235,11 +235,22 @@ file keys.
 
 | Key | Values | Description |
 | --- | --- | --- |
-| `boot_input` | Quoted escaped text | Bytes injected into the KL11 input queue after each PDP-11 boot or reset (typeahead). |
+| `boot_input` | Quoted escaped text | Bytes injected into the KL11 input queue after each PDP-11 boot or reset (typeahead). Optional `<<seconds>>` markers (0.1–120) insert wall-clock delays between bursts. |
 | `boot_script` | Quoted step list | Prompt-driven answers. Each step waits for expect text in console output (case-insensitive), then injects the reply. |
 
 Accepted aliases for `boot_input` compatibility are `typeahead` and `boot_keys`, but
 `boot_input` is the canonical key. `boot_text` remains a Telnet alias for `boot_input`.
+
+`boot_input` may interleave text with delay markers:
+
+```text
+<<2.5>>START\r<<2>>\r
+```
+
+That waits 2.5 seconds after reboot, injects `START` + CR, waits 2 seconds, then
+injects CR. Markers are not typed to the guest. Values outside 0.1–120 seconds
+are clamped; invalid markers are skipped and logged. Without markers, typeahead
+is injected as soon as the boot sequencer runs (same as before).
 
 `boot_script` syntax:
 
@@ -252,8 +263,10 @@ Up to 8 steps. Expect and reply use the same escapes as `boot_input`
 case-insensitive for letters only — CR, LF, space, and other controls are
 matched exactly. After a match, the reply is delayed by 500 ms so the guest
 can finish printing and accept input.
-`boot_input` (if set) is still injected immediately at reboot; `boot_script`
-then answers later prompts.
+`boot_input` (if set) is still injected after reboot by a timed sequencer
+(immediate when there are no `<<seconds>>` markers); `boot_script` then
+answers later prompts. Emulator reset disarms both sequencers and re-arms them
+for the new boot so a mid-delay typeahead cannot leak into the next run.
 
 Supported escapes:
 
@@ -281,6 +294,7 @@ Examples:
 boot_input = "unix\r"
 boot_input = "^CSTART\r"
 boot_input = "\x03START\r"
+boot_input = "<<2.5>>START\r<<2>>\r"
 boot_script = "Please enter time and date (HH:MM DD-MMM-YY) [S]: => 10:00 01-JAN-88\r || ENTER LINE WIDTH => 80\r"
 boot_script = "OPTION? => START\r || DD-MON-YY? => 1-JAN-79\r || HH:MM? => 00:00\r || ENABLE CRASH DUMP? => Y\r"
 ```
@@ -438,7 +452,7 @@ controller initialization and I/O while diagnosing a boot.
 
 ### Startup Console Input
 
-Use `boot_input` for immediate typeahead (guests that buffer input), or
+Use `boot_input` for typeahead (optional `<<seconds>>` delays between bursts), or
 `boot_script` when the OS only accepts answers after printing a prompt.
 For example, UNIX V6 can be started with:
 

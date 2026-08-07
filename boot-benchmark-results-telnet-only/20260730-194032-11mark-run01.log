@@ -1,22 +1,0 @@
-profile=11mark
-config=/pdpconfig-11mark.ini
-started=2026-07-30T19:40:32.348041-07:00
-status=passed
-error=
---- console transcript ---
-reset
-exit
-emulator reset scheduled (reload config, remount, zero RAM, cold boot)
-vpdp:/> [vpdp1170] emulator reset: config=/pdpconfig.ini title="PDP 11 - RSX11M" boot=DL0 mem=252KW (EMU reboot)
-Returning Telnet to the PDP-11 console.
-vpdp1170: kek PDP-11/70 adapter console OK; trying DL0 boot...
-
-DEVICE TT001: NOT IN CONFIGURATION
-
-  RSX-11M V4.8 BL70   124.K MAPPED
->RED DL:=SY:
->RED DL:=LB:
->MOU DL:RSXDL0
->@DL:[1,2]STARTUP
->; See if the system has a known TOY clock
->* Please enter time and date (HH:MM DD-MMM-YY) [S]: 

@@ -283,6 +283,19 @@ void bus::reset(const bool hard)
 	if (deqna_)
 		deqna_->reset(hard);
 
+#if defined(ESP32)
+	// Port overlays are not bus_* members but sit on the Unibus; guest RESET
+	// (soft) and host cold_boot (hard) must INIT them like SIMH reset_all.
+	if (c) {
+		c->unqueue_interrupt(kek_lp11::BR_LEVEL, kek_lp11::VECTOR);
+		c->unqueue_interrupt(kek_deuna::BR_LEVEL, kek_deuna::VECTOR);
+		c->unqueue_interrupt(kek_kwp::BR_LEVEL, kek_kwp::VECTOR);
+	}
+	kek_lp11::reset();
+	kek_deuna::reset();
+	kek_kwp::reset();
+#endif
+
 	mmu_->setMMR0(0);
 	mmu_->setMMR3(0);
 }

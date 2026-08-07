@@ -50,16 +50,20 @@ tty::~tty()
 
 void tty::reset(const bool hard)
 {
-	if (hard) {
-		memset(registers, 0x00, sizeof registers);
-		registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] = TTY_DONE;
-	}
+	(void)hard;
+	// SIMH tti_reset / tto_reset (and Unibus INIT): TKS=0, TPS=DONE, CLR_INT.
+	memset(registers, 0x00, sizeof registers);
+	registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2] = TTY_DONE;
 	rx_irq_asserted = false;
 	tx_irq_asserted = false;
 	tx_ready_reported = true;
 	tx_busy = false;
 	tx_ready_at_us = 0;
 	tx_pending_byte = 0;
+	if (b && b->getCpu()) {
+		b->getCpu()->unqueue_interrupt(4, 060);
+		b->getCpu()->unqueue_interrupt(4, 064);
+	}
 }
 
 void tty::update_rx_interrupt()

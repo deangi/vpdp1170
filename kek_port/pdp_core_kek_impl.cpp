@@ -1039,6 +1039,7 @@ static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
       if (capture_last_instruction_trace_entry(&last))
         print_trace_entry("kek last:", last);
       if (current.valid && g_cpu && g_bus) {
+        mmu* m = g_bus->getMMU();
         emit_halt_diagf(
             "[vpdp1170 ERR] kek HALT regs R0=%06o R1=%06o R2=%06o R3=%06o "
             "R4=%06o R5=%06o SP=%06o\r\n",
@@ -1046,6 +1047,13 @@ static void dump_trace_ring(const char* reason, bool honor_panic_latch) {
             (unsigned)current.regs[2], (unsigned)current.regs[3],
             (unsigned)current.regs[4], (unsigned)current.regs[5],
             (unsigned)current.regs[6]);
+        // Red-stack signature: CPUERR bit 0004, SP forced to emergency
+        // stack then drained (often SP=0), SLR = intstk-256 on 2.11BSD.
+        emit_halt_diagf(
+            "[vpdp1170 ERR] kek HALT CPUERR=%06o STACKLIM=%06o%s\r\n",
+            m ? (unsigned)m->getCPUERR() : 0u,
+            (unsigned)g_cpu->get_stack_limit_register(),
+            (m && (m->getCPUERR() & 0004)) ? " (RED STACK)" : "");
       }
       return;
     }
@@ -1302,12 +1310,11 @@ void reset() {
   if (!g_cpu) return;
   begin_reset_transaction();
   clear_run_state_for_boot();
+  // Soft Unibus INIT (SIMH reset_all / guest RESET semantics): clear sticky
+  // device CSRs/IE and port overlays. Unlike cold_boot, do not wipe RAM.
+  if (g_bus)
+    g_bus->reset(false);
   g_cpu->reset();
-  kek_kwp::reset();
-  g_cpu->unqueue_interrupt(kek_lp11::BR_LEVEL, kek_lp11::VECTOR);
-  kek_lp11::reset();
-  g_cpu->unqueue_interrupt(kek_deuna::BR_LEVEL, kek_deuna::VECTOR);
-  kek_deuna::reset();
   clear_trace_ring();
   install_boot_stub();
   end_reset_transaction();
@@ -1325,11 +1332,6 @@ void cold_boot() {
   invalidate_all_disk_caches();
   g_bus->reset(true);
   g_cpu->reset();
-  kek_kwp::reset();
-  g_cpu->unqueue_interrupt(kek_lp11::BR_LEVEL, kek_lp11::VECTOR);
-  kek_lp11::reset();
-  g_cpu->unqueue_interrupt(kek_deuna::BR_LEVEL, kek_deuna::VECTOR);
-  kek_deuna::reset();
   clear_trace_ring();
   install_boot_stub();
   end_reset_transaction();

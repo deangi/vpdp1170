@@ -5,6 +5,7 @@
 #include "SD_FTP_Server/src/SD_FTP_Server.h"
 
 #include "sd_fs.h"
+#include <stdlib.h>    // strtod for boot_input <<seconds>> markers
 #include <string.h>    // strrchr, strncmp, strcasecmp for variant discovery
 
 // -------- helpers --------
@@ -189,9 +190,152 @@ void config_apply_ethernet_defaults(AppConfig& cfg) {
 }
 
 void config_set_boot_input(AppConfig& cfg, const String& encoded) {
-  cfg.boot_input_len = decode_escaped_bytes(unquote_config_value(encoded),
-                                            cfg.boot_input,
-                                            AppConfig::BOOT_INPUT_MAX);
+  cfg.boot_input_len = 0;
+  cfg.boot_input_segment_count = 0;
+  memset(cfg.boot_input, 0, sizeof(cfg.boot_input));
+  memset(cfg.boot_input_segments, 0, sizeof(cfg.boot_input_segments));
+
+  String s = unquote_config_value(encoded);
+  if (s.length() == 0) return;
+
+  static constexpr uint32_t kDelayMinMs = 100;     // 0.1 s
+  static constexpr uint32_t kDelayMaxMs = 120000;  // 120 s
+
+  uint32_t pending_delay_ms = 0;
+  String text_chunk;
+
+  auto flush_text = [&]() {
+    if (text_chunk.length() == 0 && pending_delay_ms == 0) return;
+
+    // Delay-only marker (no following text yet): keep accumulating into
+    // pending_delay_ms until text arrives, unless we need a delay-only
+    // segment at end — handled after the loop.
+    if (text_chunk.length() == 0) return;
+
+    if (cfg.boot_input_segment_count >= AppConfig::BOOT_INPUT_MAX_SEGMENTS) {
+      LOGE("boot_input: truncated to %u segments",
+           (unsigned)AppConfig::BOOT_INPUT_MAX_SEGMENTS);
+      text_chunk = "";
+      return;
+    }
+
+    AppConfig::BootInputSegment& seg =
+        cfg.boot_input_segments[cfg.boot_input_segment_count];
+    seg.delay_ms = pending_delay_ms;
+    pending_delay_ms = 0;
+    seg.data_len = (uint8_t)decode_escaped_bytes(
+        text_chunk, seg.data, AppConfig::BootInputSegment::DATA_MAX);
+    text_chunk = "";
+
+    // Also append to flat boot_input[] for byte-count logging.
+    for (uint8_t i = 0; i < seg.data_len &&
+         cfg.boot_input_len < AppConfig::BOOT_INPUT_MAX; i++) {
+      cfg.boot_input[cfg.boot_input_len++] = seg.data[i];
+    }
+
+    if (seg.data_len > 0 || seg.delay_ms > 0)
+      cfg.boot_input_segment_count++;
+  };
+
+  auto parse_delay_marker = [&](int open_at) -> int {
+    // s[open_at] == '<' and s[open_at+1] == '<'; find closing '>>'.
+    int close = -1;
+    for (int j = open_at + 2; j + 1 < (int)s.length(); j++) {
+      if (s[j] == '>' && s[j + 1] == '>') {
+        close = j;
+        break;
+      }
+    }
+    if (close < 0) return -1;  // not a closed marker
+
+    String num = s.substring(open_at + 2, close);
+    num.trim();
+    char* endp = nullptr;
+    const char* cstr = num.c_str();
+    double sec = strtod(cstr, &endp);
+    if (endp == cstr || (endp && *endp != '\0')) {
+      LOGE("boot_input: ignoring invalid delay marker <<%s>>", num.c_str());
+      return close + 2;  // skip marker, inject nothing
+    }
+
+    double ms_d = sec * 1000.0;
+    if (ms_d < (double)kDelayMinMs) {
+      LOGE("boot_input: delay %.3fs clamped to 0.1s", sec);
+      ms_d = (double)kDelayMinMs;
+    } else if (ms_d > (double)kDelayMaxMs) {
+      LOGE("boot_input: delay %.3fs clamped to 120s", sec);
+      ms_d = (double)kDelayMaxMs;
+    }
+    uint32_t ms = (uint32_t)(ms_d + 0.5);
+
+    // Flush any text before this marker, then accumulate delay.
+    flush_text();
+    // If pending delay already set (stacked markers), add sequentially by
+    // emitting a delay-only segment first when text_chunk is empty.
+    if (pending_delay_ms > 0 && text_chunk.length() == 0) {
+      if (cfg.boot_input_segment_count < AppConfig::BOOT_INPUT_MAX_SEGMENTS) {
+        AppConfig::BootInputSegment& seg =
+            cfg.boot_input_segments[cfg.boot_input_segment_count];
+        seg.delay_ms = pending_delay_ms;
+        seg.data_len = 0;
+        cfg.boot_input_segment_count++;
+      }
+      pending_delay_ms = 0;
+    }
+    pending_delay_ms += ms;
+    return close + 2;
+  };
+
+  int i = 0;
+  while (i < (int)s.length()) {
+    if (i + 1 < (int)s.length() && s[i] == '<' && s[i + 1] == '<') {
+      int next = parse_delay_marker(i);
+      if (next > i) {
+        i = next;
+        continue;
+      }
+    }
+    text_chunk += s[i];
+    i++;
+  }
+
+  flush_text();
+
+  // Trailing delay with no following text: still schedule a wait (no keys).
+  if (pending_delay_ms > 0 &&
+      cfg.boot_input_segment_count < AppConfig::BOOT_INPUT_MAX_SEGMENTS) {
+    AppConfig::BootInputSegment& seg =
+        cfg.boot_input_segments[cfg.boot_input_segment_count++];
+    seg.delay_ms = pending_delay_ms;
+    seg.data_len = 0;
+  } else if (pending_delay_ms > 0) {
+    LOGE("boot_input: truncated to %u segments",
+         (unsigned)AppConfig::BOOT_INPUT_MAX_SEGMENTS);
+  }
+
+  // No markers and plain text: one segment with delay_ms=0 (immediate).
+  // flush_text already created it when text_chunk was non-empty.
+}
+
+String config_format_boot_input(const AppConfig& cfg) {
+  String out;
+  for (uint8_t i = 0; i < cfg.boot_input_segment_count; i++) {
+    const AppConfig::BootInputSegment& seg = cfg.boot_input_segments[i];
+    if (seg.delay_ms > 0) {
+      char marker[32];
+      // Prefer one decimal place when not an integer number of seconds.
+      if (seg.delay_ms % 1000 == 0)
+        snprintf(marker, sizeof(marker), "<<%u>>",
+                 (unsigned)(seg.delay_ms / 1000u));
+      else
+        snprintf(marker, sizeof(marker), "<<%.1f>>",
+                 (double)seg.delay_ms / 1000.0);
+      out += marker;
+    }
+    if (seg.data_len > 0)
+      out += config_escape_bytes(seg.data, seg.data_len);
+  }
+  return out;
 }
 
 // Trim only space/tab around boot_script separators. Do not use isspace():
@@ -363,6 +507,7 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.telnet_port    = TELNET_PORT;
 
   cfg.boot_input_len = 0;
+  cfg.boot_input_segment_count = 0;
   cfg.boot_script_count = 0;
   cfg.serial1_enabled = false;
   config_apply_ethernet_defaults(cfg);
@@ -631,6 +776,7 @@ static void reset_pdp_reload_state(AppConfig& cfg) {
   cfg.title = defaults.title;
   cfg.mem_size_kw = defaults.mem_size_kw;
   cfg.boot_input_len = 0;
+  cfg.boot_input_segment_count = 0;
   cfg.boot_script_count = 0;
   cfg.serial1_enabled = defaults.serial1_enabled;
   cfg.eth_enabled = defaults.eth_enabled;
@@ -735,8 +881,10 @@ bool config_write_default_pdp(const AppConfig& cfg) {
   f.println("[console]");
   f.println("; boot_input is injected into the KL11 input queue after each");
   f.println("; PDP-11 boot/reset. Escapes: \\r \\n \\t \\e \\xHH \\ooo ^C ^[ ^?.");
+  f.println("; Optional <<seconds>> delays (0.1..120) between bursts, e.g.");
+  f.println(";   boot_input = \"<<2.5>>START\\r<<2>>\\r\"");
   f.printf("boot_input = \"%s\"\r\n",
-           config_escape_bytes(cfg.boot_input, cfg.boot_input_len).c_str());
+           config_format_boot_input(cfg).c_str());
   f.println("; boot_script waits for prompt text (case-insensitive), then");
   f.println("; injects the reply. Steps: expect => reply || expect => reply");
   f.printf("boot_script = \"%s\"\r\n",
@@ -967,9 +1115,11 @@ void config_print(const AppConfig& cfg) {
       (int)cfg.wifi_password.length());
   LOG("[telnet]  enabled=%s  port=%d",
       cfg.telnet_enabled ? "true" : "false", cfg.telnet_port);
-  LOG("[console] boot_input=\"%s\" (%u bytes)",
-      config_escape_bytes(cfg.boot_input, cfg.boot_input_len).c_str(),
-      (unsigned)cfg.boot_input_len);
+  LOG("[console] boot_input=\"%s\" (%u bytes, %u segment%s)",
+      config_format_boot_input(cfg).c_str(),
+      (unsigned)cfg.boot_input_len,
+      (unsigned)cfg.boot_input_segment_count,
+      cfg.boot_input_segment_count == 1 ? "" : "s");
   LOG("[console] boot_script=\"%s\" (%u step%s)",
       config_format_boot_script(cfg).c_str(),
       (unsigned)cfg.boot_script_count,

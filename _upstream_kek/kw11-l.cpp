@@ -131,9 +131,10 @@ void kw11_l::reset(const bool hard)
 {
 	if (b && b->getCpu())
 		b->getCpu()->unqueue_interrupt(6, 0100);
+	// SIMH clk_reset: clk_csr = CSR_DONE; CLR_INT — both INIT and power-up.
+	my_unique_lock lck(&lc_csr_lock);
+	lf_csr = 0200;  // DONE, IE clear
 	if (hard) {
-		my_unique_lock lck(&lc_csr_lock);
-		lf_csr = 0;
 		total_ticks = 0;
 		enabled_ticks = 0;
 		int_triggered = 0;
