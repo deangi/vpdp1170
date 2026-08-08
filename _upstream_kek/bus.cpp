@@ -253,7 +253,6 @@ void bus::init()
 void bus::reset(const bool hard)
 {
 	reset_unibus_map();
-	icache_flush();
 	if (hard) {
 		microprogram_break_register = 0;
 		console_leds = 0;
@@ -1118,7 +1117,6 @@ KEK_HOT bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, con
 			mmu_->set_page_written_to(page_index);
 			if (word_mode == wm_byte) {
 				m->write_byte(m_offset, value);
-				icache_invalidate_pa(m_offset);
 				return false;
 			}
 			if (m_offset & 1) [[unlikely]] {
@@ -1127,7 +1125,6 @@ KEK_HOT bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, con
 				c->abort_instruction(10);
 			}
 			m->write_word(m_offset, value);
-			icache_invalidate_pa(m_offset);
 			return false;
 		}
 
@@ -1179,7 +1176,6 @@ KEK_HOT bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, con
 
 		m->write_word(m_offset, value);
 	}
-	icache_invalidate_pa(m_offset);
 
 	return false;
 }
@@ -1188,10 +1184,8 @@ void bus::write_unibus_word(const uint32_t a, const uint16_t v)
 {
 	const uint32_t pa = translate_unibus_address(a);
 	DOLOG(log_ss::LS_BUS, "write_unibus_word[%08o->%08o]=%06o (%04x)", a, pa, v, v);
-	if (pa < m->get_memory_size()) {
+	if (pa < m->get_memory_size())
 		m->write_word(pa, v);
-		icache_invalidate_pa(pa);
-	}
 }
 
 void bus::write_physical(const uint32_t a, const uint16_t value)
@@ -1205,17 +1199,14 @@ void bus::write_physical(const uint32_t a, const uint16_t value)
 	}
 	else {
 		m->write_word(a, value);
-		icache_invalidate_pa(a);
 	}
 }
 
 void bus::write_physical_byte(const uint32_t a, const uint8_t value)
 {
 	DOLOG(log_ss::LS_BUS, "write_physical_byte[%08o]=%03o", a, value);
-	if (a < m->get_memory_size()) {
+	if (a < m->get_memory_size())
 		m->write_byte(a, value);
-		icache_invalidate_pa(a);
-	}
 }
 
 uint32_t bus::write_physical_block(uint32_t a, const uint8_t *source, uint32_t n)
@@ -1225,7 +1216,6 @@ uint32_t bus::write_physical_block(uint32_t a, const uint8_t *source, uint32_t n
 	n = std::min(n, m->get_memory_size() - a);
 	if (!m->write_block(a, source, n))
 		return 0;
-	icache_flush();
 	DOLOG(log_ss::LS_BUS, "write_physical_block[%08o]=%u", a, n);
 	return n;
 }
@@ -1272,10 +1262,7 @@ bool bus::clear_physical_block(const uint32_t a, const uint32_t n)
 	if (a > m->get_memory_size() || n > m->get_memory_size() - a)
 		return false;
 
-	if (!m->clear_block(a, n))
-		return false;
-	icache_flush();
-	return true;
+	return m->clear_block(a, n);
 }
 
 KEK_HOT uint16_t bus::fetch_instruction_word(const uint16_t a, const int run_mode,
@@ -1296,7 +1283,7 @@ KEK_HOT uint16_t bus::fetch_instruction_word(const uint16_t a, const int run_mod
 				c->abort_instruction(2);
 			}
 			if (physical) *physical = m_offset;
-			return icache_fetch_word(m_offset);
+			return m->read_word(m_offset);
 		}
 
 		if (physical) *physical = m_offset;
@@ -1330,7 +1317,7 @@ KEK_HOT uint16_t bus::fetch_instruction_word(const uint16_t a, const int run_mod
 	}
 
 	if (physical) *physical = m_offset;
-	return icache_fetch_word(m_offset);
+	return m->read_word(m_offset);
 }
 
 uint16_t bus::read_word(const uint16_t a, const d_i_space_t s)
@@ -1401,10 +1388,8 @@ void bus::write_unibus_byte(const uint32_t a, const uint8_t v)
 {
 	const uint32_t pa = translate_unibus_address(a);
 	DOLOG(log_ss::LS_BUS, "write_unibus_byte[%08o->%08o]=%03o (0x%02x)", a, pa, v, v);
-	if (pa < m->get_memory_size()) {
+	if (pa < m->get_memory_size())
 		m->write_byte(pa, v);
-		icache_invalidate_pa(pa);
-	}
 }
 
 uint32_t bus::write_unibus_block(uint32_t a, const uint8_t *source, uint32_t n)
@@ -1423,7 +1408,5 @@ uint32_t bus::write_unibus_block(uint32_t a, const uint8_t *source, uint32_t n)
 		done += cur;
 		a += cur;
 	}
-	if (done)
-		icache_flush();
 	return done;
 }
