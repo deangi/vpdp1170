@@ -8,6 +8,7 @@
 #include <ArduinoJson.h>
 #endif
 #include <assert.h>
+#include <cstring>
 #include <mutex>
 #include <stdint.h>
 #include <stdio.h>
@@ -101,6 +102,50 @@ private:
 	uint16_t console_switches { 0 };
 	uint16_t console_leds     { 0 };
 	uint32_t unibus_map[UNIBUS_MAP_ENTRIES] { 0 };
+
+	// Guest instruction cache (#3): 128 × 32B = 4 KB, direct-mapped by PA.
+	static constexpr int ICACHE_LINES = 128;
+	static constexpr int ICACHE_LINE_BYTES = 32;
+	static constexpr int ICACHE_LINE_SHIFT = 5;
+	uint8_t  icache_data[ICACHE_LINES][ICACHE_LINE_BYTES] { };
+	uint32_t icache_tag[ICACHE_LINES] { };
+	uint8_t  icache_valid[ICACHE_LINES] { };
+
+	KEK_ALWAYS_INLINE void icache_flush() {
+		memset(icache_valid, 0, sizeof icache_valid);
+	}
+
+	KEK_ALWAYS_INLINE void icache_invalidate_pa(const uint32_t pa) {
+		const uint32_t line = pa >> ICACHE_LINE_SHIFT;
+		const int idx = int(line & (ICACHE_LINES - 1));
+		if (icache_valid[idx] && icache_tag[idx] == line)
+			icache_valid[idx] = 0;
+	}
+
+	KEK_ALWAYS_INLINE uint16_t icache_fetch_word(const uint32_t pa) {
+		const uint32_t line = pa >> ICACHE_LINE_SHIFT;
+		const int idx = int(line & (ICACHE_LINES - 1));
+		const int off = int(pa & (ICACHE_LINE_BYTES - 1));
+		if (!(icache_valid[idx] && icache_tag[idx] == line)) [[unlikely]] {
+			const uint32_t base = line << ICACHE_LINE_SHIFT;
+			const uint32_t mem_size = m->get_memory_size();
+			if (base + ICACHE_LINE_BYTES <= mem_size) [[likely]] {
+				m->read_block(base, icache_data[idx], ICACHE_LINE_BYTES);
+			}
+			else {
+				memset(icache_data[idx], 0, ICACHE_LINE_BYTES);
+				if (base < mem_size)
+					m->read_block(base, icache_data[idx], mem_size - base);
+			}
+			icache_tag[idx] = line;
+			icache_valid[idx] = 1;
+		}
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+		return *reinterpret_cast<uint16_t *>(&icache_data[idx][off]);
+#else
+		return uint16_t(icache_data[idx][off] | (icache_data[idx][off + 1] << 8));
+#endif
+	}
 
 	uint16_t read_IO (const uint16_t a, const word_mode_t word_mode, const int run_mode, const d_i_space_t space, const int page, const int page_index);
 	bool     write_IO(const uint16_t a, const word_mode_t word_mode,                                              const int page, uint16_t value);

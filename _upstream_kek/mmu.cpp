@@ -34,6 +34,7 @@ void mmu::reset(const bool hard)
 	if (hard)
 		memset(pages, 0x00, sizeof pages);
 	CPUERR = MMR0 = MMR1 = MMR2 = MMR3 = PIR = CSR = 0;
+	soft_a = soft_w = 0;
 	refresh_translation_cache();
 	update_io_base();
 }
@@ -53,6 +54,11 @@ void mmu::dump_par_pdr(console *const cnsl, const int run_mode, const d_i_space_
 		int      page_index = calc_par_pdr_index(run_mode, d, i);
 		uint16_t par_value  = pages[page_index].par_preshifted >> 6;
 		uint16_t pdr_value  = pages[page_index].pdr;
+		const uint64_t bit  = uint64_t(1) << page_index;
+		if (soft_w & bit)
+			pdr_value |= (1 << 6) | (1 << 7);
+		else if (soft_a & bit)
+			pdr_value |= 1 << 7;
 
 		uint16_t pdr_len    = (((pdr_value >> 8) & 127) + 1) * 64;
 
@@ -84,6 +90,7 @@ uint16_t mmu::read_pdr(const uint32_t a, const int run_mode)
 	int         page       = (a >> 1) & 7;
 	d_i_space_t d          = a & 16 ? d_space : i_space;
 	int         page_index = calc_par_pdr_index(run_mode, d, page);
+	flush_soft_aw(page_index);
 	return pages[page_index].pdr;
 }
 
@@ -176,6 +183,7 @@ void mmu::write_pdr(const uint32_t a, const int run_mode, const uint16_t value, 
 	}
 
 	pages[page_index].pdr &= ~(32768 + 128 /*A*/ + 64 /*W*/ + 32 + 16);  // set bit 4, 5 & 15 to 0 as they are unused and A/W are set to 0 by writes
+	clear_soft_aw(page_index);
 	refresh_translation_cache_entry(page_index);
 
 	DOLOG(log_ss::LS_MMU, "mmu WRITE-I/O PDR run-mode %d: %c for %d: %o [%d]", run_mode, d == d_space ? 'D' : 'I', page, value, word_mode);
@@ -197,6 +205,7 @@ void mmu::write_par(const uint32_t a, const int run_mode, const uint16_t value, 
 	}
 
 	pages[page_index].pdr &= ~(128 /*A*/ + 64 /*W*/);  // reset PDR A/W when PAR is written to
+	clear_soft_aw(page_index);
 	refresh_translation_cache_entry(page_index);
 
 	DOLOG(log_ss::LS_MMU, "mmu WRITE-I/O PAR run-mode %d: %c for %d: %o (%07o)", run_mode, d == d_space ? 'D' : 'I', page, word_mode == wm_byte ? value & 0xff : value, pages[page_index].par_preshifted);
@@ -458,7 +467,15 @@ JsonDocument mmu::add_par_pdr(const int run_mode, const d_i_space_t d) const
 	JsonArray ja_pdr_work = ja_pdr.to<JsonArray>();
 	for(int i=0; i<8; i++) {
 		int page_index = calc_par_pdr_index(run_mode, d, i);
-		ja_pdr_work.add(pages[page_index].pdr);
+		ja_pdr_work.add([&]() {
+			const uint64_t bit = uint64_t(1) << page_index;
+			uint16_t pdr = pages[page_index].pdr;
+			if (soft_w & bit)
+				pdr |= (1 << 6) | (1 << 7);
+			else if (soft_a & bit)
+				pdr |= 1 << 7;
+			return pdr;
+		}());
 	}
 	j["pdr"] = ja_pdr;
 
@@ -503,6 +520,7 @@ void mmu::set_par_pdr(const JsonVariantConst j_in, const int run_mode, const d_i
 		int page_index = calc_par_pdr_index(run_mode, d, i_pdr++);
 		pages[page_index].pdr = v;
 	}
+	soft_a = soft_w = 0;
 	refresh_translation_cache();
 }
 

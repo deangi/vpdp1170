@@ -48,6 +48,11 @@ class mmu : public device
 private:
 	// 8 pages, D/I, 3 modes and 1 invalid mode
 	page_t   pages[64];
+	// Deferred PDR A/W bits (#5): OR into soft_* on access; flush into
+	// pages[].pdr when the guest/debug reads a PDR (or on map rewrite).
+	uint64_t soft_a { 0 };
+	uint64_t soft_w { 0 };
+
 	struct translation_cache_t {
 		uint32_t base;
 		uint8_t length;
@@ -63,6 +68,32 @@ private:
 	void refresh_translation_cache() {
 		for (int index = 0; index < 64; index++)
 			refresh_translation_cache_entry(index);
+	}
+
+	KEK_ALWAYS_INLINE void clear_soft_aw(const int page_index) {
+		const uint64_t bit = uint64_t(1) << page_index;
+		soft_a &= ~bit;
+		soft_w &= ~bit;
+	}
+
+	KEK_ALWAYS_INLINE void flush_soft_aw(const int page_index) {
+		const uint64_t bit = uint64_t(1) << page_index;
+		if (soft_w & bit) {
+			pages[page_index].pdr |= (1 << 6) | (1 << 7);
+			soft_w &= ~bit;
+			soft_a &= ~bit;
+		}
+		else if (soft_a & bit) {
+			pages[page_index].pdr |= 1 << 7;
+			soft_a &= ~bit;
+		}
+	}
+
+	void flush_all_soft_aw() {
+		if (soft_a == 0 && soft_w == 0)
+			return;
+		for (int index = 0; index < 64; index++)
+			flush_soft_aw(index);
 	}
 
 	uint16_t MMR0    { 0 };
@@ -110,14 +141,28 @@ public:
 
 	int      calc_par_pdr_index(const int run_mode, const d_i_space_t d, const int apf) const { return apf + ((d == d_space) << 3) + (run_mode << 4); }
 	std::tuple<int, bool, int> explode_page_index(const int page) { return { page >> 4, (page >> 3) & 1, page & 7 }; }
-	KEK_ALWAYS_INLINE void set_page_accessed(const int page_index) { pages[page_index].pdr |= 1 << 7; }
-	KEK_ALWAYS_INLINE void set_page_written_to(const int page_index) { pages[page_index].pdr |= (1 << 6) | (1 << 7); }  // implicit set_page_accessed
+	KEK_ALWAYS_INLINE void set_page_accessed(const int page_index) {
+		const uint64_t bit = uint64_t(1) << page_index;
+		if (((soft_a | soft_w) & bit) || (pages[page_index].pdr & (1 << 7)))
+			return;
+		soft_a |= bit;
+	}
+	KEK_ALWAYS_INLINE void set_page_written_to(const int page_index) {
+		const uint64_t bit = uint64_t(1) << page_index;
+		if ((soft_w & bit) || ((pages[page_index].pdr & ((1 << 6) | (1 << 7))) == ((1 << 6) | (1 << 7))))
+			return;
+		soft_w |= bit;
+		soft_a |= bit;
+	}
 	int      get_access_control (const int page_index) { return pages[page_index].pdr & 7; }
 	int      get_pdr_len        (const int page_index) { return (pages[page_index].pdr >> 8) & 127; }
 	int      get_pdr_direction  (const int page_index) { return pages[page_index].pdr & 8; }
 	uint32_t get_physical_memory_offset(const int page_index) const { return pages[page_index].par_preshifted; }
 	uint16_t getPAR(const int page_index) const { return pages[page_index].par_preshifted >> 6; }
-	uint16_t getPDR(const int page_index) const { return pages[page_index].pdr; }
+	uint16_t getPDR(const int page_index) {
+		flush_soft_aw(page_index);
+		return pages[page_index].pdr;
+	}
 	bool     get_use_data_space(const int run_mode) const {
 		// MMR3 D/I enable bits: kernel=4, supervisor=2, unused=0, user=1
 		static constexpr int di_ena_mask[4] = { 4, 2, 0, 1 };
