@@ -2457,6 +2457,18 @@ bool cpu::misc_operations(const uint16_t instr)
 	return false;
 }
 
+[[noreturn]] void cpu::abort_instruction(int code)
+{
+	if (abort_env_ != nullptr) {
+		// setjmp returns 0 on the initial call; encode abort codes as code + 1.
+		longjmp(*abort_env_, code + 1);
+	}
+
+	// Outside step/trap (debugger, blinkenlights, console peeks): preserve
+	// historical throw-int semantics for their catch handlers.
+	throw code;
+}
+
 // 'is_interrupt' is not correct naming; it is true for mmu faults and interrupts
 void cpu::trap(uint16_t vector, const int new_ipl, const bool is_interrupt)
 {
@@ -2472,78 +2484,86 @@ void cpu::trap(uint16_t vector, const int new_ipl, const bool is_interrupt)
 	uint16_t before_psw = 0;
 	uint16_t before_pc  = 0;
 
-	do {
-		try {
-			processing_trap_depth++;
+	jmp_buf env;
+	jmp_buf *const prev_env = abort_env_;
+	abort_env_ = &env;
+	const int exception = setjmp(env);
+	if (exception == 0) {
+		processing_trap_depth++;
 
-			bool kernel_mode = !(psw >> 14);
+		bool kernel_mode = !(psw >> 14);
 
-			if (processing_trap_depth >= 2) {
-				DOLOG(log_ss::LS_TRACE, "Trap depth %d", processing_trap_depth);
+		if (processing_trap_depth >= 2) {
+			DOLOG(log_ss::LS_TRACE, "Trap depth %d", processing_trap_depth);
 
-				if (processing_trap_depth >= 3) {
-					*event = EVENT_HALT;
-					break;
-				}
-
-				if (kernel_mode)
-					vector = 4;
-
-				set_register(6, 04);
-			}
-			before_psw = getPSW();
-			if (trap_pc_override.has_value()) {
-				before_pc = trap_pc_override.value();
-				trap_pc_override.reset();
-			}
-			else {
-				// For traps detected after instruction fetch/decode, the PDP-11
-				// stacks the PC after the opcode and any extension words already
-				// consumed. Instruction-fetch faults can override this with the
-				// offending instruction PC.
-				before_pc = getPC();
+			if (processing_trap_depth >= 3) {
+				*event = EVENT_HALT;
+				abort_env_ = prev_env;
+				return;
 			}
 
-			// make sure the trap vector is retrieved from kernel space
-			psw &= 037777;  // mask off 14/15 to make it into kernel-space
+			if (kernel_mode)
+				vector = 4;
 
-			auto space = mmu_->get_use_data_space(0) ? d_space : i_space;
-			uint16_t target_pc = b->read_word(vector + 0, space);
-			setPC(target_pc);
-
-			// switch to kernel mode & update 'previous mode'
-			uint16_t new_psw = b->read_word(vector + 2, space) & 0147777;  // mask off old 'previous mode'
-			if (new_ipl != -1)
-				new_psw = (new_psw & ~0xe0) | (new_ipl << 5);
-			new_psw |= (before_psw >> 2) & 030000; // apply new 'previous mode'
-			setPSW(new_psw, false);
-
-			if (processing_trap_depth >= 2 && kernel_mode)
-				set_register(6, 04);
-
-			uint16_t prev_sp = get_register(6);
-			try {
-				push_stack(before_psw);
-				push_stack(before_pc);
-			}
-			catch(const int exception) {
-				// recover stack
-				set_register(6, prev_sp);
-			}
-
-			processing_trap_depth = 0;
-
-			// if we reach this point then the trap was processed without causing
-			// another trap
-			DOLOG(log_ss::LS_TRACE, "Trapping to %06o with PSW %06o", pc, psw);
+			set_register(6, 04);
 		}
-		catch(const int exception) {
-			DOLOG(log_ss::LS_TRACE, "trap during execution of trap (%d)", exception);
-
-			setPSW(before_psw, false);
+		before_psw = getPSW();
+		if (trap_pc_override.has_value()) {
+			before_pc = trap_pc_override.value();
+			trap_pc_override.reset();
 		}
+		else {
+			// For traps detected after instruction fetch/decode, the PDP-11
+			// stacks the PC after the opcode and any extension words already
+			// consumed. Instruction-fetch faults can override this with the
+			// offending instruction PC.
+			before_pc = getPC();
+		}
+
+		// make sure the trap vector is retrieved from kernel space
+		psw &= 037777;  // mask off 14/15 to make it into kernel-space
+
+		auto space = mmu_->get_use_data_space(0) ? d_space : i_space;
+		uint16_t target_pc = b->read_word(vector + 0, space);
+		setPC(target_pc);
+
+		// switch to kernel mode & update 'previous mode'
+		uint16_t new_psw = b->read_word(vector + 2, space) & 0147777;  // mask off old 'previous mode'
+		if (new_ipl != -1)
+			new_psw = (new_psw & ~0xe0) | (new_ipl << 5);
+		new_psw |= (before_psw >> 2) & 030000; // apply new 'previous mode'
+		setPSW(new_psw, false);
+
+		if (processing_trap_depth >= 2 && kernel_mode)
+			set_register(6, 04);
+
+		uint16_t prev_sp = get_register(6);
+		jmp_buf push_env;
+		jmp_buf *const push_prev = abort_env_;
+		abort_env_ = &push_env;
+		if (setjmp(push_env) == 0) {
+			push_stack(before_psw);
+			push_stack(before_pc);
+		}
+		else {
+			// recover stack
+			set_register(6, prev_sp);
+		}
+		abort_env_ = push_prev;
+
+		processing_trap_depth = 0;
+
+		// if we reach this point then the trap was processed without causing
+		// another trap
+		DOLOG(log_ss::LS_TRACE, "Trapping to %06o with PSW %06o", pc, psw);
 	}
-	while(0);
+	else {
+		DOLOG(log_ss::LS_TRACE, "trap during execution of trap (%d)", exception - 1);
+
+		setPSW(before_psw, false);
+	}
+
+	abort_env_ = prev_env;
 }
 
 void cpu::trap_at_current_pc(uint16_t vector)
@@ -3670,7 +3690,11 @@ bool cpu::step_impl()
 		execute_any_pending_interrupt();
 	}
 
-	try {
+	jmp_buf env;
+	jmp_buf *const prev_env = abort_env_;
+	abort_env_ = &env;
+	const int exception_nr = setjmp(env);
+	if (exception_nr == 0) {
 		instruction_pc = pc;
 		if constexpr (Diagnostic)
 			instruction_active = true;
@@ -3692,48 +3716,77 @@ bool cpu::step_impl()
 		}
 		add_register(7, 2);
 
-		// JSR is in the 004xxx opcode block. Handle it before the broad
-		// operand decoders so its extension word can never be mistaken for
-		// the next instruction in trace-heavy bring-up builds.
-		if (jsr_instruction(instr)) {
-			if constexpr (Diagnostic)
-				instruction_active = false;
-			return true;
+		// Primary decode by high nibble (instr >> 12). Common BR/MOV paths
+		// no longer walk jsr → misc → double → fp before matching.
+		bool handled = false;
+		switch (instr >> 12) {
+			case 0000: {
+				const uint8_t hi = instr >> 8;
+				if (hi >= 0001 && hi <= 0007)
+					handled = conditional_branch_instructions(instr);
+				if (!handled && (instr & 0177000) == 004000)
+					handled = jsr_instruction(instr);
+				if (!handled)
+					handled = misc_operations(instr);
+				if (!handled)
+					handled = double_operand_instructions(instr);
+				if (!handled)
+					handled = condition_code_operations(instr);
+				break;
+			}
+
+			case 0001: // MOV
+			case 0002: // CMP
+			case 0003: // BIT
+			case 0004: // BIC
+			case 0005: // BIS
+			case 0006: // ADD
+			case 0007: // MUL/DIV/ASH/ASHC/XOR/SOB
+			case 0011: // MOVB
+			case 0012: // CMPB
+			case 0013: // BITB
+			case 0014: // BICB
+			case 0015: // BISB
+			case 0016: // SUB
+				handled = double_operand_instructions(instr);
+				break;
+
+			case 0010: { // BPL–BCS, EMT/TRAP, byte single-operand (CLRB…)
+				const uint8_t hi = instr >> 8;
+				if (hi <= 0207)
+					handled = conditional_branch_instructions(instr);
+				if (!handled)
+					handled = misc_operations(instr);
+				if (!handled)
+					handled = double_operand_instructions(instr);
+				break;
+			}
+
+			case 0017: // FP11
+				handled = floating_point_instructions(instr);
+				break;
+
+			default:
+				break;
 		}
 
-		if (misc_operations(instr) || double_operand_instructions(instr) || floating_point_instructions(instr) || conditional_branch_instructions(instr) || condition_code_operations(instr)) {
-			if constexpr (Diagnostic)
-				instruction_active = false;
-			return true;
-		}
-
-		DOLOG(log_ss::LS_CPU, "UNHANDLED instruction %06o @ %06o", instr, pc - 2);
-		if ((instr & 0170000) == 0170000) {
-			// FPP/FP11 is not emulated.  A real PDP-11 without usable
-			// floating-point hardware reports this to the guest via vector 010;
-			// it should not stop the host emulator.
-			if constexpr (Diagnostic)
-				instruction_active = false;
-			trap(010);
-			return true;
-		}
-
-		// Reserved/illegal instructions are also guest-visible instruction
-		// traps.  Stopping the host here prevents operating systems from using
-		// their normal probe/recovery paths.
+		abort_env_ = prev_env;
 		if constexpr (Diagnostic)
 			instruction_active = false;
+		if (handled)
+			return true;
+
+		DOLOG(log_ss::LS_CPU, "UNHANDLED instruction %06o @ %06o", instr, pc - 2);
+		// Reserved/illegal (and unemulated FP already trap inside the FP
+		// decoder). Guest-visible vector 010 — do not halt the host.
 		trap(010);
 		return true;
 	}
-	catch(const int exception_nr) {
-		if constexpr (Diagnostic)
-			instruction_active = false;
-		DOLOG(log_ss::LS_TRACE, "trap during execution of command (%d)", exception_nr);
-	}
 
+	abort_env_ = prev_env;
 	if constexpr (Diagnostic)
 		instruction_active = false;
+	DOLOG(log_ss::LS_TRACE, "trap during execution of command (%d)", exception_nr - 1);
 	return true;
 }
 

@@ -1,0 +1,104 @@
+[rsx11mp46 run 1/1] installing /pdpconfig-rsx11mp46.ini
+
+vpdp1170 management shell
+PDP-11 emulation continues; Telnet I/O is temporarily detached.
+Type help for commands, exit to return to the PDP console.
+vpdp:/> rm /pdpconfig.ini
+removed /pdpconfig.ini
+vpdp:/> cp /pdpconfig-rsx11mp46.ini /pdpconfig.ini
+copied /pdpconfig-rsx11mp46.ini -> /pdpconfig.ini
+vpdp:/> [rsx11mp46 run 1/1] booting
+reset
+exit
+emulator reset scheduled (reload config, remount, zero RAM, cold boot)
+vpdp:/> [vpdp1170] emulator reset: config=/pdpconfig.ini title="RSX11M+4.6" boot=DL0 mem=1920KW (EMU reboot)
+Returning Telnet to the PDP-11 console.
+vpdp1170: kek PDP-11/70 adapter console OK; trying DL0 boot...
+
+
+
+RSX-11M-PLUS V4.6  BL87   256.KW  System:"RL02SY"
+>RED DL:=SY:
+>RED DL:=LB:
+>RED DL:=SP:
+>MOU DL0:"PREGENNEDSYS"
+>@DL:[1,2]STARTUP[rsx11mp46 run 1/1] PASS boot=20.922s (confirmed after 22.005s)
+[rt11v5 run 1/1] installing /pdpconfig-rt11v5.ini
+
+vpdp1170 management shell
+PDP-11 emulation continues; Telnet I/O is temporarily detached.
+Type help for commands, exit to return to the PDP console.
+vpdp:/> rm /pdpconfig.ini
+removed /pdpconfig.ini
+vpdp:/> cp /pdpconfig-rt11v5.ini /pdpconfig.ini
+copied /pdpconfig-rt11v5.ini -> /pdpconfig.ini
+vpdp:/> [rt11v5 run 1/1] booting
+reset
+exit
+emulator reset scheduled (reload config, remount, zero RAM, cold boot)
+vpdp:/> [vpdp1170] emulator reset: config=/pdpconfig.ini title="PDP 11 RT11 V5" boot=RK0 mem=124KW (EMU reboot)
+Returning Telnet to the PDP-11 console.
+vpdp1170: kek PDP-11/70 adapter console OK; trying RK0 boot...
+
+RT-11FB  V05.04 F
+SHOW
+
+.TYPE V5USER.TXT
+
+                               RT-11 V5.4F
+
+    Installation of  RT-11 Version 5.4F is complete  and you are now running
+    RT-11 from your system volume. 
+
+    Your  system  volume  is  your  working  volume  if  you  have used  the
+    automatic installation (AI) procedure. If you have installed RT-11 using
+    that procedure,  DIGITAL recommends  you verify the correct operation of
+    your system's software using the VERIFY verification procedure.  You can
+    only perform VERIFY on the valid target (output) media  you used for the
+    AI  procedure.  Run VERIFY  before you run CONFIG.  To run VERIFY, enter
+    the command:
+
+			       IND VERIFY
+
+    DIGITAL  also recommends  you read  the file V5NOTE.TXT,  which contains
+    information formalized too late to be included in the Release Notes. You
+    can TYPE or PRINT V5NOTE.TXT.
+
+    Also see Section 3.1 of the RT-11 System User's Guide for information on
+    tailoring a start-up procedure using a start-up command file.
+
+
+.R MSCPCK
+
+.TT  (Resident) 
+RK  (Resident) 
+    RK0 = DK , SY 
+MQ  (Resident) 
+LD   
+SL   
+DL   
+DU   
+DP   
+VM   
+SP   
+LP   
+NL   
+20 free slots
+
+
+.[rt11v5 run 1/1] PASS boot=9.476s (confirmed after 10.477s)
+[unix6 run 1/1] installing /pdpconfig-unix6.ini
+
+vpdp1170 management shell
+PDP-11 emulation continues; Telnet I/O is temporarily detached.
+Type help for commands, exit to return to the PDP console.
+vpdp:/> rm /pdpconfig.ini
+removed /pdpconfig.ini
+vpdp:/> cp /pdpconfig-unix6.ini /pdpconfig.ini
+error: cannot read file: /pdpconfig-unix6.ini
+vpdp:/> [11mark run 1/1] installing /pdpconfig-11mark.ini
+>>[rstsv4 run 1/1] installing /pdpconfig-rstsv4.ini
+>>[rsx11m run 1/1] installing /pdpconfig-rsx11m.ini
+>>[rsx11mp46-pidp run 1/1] installing /pdpconfig-rsx11mp46-pidp.ini
+>>[xxdp25 run 1/1] installing /pdpconfig-xxdp25.ini
+>>Results: boot-benchmark-results\boot-times.csv

@@ -110,20 +110,24 @@ public:
 
 	int      calc_par_pdr_index(const int run_mode, const d_i_space_t d, const int apf) const { return apf + ((d == d_space) << 3) + (run_mode << 4); }
 	std::tuple<int, bool, int> explode_page_index(const int page) { return { page >> 4, (page >> 3) & 1, page & 7 }; }
-	void     set_page_accessed  (const int page_index) { pages[page_index].pdr |= 1 << 7; }
-	void     set_page_written_to(const int page_index) { pages[page_index].pdr |= (1 << 6) | (1 << 7); }  // implicit set_page_accessed
+	KEK_ALWAYS_INLINE void set_page_accessed(const int page_index) { pages[page_index].pdr |= 1 << 7; }
+	KEK_ALWAYS_INLINE void set_page_written_to(const int page_index) { pages[page_index].pdr |= (1 << 6) | (1 << 7); }  // implicit set_page_accessed
 	int      get_access_control (const int page_index) { return pages[page_index].pdr & 7; }
 	int      get_pdr_len        (const int page_index) { return (pages[page_index].pdr >> 8) & 127; }
 	int      get_pdr_direction  (const int page_index) { return pages[page_index].pdr & 8; }
 	uint32_t get_physical_memory_offset(const int page_index) const { return pages[page_index].par_preshifted; }
 	uint16_t getPAR(const int page_index) const { return pages[page_index].par_preshifted >> 6; }
 	uint16_t getPDR(const int page_index) const { return pages[page_index].pdr; }
-	bool     get_use_data_space(const int run_mode) const;
-	uint32_t get_io_base() const { return io_base; }
+	bool     get_use_data_space(const int run_mode) const {
+		// MMR3 D/I enable bits: kernel=4, supervisor=2, unused=0, user=1
+		static constexpr int di_ena_mask[4] = { 4, 2, 0, 1 };
+		return MMR3 & di_ena_mask[run_mode];
+	}
+	KEK_ALWAYS_INLINE uint32_t get_io_base() const { return io_base; }
 
 	// Inline common-case translation for mapped RAM accesses. Faulting and
 	// maintenance-mode cases retain the existing full MMR/trap path.
-	bool try_calculate_physical_address_fast(const int run_mode,
+	KEK_ALWAYS_INLINE bool try_calculate_physical_address_fast(const int run_mode,
 			const uint16_t a, const bool is_write, const d_i_space_t space,
 			uint32_t *const physical, int *const page_index) const {
 		if ((MMR0 & 1) == 0)

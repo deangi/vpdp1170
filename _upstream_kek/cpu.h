@@ -10,6 +10,7 @@
 #include <array>
 #include <cassert>
 #include <condition_variable>
+#include <csetjmp>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -93,6 +94,10 @@ private:
 
 	kek_event_t *const event { nullptr };
 	console     *cnsl        { nullptr };
+
+	// Non-exception abort of the current instruction / trap stacking.
+	// Hot path uses setjmp in step_impl; throw was too expensive on ESP32-S3.
+	jmp_buf *abort_env_ { nullptr };
 
 	bool     check_pending_interrupts() const;  // needs the 'qi_lock'-lock
 	template <bool Diagnostic>
@@ -186,6 +191,7 @@ public:
 
 	void trap(uint16_t vector, const int new_ipl = -1, const bool is_interrupt = false);
 	void trap_at_current_pc(uint16_t vector);
+	[[noreturn]] void abort_instruction(int code);
 
 	bool getPSW_c() const;
 	bool getPSW_v() const;

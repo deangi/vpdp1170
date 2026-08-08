@@ -1,0 +1,73 @@
+echo PATH=$PATH
+PATH=/bin:/sbin:/usr/sbin:/etc:/usr/ucb:/usr/bin:/usr/new
+# pwd
+/
+# df
+Filesystem  1K-blocks     Used    Avail Capacity  Mounted on
+root             7816     2826     4990    36%    /
+# mount
+root on /
+# ls -l /usr
+total 0
+# ls /usr/ucb
+/usr/ucb not found
+# ls /usr/bin
+/usr/bin not found
+# ls /etc
+Mail.rc              hosts.allow          phones
+acctd.cf             hosts.deny           printcap
+aliases              hosts.dir            protocols
+aliases.dir          hosts.equiv          rc
+aliases.head         hosts.pag            rc.local
+aliases.pag          inetd.conf           remote
+autoconfig           inetd.conf.wrappers  resolv.confls /sbin
+
+crash                init                 sendmail.cf
+crontab              localtime            sendmail.cw
+disktab              master.passwd        sendmail.fc
+dtab                 motd                 services
+dtab.save            netstart             shells
+dumpdates            networks             syserrlst
+fstab                ntp.conf             syslog.conf
+ftpusers             ntp.drift            tcsh6.00strgs
+ls /bin
+gettytab             passwd               termcap
+group                passwd.dir           ttys
+hosts                passwd.pag           uucp
+# XNSrouted   dumpdir     icheck      ncheck      route       testnet
+badsect     dumpfs      ifconfig    newfs       routed      tunefs
+clri        fastboot    mkfs        quotacheck  savecore    umountls -l /usr/ucb/telnet /usr/ucb/ftp /usr/ucb/rlogin /usr/ucb/rcp 2>&1
+
+dcheck      fsck        mknod       rdump       shutdown
+dmesg       gt307       mkpasswd    reboot      slattach
+dump        halt        mount       restor      swapon
+# ls -l /etc/route /sbin/route /bin/route /usr/bin/route 2>&1
+[          chpass     du         ln         pagesize   sh         tee
+adb        chsh       e          login      passwd     size       test
+ar         cmp        echo       ls         ping       sort       time
+as         copyh      ed         mail       pr         strip      tp
+awk        cp         expr       make       ps         stty       truels /usr/src/ucb 2>&1 | head
+
+cat        csh        false      mkdir      pwd        su         wall
+cc         date       grep       mt         rcp        sync       who
+chflags    dd         hostid     mv         rm         sysctl     write
+chfn       df         hostname   nice       rmail      tar
+chgrp      diff       kill       nm         rmdir      tcsh
+chmod      disklabel  ld         od         sed        tcsh.oldcat /etc/fstab
+
+# /usr/ucb/telnet not found
+/usr/ucb/ftp not found
+/usr/ucb/rlogin not found
+/usr/ucb/rcp not found
+# disklabel rl0 2>&1 | tail -20
+/etc/route not found
+/bin/route not found
+/usr/bin/route not found
+-rwxr-xr-x  1 root        21966 Feb 18  2000 /sbin/route
+# head: not found
+
+disklabel rl1 2>&1 | tail -20
+# /dev/xp0a     /       ufs     rw              1       1
+/dev/xp0b       none    swap    sw              0       0
+/dev/xp0c       /usr    ufs     rw              1       2
+# tail: not found

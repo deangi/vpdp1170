@@ -1,0 +1,8 @@
+[unix6 run 1/1] FAIL: configuration copy was not acknowledged for unix6: cp /pdpconfig-unix6.ini /pdpconfig.ini
+error: cannot read file: /pdpconfig-unix6.ini
+vpdp:/>
+[11mark run 1/1] FAIL: timed out waiting for the management-shell prompt
+[rstsv4 run 1/1] FAIL: timed out waiting for the management-shell prompt
+[rsx11m run 1/1] FAIL: timed out waiting for the management-shell prompt
+[rsx11mp46-pidp run 1/1] FAIL: timed out waiting for the management-shell prompt
+[xxdp25 run 1/1] FAIL: timed out waiting for the management-shell prompt

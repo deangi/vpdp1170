@@ -78,3 +78,15 @@ typedef enum { wm_word = 0, wm_byte = 1 } word_mode_t;
 #ifndef EXTMEM
 #define EXTMEM
 #endif
+
+// Hot-path hints for the instruction/operand RAM path (#4).
+#if defined(ESP32)
+#ifndef IRAM_ATTR
+#define IRAM_ATTR
+#endif
+#define KEK_HOT           IRAM_ATTR
+#define KEK_ALWAYS_INLINE __attribute__((always_inline)) inline
+#else
+#define KEK_HOT
+#define KEK_ALWAYS_INLINE inline
+#endif

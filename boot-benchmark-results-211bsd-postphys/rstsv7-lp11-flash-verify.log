@@ -1,0 +1,29 @@
+[vpdp1170] PDP core memory: configured=508 KW target=1040384 bytes active=0 bytes
+[vpdp1170] kek guest RAM: logical=508 KW capacity=2048 KW (4194304 bytes)
+[vpdp1170] LP11 capture consumer task started (period 500 ms)
+[vpdp1170] LP11 capture session file /LP0.TXT (empty_reuse=0 max=0)
+[vpdp1170] LP11 capture session file /LP0.TXT (empty_reuse=0 max=0)
+[vpdp1170] kek KW11-L line clock task started (emulator-time ~60 Hz, 11667 instr/tick)
+[vpdp1170] PDP core initialized: kek PDP-11/70 adapter (active memory=508 KW, target memory=508 KW)
+[vpdp1170] WiFi connecting to "OspreyOnhub" (hostname=vpdp11) ...
+.................
+[vpdp1170] WiFi connected, IP=192.168.7.144
+[vpdp1170] console Telnet FIFO: 8 KB internal RAM
+[vpdp1170] telnet: listening on port 23
+[vpdp1170] ftp: configured port 21 (will start when WiFi connects)
+[vpdp1170] disk_mount[DL0]: /rsts7_full_rl.dsk (5243392 bytes)
+[vpdp1170] disks_mount DL0: "/rsts7_full_rl.dsk" -> mounted
+[vpdp1170] disk_mount[DL1]: /rsts7_swap_rl.dsk (5243392 bytes)
+[vpdp1170] disks_mount DL1: "/rsts7_swap_rl.dsk" -> mounted
+[vpdp1170] --- booting kek PDP-11/70 from DL0, console -> TFT ---
+[vpdp1170] LP11 capture session file /LP0.TXT (empty_reuse=0 max=0)
+[vpdp1170] kek RL02 attached to host DL0-DL3 slots
+[vpdp1170] kek RL02 slot DL0 mounted=1 path=/rsts7_full_rl.dsk bytes=5243392
+[vpdp1170] kek RL02 slot DL1 mounted=1 path=/rsts7_swap_rl.dsk bytes=5243392
+[vpdp1170] kek RL02 slot DL2 mounted=0 path= bytes=0
+[vpdp1170] kek RL02 slot DL3 mounted=0 path= bytes=0
+[vpdp1170] kek boot stub installed: banner @01000, DL0 boot ROM @02000
+[vpdp1170] ftp: listening on port 21 at 192.168.7.144
+vpdp1170: kek PDP-11/70 adapter console OK; trying DL0 boot...
+
+Device LP0: does not interrupt

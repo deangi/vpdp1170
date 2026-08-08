@@ -69,10 +69,18 @@ public:
 	}
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-	uint16_t read_word(const uint32_t a) const { return *reinterpret_cast<uint16_t *>(&m[a]); }
-	void write_word(const uint32_t a, const uint16_t v) { *reinterpret_cast<uint16_t *>(&m[a]) = v; }
+	KEK_ALWAYS_INLINE uint16_t read_word(const uint32_t a) const {
+		return *reinterpret_cast<uint16_t *>(&m[a]);
+	}
+	KEK_ALWAYS_INLINE void write_word(const uint32_t a, const uint16_t v) {
+		*reinterpret_cast<uint16_t *>(&m[a]) = v;
+	}
 #else
-	uint16_t read_word(const uint32_t a) const { return m[a] | (m[a + 1] << 8); }
-	void write_word(const uint32_t a, const uint16_t v) { m[a] = v; m[a + 1] = v >> 8; }
+	KEK_ALWAYS_INLINE uint16_t read_word(const uint32_t a) const {
+		return m[a] | (m[a + 1] << 8);
+	}
+	KEK_ALWAYS_INLINE void write_word(const uint32_t a, const uint16_t v) {
+		m[a] = v; m[a + 1] = v >> 8;
+	}
 #endif
 };

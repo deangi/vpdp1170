@@ -431,7 +431,7 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 	if ((a & 1) && word_mode == wm_word) [[unlikely]] {
 		DOLOG(log_ss::LS_BUS_IO, "READ-I/O odd address %06o UNHANDLED", a);
 		mmu_->trap_if_odd(apf);
-		throw 0;
+		c->abort_instruction(0);
 		return 0;
 	}
 
@@ -689,7 +689,7 @@ uint16_t bus::read_IO(const uint16_t a, const word_mode_t word_mode, const int r
 
 	mmu_->setCPUERRBit(4);  // CPUE_TMO = 0020
 	c->trap(004, -1, true);  // no-such-I/O probes must resume after the faulting instruction
-	throw 1;
+	c->abort_instruction(1);
 
 	return 0;
 }
@@ -719,27 +719,49 @@ void bus::verify_pointer_bounds(const uint32_t m_offset, const int page_index)
 		DOLOG(log_ss::LS_BUS, "TRAP 004 for non-existent physical memory");
 		c->trap(004, -1, true);
 
-		throw 6;
+		c->abort_instruction(6);
 	}
 }
 
-uint16_t bus::read(const uint16_t addr_in, const word_mode_t word_mode, const int run_mode, const d_i_space_t space_in)
+KEK_HOT uint16_t bus::read(const uint16_t addr_in, const word_mode_t word_mode, const int run_mode, const d_i_space_t space_in)
 {
 	auto     space    = mmu_->get_use_data_space(run_mode) ? space_in : i_space;
 	uint32_t m_offset;
 	int page_index;
+
+	// Mapped RAM word/byte: prefer the translation cache before the full MMR path.
+	if (mmu_->try_calculate_physical_address_fast(run_mode, addr_in, false,
+			space, &m_offset, &page_index)) [[likely]] {
+		const uint32_t io_base = mmu_->get_io_base();
+		if (m_offset < io_base) [[likely]] {
+			if (m_offset >= m->get_memory_size()) [[unlikely]]
+				verify_pointer_bounds(m_offset, page_index);
+			mmu_->set_page_accessed(page_index);
+			if (word_mode == wm_byte)
+				return m->read_byte(m_offset);
+			if (m_offset & 1) [[unlikely]] {
+				DOLOG(log_ss::LS_BUS, "READ from %08o - odd address!", m_offset);
+				mmu_->trap_if_odd(page_index);
+				c->abort_instruction(2);
+			}
+			return m->read_word(m_offset);
+		}
+
+		const uint16_t a = m_offset - io_base + 0160000;
+		return read_IO(a, word_mode, run_mode, space, addr_in >> 13, page_index);
+	}
+
 	if (!mmu_->is_enabled()) {
 		m_offset = addr_in;
 		page_index = addr_in >> 13;
 	}
-	else if (!mmu_->try_calculate_physical_address_fast(run_mode, addr_in, false,
-			space, &m_offset, &page_index)) {
+	else {
 		std::tie(m_offset, page_index) = mmu_->calculate_physical_address(run_mode, addr_in, false, space);
 	}
 
-	uint32_t io_base  = mmu_->get_io_base();
-	bool     is_io    = m_offset >= io_base;
-	int      apf      = addr_in >> 13;
+	const uint32_t io_base  = mmu_->get_io_base();
+	const bool     is_io    = m_offset >= io_base;
+	const int      apf      = addr_in >> 13;
 
 	if (is_io) {
 		uint16_t a = m_offset - io_base + 0160000;  // TODO
@@ -760,7 +782,7 @@ uint16_t bus::read(const uint16_t addr_in, const word_mode_t word_mode, const in
 		if (m_offset & 1) {
 			DOLOG(log_ss::LS_BUS, "READ from %08o - odd address!", m_offset);
 			mmu_->trap_if_odd(page_index);
-			throw 2;
+			c->abort_instruction(2);
 		}
 
 		temp = m->read_word(m_offset);
@@ -1070,32 +1092,56 @@ bool bus::write_IO(const uint16_t a, const word_mode_t word_mode, const int page
 
 		mmu_->trap_if_odd(page);
 
-		throw 8;
+		c->abort_instruction(8);
 	}
 
 	mmu_->setCPUERRBit(4);  // CPUE_TMO = 0020
 	c->trap(004, -1, true);  // no-such-I/O probes must resume after the faulting instruction
 
-	throw 9;
+	c->abort_instruction(9);
 }
 
-bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, const uint16_t value, const int run_mode, const d_i_space_t space_in)
+KEK_HOT bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, const uint16_t value, const int run_mode, const d_i_space_t space_in)
 {
 	const uint8_t apf        = addr_in >> 13; // active page field
 	auto          space      = mmu_->get_use_data_space(run_mode) ? space_in : i_space;
 	uint32_t      m_offset;
 	int           page_index;
+
+	if (mmu_->try_calculate_physical_address_fast(run_mode, addr_in, true,
+			space, &m_offset, &page_index)) [[likely]] {
+		const uint32_t io_base = mmu_->get_io_base();
+		if (m_offset < io_base) [[likely]] {
+			if (m_offset >= m->get_memory_size()) [[unlikely]]
+				verify_pointer_bounds(m_offset, page_index);
+			mmu_->set_page_written_to(page_index);
+			if (word_mode == wm_byte) {
+				m->write_byte(m_offset, value);
+				return false;
+			}
+			if (m_offset & 1) [[unlikely]] {
+				DOLOG(log_ss::LS_BUS, "WRITE to %08o (value: %06o) - odd address!", m_offset, value);
+				mmu_->trap_if_odd(page_index);
+				c->abort_instruction(10);
+			}
+			m->write_word(m_offset, value);
+			return false;
+		}
+
+		const uint16_t a = m_offset - io_base + 0160000;
+		return write_IO(a, word_mode, apf, value);
+	}
+
 	if (!mmu_->is_enabled() && (mmu_->getMMR0() & 0000400) == 0) {
 		m_offset = addr_in;
 		page_index = addr_in >> 13;
 	}
-	else if (!mmu_->try_calculate_physical_address_fast(run_mode, addr_in, true,
-			space, &m_offset, &page_index)) {
+	else {
 		std::tie(m_offset, page_index) = mmu_->calculate_physical_address(run_mode, addr_in, true, space);
 	}
 
-	uint32_t      io_base    = mmu_->get_io_base();
-	bool          is_io      = m_offset >= io_base;
+	const uint32_t io_base    = mmu_->get_io_base();
+	const bool     is_io      = m_offset >= io_base;
 
 	if (is_io) {
 		uint16_t a = m_offset - io_base + 0160000;  // TODO
@@ -1125,7 +1171,7 @@ bool bus::write(const uint16_t addr_in, const word_mode_t word_mode, const uint1
 		if (m_offset & 1) [[unlikely]] {
 			DOLOG(log_ss::LS_BUS, "WRITE to %08o (value: %06o) - odd address!", m_offset, value);
 			mmu_->trap_if_odd(page_index);
-			throw 10;
+			c->abort_instruction(10);
 		}
 
 		m->write_word(m_offset, value);
@@ -1149,7 +1195,7 @@ void bus::write_physical(const uint32_t a, const uint16_t value)
 	if (a >= m->get_memory_size()) {
 		DOLOG(log_ss::LS_BUS, "physicalWRITE to %o: trap 004", a);
 		c->trap(004);
-		throw 12;
+		c->abort_instruction(12);
 	}
 	else {
 		m->write_word(a, value);
@@ -1179,7 +1225,7 @@ uint16_t bus::read_physical(const uint32_t a)
 	if (a >= m->get_memory_size()) {
 		DOLOG(log_ss::LS_BUS, "read_physical from %o: trap 004", a);
 		c->trap(004);
-		throw 13;
+		c->abort_instruction(13);
 	}
 
 	uint16_t value = m->read_word(a);
@@ -1192,7 +1238,7 @@ uint16_t bus::read_physical_byte(const uint32_t a)
 	if (a >= m->get_memory_size()) {
 		DOLOG(log_ss::LS_BUS, "read_physical_byte from %o: trap 004", a);
 		c->trap(004);
-		throw 13;
+		c->abort_instruction(13);
 	}
 
 	uint16_t value = m->read_byte(a);
@@ -1219,17 +1265,37 @@ bool bus::clear_physical_block(const uint32_t a, const uint32_t n)
 	return m->clear_block(a, n);
 }
 
-uint16_t bus::fetch_instruction_word(const uint16_t a, const int run_mode,
+KEK_HOT uint16_t bus::fetch_instruction_word(const uint16_t a, const int run_mode,
 		uint32_t *const physical)
 {
 	uint32_t m_offset;
 	int page_index;
+
+	if (mmu_->try_calculate_physical_address_fast(run_mode, a, false,
+			i_space, &m_offset, &page_index)) [[likely]] {
+		const uint32_t io_base = mmu_->get_io_base();
+		if (m_offset < io_base) [[likely]] {
+			if (m_offset >= m->get_memory_size()) [[unlikely]]
+				verify_pointer_bounds(m_offset, page_index);
+			mmu_->set_page_accessed(page_index);
+			if (m_offset & 1) [[unlikely]] {
+				mmu_->trap_if_odd(page_index);
+				c->abort_instruction(2);
+			}
+			if (physical) *physical = m_offset;
+			return m->read_word(m_offset);
+		}
+
+		if (physical) *physical = m_offset;
+		const uint16_t io_addr = m_offset - io_base + 0160000;
+		return read_IO(io_addr, wm_word, run_mode, i_space, a >> 13, page_index);
+	}
+
 	if (!mmu_->is_enabled()) {
 		m_offset = a;
 		page_index = a >> 13;
 	}
-	else if (!mmu_->try_calculate_physical_address_fast(run_mode, a, false,
-			i_space, &m_offset, &page_index)) {
+	else {
 		std::tie(m_offset, page_index) =
 			mmu_->calculate_physical_address(run_mode, a, false, i_space);
 	}
@@ -1247,7 +1313,7 @@ uint16_t bus::fetch_instruction_word(const uint16_t a, const int run_mode,
 		mmu_->set_page_accessed(page_index);
 	if (m_offset & 1) [[unlikely]] {
 		mmu_->trap_if_odd(page_index);
-		throw 2;
+		c->abort_instruction(2);
 	}
 
 	if (physical) *physical = m_offset;

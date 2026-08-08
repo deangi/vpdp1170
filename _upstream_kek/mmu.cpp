@@ -8,8 +8,6 @@
 #include "utils.h"
 
 
-constexpr const int di_ena_mask[4] = { 4, 2, 0, 1 };
-
 mmu::mmu()
 {
 	reset(true);
@@ -137,11 +135,6 @@ void mmu::setMMR3(const uint16_t value)
 	// 11/70 must instead reject as reserved instructions.
 	MMR3 = value & 067;
 	update_io_base();
-}
-
-bool mmu::get_use_data_space(const int run_mode) const
-{
-	return MMR3 & di_ena_mask[run_mode];
 }
 
 void mmu::clearMMR1()
@@ -383,7 +376,7 @@ void mmu::verify_page_access(const int page_index, const bool is_write)
 
 	DOLOG(log_ss::LS_MMU, "TRAP 250 for page access");
 	c->trap(0250);  // abort
-	throw 5;
+	c->abort_instruction(5);
 }
 
 void mmu::verify_page_length(const uint16_t virt_addr, const int page_index)
@@ -419,7 +412,7 @@ void mmu::verify_page_length(const uint16_t virt_addr, const int page_index)
 		DOLOG(log_ss::LS_MMU, "TRAP 250 for page length");
 		c->trap(0250);  // invalid access
 
-		throw 7;
+		c->abort_instruction(7);
 	}
 }
 

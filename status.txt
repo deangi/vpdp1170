@@ -63,14 +63,37 @@ TODO:
     soft-inits bus; eth_nat chatty LOG off; touch double-tap debounce;
     2.11BSD PiDP boots to multiuser with DEUNA
 
+----------------------
+OS notes:
+- BSD211-PiDP - fully networked, login is just bare root.   
+  Need to do fsck periodically if you dont shutdown without syncing disks
+  standard unix, can also do ping, 10.11.0.1 is IP, NAT to 10.11.0.2 and routes over ESP32
+  WiFi.   Have done ftp outgoing and telnet outgoing.  man works for help. DU/MSCP 1Gb drive
+  with almost everything BSD related/ Patch level #21, ntp's for current time/date
+- 211BSD - boots from RL01, second RL01 is /usr - patche level #3, mount /dev/rl1h /usr
+  Doesn't seem to recognize network DEUNA de0.
+- 211BSD-RP0 - boots from RP06 - BSD 2.11 patch level #21, same as PiDP version, login root no pwd
+- unix6 - early unix version, no network stack
+- unix7 - early unix version, no network stack
+- 11mark - DEC RSX-11M V4.8 BL70 124k.  Boots from DL0: RL02 - DEVICES to show devices mapped.
+- RT11V5 - DEC RT11 V5.04 - show command to see devices
+- XXDP22 - DEC diagnostics disk, hundreds of files with 6 character mysterious names
+  AI can give you names of tests for testing your cpu, mmu, devices
+- XXDP25 - DEC diagnostics disk - newer - boots full monitor, MMU passes startup test
+- DOSBATCH11 - Very early DEC os/monitor - sometimes used for sysgen operations in early versions
+- RSTSV4B - Early version of RSTS - just uses 28kw - no MMU - only BASIC Plus supported
+- RSX11M - DEC RSX11M 4.0 - base version - uses 28kw memory - no MMU
+- RSX11MP46-PIDP - DEC RSX11M plus 4.6 - last release of 11M+ - DEVICES to see device list
+  PiDP version - 1Gb system disk, I think has some custom network stack
+- RSTSV7 - DEC RSTS V7 - uses MMU, later version of RSTS - more than basic plus support
+  Same as RSTSV7-full??
+  
+  
 ifconfig de0 10.11.0.2 netmask 255.255.255.0 up
 route add default 10.11.0.1 1
 netstat -r
 ifconfig de0
-ping -c 2 10.11.0.1
-ping -c 3 192.168.7.245
-ping -c 3 192.168.4.1
-ping -c 3 8.8.8.8
+
 
 8/3 - Boot status
 Name            drive   status     OS name     comments
