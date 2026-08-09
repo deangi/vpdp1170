@@ -66,4 +66,10 @@ public:
 	void write_byte(const uint16_t addr, const uint8_t  v) override;
 	void write_word(const uint16_t addr, const uint16_t v) override;
 	void service_deferred();
+#if defined(ESP32)
+	int  irq_ticks_remaining() const { return irq_pending_ticks; }
+	bool needs_deferred_service() const { return irq_pending_ticks > 0; }
+#else
+	bool needs_deferred_service() const { return false; }
+#endif
 };

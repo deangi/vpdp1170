@@ -57,6 +57,8 @@ public:
 
 	void reset(const bool hard);
 	void service_deferred();
+	// True when TX is in flight, RX IE is armed, or transmitter DONE is clear.
+	bool needs_deferred_service() const;
 
 	uint8_t read_byte(const uint16_t addr);
 	uint16_t read_word(const uint16_t addr);

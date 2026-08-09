@@ -131,4 +131,7 @@ public:
 	void write_byte(const uint16_t addr, const uint8_t  v) override;
 	void write_word(const uint16_t addr, const uint16_t v) override;
 	void service_deferred();
+	bool needs_deferred_service() const {
+		return deferred_data_active || irq_ticks_remaining() > 0;
+	}
 };

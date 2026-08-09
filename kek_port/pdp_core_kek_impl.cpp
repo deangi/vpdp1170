@@ -1345,20 +1345,27 @@ static void service_deferred_devices() {
   if (g_tty) g_tty->service_deferred();
 }
 
+// Per-instruction deferred poll: skip idle devices (#8). Disk IRQ/DMA
+// countdowns only run while armed; TTY still polls when RX IE / TX busy.
 static void service_instruction_deferred_devices() {
-  if (g_rl02) g_rl02->service_deferred();
-  if (g_rk05) g_rk05->service_deferred();
-  if (g_rp06) g_rp06->service_deferred();
-  if (g_uda50) g_uda50->service_deferred();
-  if (g_tty) g_tty->service_deferred();
+  if (g_rl02 && g_rl02->needs_deferred_service())
+    g_rl02->service_deferred();
+  if (g_rk05 && g_rk05->needs_deferred_service())
+    g_rk05->service_deferred();
+  if (g_rp06 && g_rp06->needs_deferred_service())
+    g_rp06->service_deferred();
+  if (g_uda50 && g_uda50->needs_deferred_service())
+    g_uda50->service_deferred();
+  if (g_tty && g_tty->needs_deferred_service())
+    g_tty->service_deferred();
 }
 
 template <bool Diagnostic>
 static uint32_t run_loop(uint32_t max_cycles) {
-  // Disk completion delays are only 2-6 guest instructions, so an 8-step
-  // batch preserves prompt completion while removing four virtual calls from
-  // seven out of every eight instructions.
-  static constexpr uint32_t kDeferredServiceBatch = 8;
+  // Disk completion delays are counted in service_deferred ticks (typically
+  // 2–6). A 16-step batch keeps those virtual calls off the common path
+  // while still completing I/O promptly enough for OS boot/prompt paths.
+  static constexpr uint32_t kDeferredServiceBatch = 16;
   if (!g_cpu || g_paused) return 0;
   uint32_t ran = 0;
   // A PDP-11 WAIT is guest idle state, not another retired instruction.

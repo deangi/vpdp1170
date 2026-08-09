@@ -122,6 +122,13 @@ void tty::service_deferred()
 	update_tx_interrupt();
 }
 
+bool tty::needs_deferred_service() const
+{
+	const uint16_t tps = registers[(PDP11TTY_TPS - PDP11TTY_BASE) / 2];
+	const uint16_t tks = registers[(PDP11TTY_TKS - PDP11TTY_BASE) / 2];
+	return tx_busy || (tks & TTY_IE) || !(tps & TTY_DONE);
+}
+
 uint8_t tty::read_byte(const uint16_t addr)
 {
 	uint16_t v = read_word(addr & ~1);

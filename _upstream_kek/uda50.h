@@ -65,6 +65,9 @@ public:
 	uint16_t get_command_ring_length() const { return command_ring_length; }
 	uint16_t get_response_ring_length() const { return response_ring_length; }
 	bool     is_running() const { return state == state_t::run; }
+	bool     needs_deferred_service() const {
+		return service_pending || poll_pending || state == state_t::run;
+	}
 
 private:
 	static constexpr uint16_t SA_ERROR = 0x8000;

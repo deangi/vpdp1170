@@ -118,6 +118,9 @@ public:
 	// Monitor/debug examine: return register image without CS1/WC poll side effects.
 	uint16_t peek_word(const uint16_t addr) const;
 	bool     is_deferred_active() const { return deferred_active; }
+	bool     needs_deferred_service() const {
+		return deferred_active || control_active || pack_ack_transient_ticks > 0;
+	}
 	int      deferred_delay_remaining() const { return deferred_delay; }
 	int      deferred_cs1_poll_count() const { return deferred_cs1_polls; }
 	int      deferred_wc_poll_count() const { return deferred_wc_polls; }

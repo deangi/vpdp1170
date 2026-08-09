@@ -267,6 +267,12 @@ void tty::service_deferred() {
   }
 }
 
+bool tty::needs_deferred_service() const {
+  const int tps = (PDP11TTY_TPS - PDP11TTY_BASE) / 2;
+  const int tks = (PDP11TTY_TKS - PDP11TTY_BASE) / 2;
+  return tx_busy || (registers[tks] & TTY_IE) || !(registers[tps] & TTY_DONE);
+}
+
 void tty::reset(const bool hard) {
   if (hard) {
     memset(registers, 0, sizeof(registers));
