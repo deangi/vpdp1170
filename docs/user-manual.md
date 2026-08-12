@@ -849,7 +849,7 @@ The main menu is titled `PDP-11/70 Settings` and contains:
 | `Drives` | Opens boot and disk-image mounting controls. |
 | `WiFi Config` | Lists `wificonfig-NAME.ini` variants and copies the selected variant to `/wificonfig.ini`. |
 | `PDP Config` | Lists `pdpconfig-NAME.ini` variants and copies the selected variant to `/pdpconfig.ini`. |
-| `System Info` | Shows title, firmware version/build, WiFi/IP, Telnet status, and FTP status. |
+| `System Info` | Shows title, firmware version/build, UTC date/time, WiFi/IP, Telnet status, and FTP status. |
 | `Brightness` | Adjusts TFT backlight brightness. |
 | `Reboot PDP-11` | Cold-boots the emulated PDP-11 without restarting the ESP32. |
 | `Reset ESP32` | Opens a confirmation screen for a full ESP32 reset. |

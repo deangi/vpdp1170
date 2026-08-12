@@ -64,6 +64,9 @@ TODO:
     2.11BSD PiDP boots to multiuser with DEUNA
 40) done 8/10 - implement DZ11 8 line serial mux. - performance reduction of about 15%!  
     compile time flag.
+41) done 8/11 (V2.8): DZ11 compile gate; FTP poll on core 0; NTP UTC for
+    FatFs timestamps + System Info mm/dd/yyyy hh:mm; pdpconfig picker 64
+    entries sorted A-Z; RSTS WAIT interrupt delivery fix.
 
 ----------------------
 OS notes:
@@ -90,6 +93,20 @@ OS notes:
 - RSTSV7 - DEC RSTS V7 - uses MMU, later version of RSTS - more than basic plus support
   Same as RSTSV7-full??
 - RSTSV9.3 - Runs - hello 1,2, SYSLIB to log in
+
+8/11/2026 - Reorganized SD card - boot log
+- Unix 6      - boots
+- Unix 7      - boots
+- RSTS 4b     - boots but hangs up after entering date
+- Dos11       - boots
+- RSTS 7      - boots
+- RSTS 9.3    - boots
+- RT11        - boots
+- RSX11M 4    - boots
+- RSX11M 4.8  - boots
+- RSX11MP 4.6 - boots
+- BSD 2.11    - boots and has network access
+
  
  - notes on configuring BSD 2.11 for networking and such
   

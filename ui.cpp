@@ -10,7 +10,9 @@
 #endif
 #include "ftp.h"
 #include "appconfig.h"
+#include "host_time.h"
 #include <Arduino.h>
+#include <time.h>
 #include "gfx.h"
 #include <WiFi.h>
 #include "sd_fs.h"
@@ -651,6 +653,17 @@ static void draw_info() {
   put(title);
   snprintf(line, sizeof(line), "SW %s  build %s", APP_VERSION, APP_BUILD_DATE);
   put(line);
+  if (host_time_synced()) {
+    time_t now = time(nullptr);
+    struct tm tm {};
+    gmtime_r(&now, &tm);
+    snprintf(line, sizeof(line), "Time: %02d/%02d/%04d %02d:%02d UTC",
+             tm.tm_mon + 1, tm.tm_mday, tm.tm_year + 1900,
+             tm.tm_hour, tm.tm_min);
+  } else {
+    snprintf(line, sizeof(line), "Time: (waiting for NTP)");
+  }
+  put(line);
   snprintf(line, sizeof(line), "Core: %s", pdp_core::engine_name());
   put(line);
   snprintf(line, sizeof(line), "RAM: %uKW active / %uKW config",
@@ -738,7 +751,22 @@ static void draw_info() {
 }
 
 void ui_draw(GfxDisplay& tft) {
-  if (g_screen == SC_CLOSED || !g_dirty) return;
+  if (g_screen == SC_CLOSED) return;
+  if (g_screen == SC_INFO) {
+    static int last_min = -1;
+    int min = -1;
+    if (host_time_synced()) {
+      time_t now = time(nullptr);
+      struct tm tm {};
+      gmtime_r(&now, &tm);
+      min = tm.tm_min;
+    }
+    if (min != last_min) {
+      last_min = min;
+      g_dirty = true;
+    }
+  }
+  if (!g_dirty) return;
   T = &tft;
   if (g_screen == SC_INFO) draw_info();
   else                     draw_list();

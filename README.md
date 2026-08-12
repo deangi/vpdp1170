@@ -1,6 +1,6 @@
 # vpdp1170 — a DEC PDP-11/70 emulator for the ESP32-S3 with a touch screen display.
 
-> Development status: **V2.7** (2026-08-06). Guest OS boot matrix below
+> Development status: **V2.8** (2026-08-11). Guest OS boot matrix below
 > (RSTS/E V7 through Ready; Unix V6/V7; 2.11BSD on RL/RP; RSX-11M / M+;
 > RT-11; XXDP; DOSBATCH). See `status.txt` for the full working notes.
 > The ESP32 host side is inherited from `vpdp1140`: TFT console, touch menu,
@@ -60,7 +60,7 @@ this project.
 
 ## Current Bring-Up Status
 
-As of **2026-08-06 (V2.7)**. The sketch reports the `kek PDP-11/70 adapter`
+As of **2026-08-11 (V2.8)**. The sketch reports the `kek PDP-11/70 adapter`
 with up to 4 MB target memory. Sample configs live under `PdpSdCard/pdpconfig-*.ini`.
 
 | Config / Name     | Drive | Status  | OS                    | Notes |
