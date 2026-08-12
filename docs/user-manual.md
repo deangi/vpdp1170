@@ -98,7 +98,7 @@ The emulator uses two main initialization files:
 
 | File | Purpose |
 | --- | --- |
-| `/wificonfig.ini` | WiFi credentials plus Telnet and FTP settings |
+| `/wificonfig.ini` | WiFi credentials plus Telnet, NTP, and FTP settings |
 | `/pdpconfig.ini` | PDP-11 emulator title, boot input, diagnostics, compatibility, and disk image settings |
 
 If either file is missing, the firmware writes a default file to the SD card.
@@ -138,6 +138,10 @@ ssid     = YourNetwork
 password = YourPassword
 hostname = vpdp1170
 
+[ntp]
+enabled = true
+server  = pool.ntp.org
+
 [telnet]
 enabled = true
 port    = 23
@@ -156,6 +160,22 @@ password = esp32
 | `ssid` | Text | WiFi network name. If blank, compiled defaults from `secrets.h` are used. |
 | `password` | Text | WiFi password. If blank, compiled defaults from `secrets.h` are used. |
 | `hostname` | Text | Hostname advertised by the ESP32. |
+
+### `[ntp]`
+
+| Key | Values | Description |
+| --- | --- | --- |
+| `enabled` | Boolean | Starts SNTP after WiFi connects. Default `true`. |
+| `server` | Hostname | NTP server. Default `pool.ntp.org`. |
+
+The ESP32 clock is **UTC** (no timezone / DST). FatFs uses that clock for SD
+create and modify timestamps. Files copied onto the card from a PC keep their
+existing FAT times until rewritten. FTP `LIST` shows UTC dates once NTP has
+synced; before that it prints a placeholder (`Jan 01 00:00`). Guest OS date
+prompts (KW11 / `boot_script`) are independent.
+
+If `[ntp]` is omitted from a variant file, compiled defaults apply (`enabled`
+true, `pool.ntp.org`).
 
 ### `[telnet]`
 
@@ -507,7 +527,8 @@ ftp <board-ip> 21
 Use the username and password from `[ftp]` in `/wificonfig.ini`.
 
 This is plain FTP, not SFTP. It has been tested with Windows FTP, Linux FTP,
-and FileZilla.
+and FileZilla. Directory listings show UTC modification times after NTP sync
+(see `[ntp]`); until then the date is a placeholder.
 
 The FTP status pill uses the same color convention as Telnet: dim/off when not
 listening, green when listening, yellow when connected.

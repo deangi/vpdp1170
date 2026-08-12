@@ -503,8 +503,13 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.wifi_password = WIFI_PASS;
   cfg.wifi_hostname = WIFI_HOSTNAME;
 
+  cfg.ntp_enabled = true;
+  cfg.ntp_server  = "pool.ntp.org";
+
   cfg.telnet_enabled = true;
   cfg.telnet_port    = TELNET_PORT;
+  cfg.dz11_enabled     = true;
+  cfg.dz11_telnet_port = 2323;
 
   cfg.boot_input_len = 0;
   cfg.boot_input_segment_count = 0;
@@ -560,7 +565,9 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
   String key = to_lower(trim(t.substring(0, eq)));
   String val = strip_inline_comment(t.substring(eq + 1));
 
-  bool network_section = section == "wifi" || section == "telnet" || section == "ftp";
+  bool network_section = section == "wifi" || section == "telnet" ||
+                         section == "ftp" || section == "dz11" ||
+                         section == "ntp";
   if ((domain == CONFIG_NETWORK) != network_section) return;
 
   if (section == "system") {
@@ -570,9 +577,15 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
     if      (key == "ssid")     cfg.wifi_ssid     = val;
     else if (key == "password") cfg.wifi_password = val;
     else if (key == "hostname") cfg.wifi_hostname = val;
+  } else if (section == "ntp") {
+    if      (key == "enabled") cfg.ntp_enabled = truthy(val);
+    else if (key == "server")  cfg.ntp_server  = val;
   } else if (section == "telnet") {
     if      (key == "enabled")  cfg.telnet_enabled = truthy(val);
     else if (key == "port")     cfg.telnet_port = val.toInt();
+  } else if (section == "dz11") {
+    if      (key == "enabled")  cfg.dz11_enabled = truthy(val);
+    else if (key == "port")     cfg.dz11_telnet_port = val.toInt();
   } else if (section == "console") {
     if      (key == "boot_input" || key == "typeahead" || key == "boot_keys")
       config_set_boot_input(cfg, val);
@@ -761,6 +774,7 @@ bool config_load_wifi(AppConfig& cfg) {
   if (cfg.wifi_ssid.length() == 0)     cfg.wifi_ssid     = WIFI_SSID;
   if (cfg.wifi_password.length() == 0) cfg.wifi_password = WIFI_PASS;
   if (cfg.wifi_hostname.length() == 0) cfg.wifi_hostname = WIFI_HOSTNAME;
+  if (cfg.ntp_server.length() == 0)    cfg.ntp_server    = "pool.ntp.org";
   if (cfg.ftp_user.length() == 0)      cfg.ftp_user      = FTP_DEFAULT_USER;
   if (cfg.ftp_password.length() == 0)  cfg.ftp_password  = FTP_DEFAULT_PASS;
   return true;
@@ -846,9 +860,19 @@ bool config_write_default_wifi(const AppConfig& cfg) {
   f.println("password = ");
   f.printf("hostname = %s\r\n", cfg.wifi_hostname.c_str());
   f.println();
+  f.println("[ntp]");
+  f.println("; UTC wall-clock via SNTP after WiFi connects (FatFs timestamps).");
+  f.printf("enabled = %s\r\n", cfg.ntp_enabled ? "true" : "false");
+  f.printf("server  = %s\r\n", cfg.ntp_server.c_str());
+  f.println();
   f.println("[telnet]");
   f.printf("enabled = %s\r\n", cfg.telnet_enabled ? "true" : "false");
   f.printf("port    = %d\r\n", cfg.telnet_port);
+  f.println();
+  f.println("[dz11]");
+  f.println("; Second Telnet listener for DZ11 line 0 (no management shell).");
+  f.printf("enabled = %s\r\n", cfg.dz11_enabled ? "true" : "false");
+  f.printf("port    = %d\r\n", cfg.dz11_telnet_port);
   f.println();
   f.println("[ftp]");
   f.println("; FTP exposes the SD card root. Passive data uses port+1.");
@@ -1063,13 +1087,18 @@ bool config_copy_file(const char* src, const char* dst) {
   return true;
 }
 
+static int variant_name_cmp(const void* a, const void* b) {
+  return strcasecmp((const char*)a, (const char*)b);
+}
+
 int config_list_variants(const char* prefix, char names[][44], int max) {
   SD_FTP_StorageGuard guard;
   // Scan SD root for files matching "<prefix>NAME.ini" (case-insensitive
   // on the ".ini" suffix; the prefix is matched as written). Stores the
   // middle NAME portion in names[i]. Skips a file that's exactly the
   // active filename (prefix-without-trailing-dash + ".ini") to keep
-  // wificonfig.ini / pdpconfig.ini out of the picker.
+  // wificonfig.ini / pdpconfig.ini out of the picker. Results are sorted
+  // case-insensitively for stable GUI order.
   if (max <= 0) return 0;
   int count = 0;
 
@@ -1100,6 +1129,9 @@ int config_list_variants(const char* prefix, char names[][44], int max) {
     f.close();
   }
   root.close();
+
+  if (count > 1)
+    qsort(names, (size_t)count, 44, variant_name_cmp);
   return count;
 }
 
@@ -1113,8 +1145,12 @@ void config_print(const AppConfig& cfg) {
   LOG("[wifi]    ssid=\"%s\"  hostname=\"%s\"  (password=%d chars)",
       cfg.wifi_ssid.c_str(), cfg.wifi_hostname.c_str(),
       (int)cfg.wifi_password.length());
+  LOG("[ntp]     enabled=%s  server=\"%s\"  (UTC)",
+      cfg.ntp_enabled ? "true" : "false", cfg.ntp_server.c_str());
   LOG("[telnet]  enabled=%s  port=%d",
       cfg.telnet_enabled ? "true" : "false", cfg.telnet_port);
+  LOG("[dz11]    enabled=%s  port=%d",
+      cfg.dz11_enabled ? "true" : "false", cfg.dz11_telnet_port);
   LOG("[console] boot_input=\"%s\" (%u bytes, %u segment%s)",
       config_format_boot_input(cfg).c_str(),
       (unsigned)cfg.boot_input_len,

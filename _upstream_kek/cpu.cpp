@@ -453,6 +453,12 @@ void cpu::execute_any_pending_interrupt()
 			}
 
 			DOLOG(log_ss::LS_TRACE, "Invoking interrupt vector %o (IPL %d, current: %d)", v, i, current_level);
+			// Device deferred paths (e.g. RL force-deliver) may invoke this
+			// while the guest is in WAIT. Leaving waiting set after vectoring
+			// makes the ESP32 run loop treat the CPU as idle forever, so the
+			// ISR at the new PC never runs (RSTS hangs at LTC vec @ SPL 6).
+			waiting = false;
+			wait_stuck = false;
 			trap(v, i, true);
 
 #if defined(FREERTOS)

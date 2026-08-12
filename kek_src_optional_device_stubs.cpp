@@ -1,4 +1,5 @@
 #include "config.h"
+#include "platform.h"
 
 // Link stubs for kek peripherals not yet ported. Console KL11 lives in
 // kek_src_tty.cpp (Option 3) — do not implement tty:: here.
@@ -9,6 +10,24 @@
 #include "_upstream_kek/deqna.h"
 #include "_upstream_kek/dz11.h"
 #include "_upstream_kek/tm-11.h"
+
+#if !VPDP_ENABLE_DZ11
+// Real DZ11 lives in kek_src_dz11.cpp when VPDP_ENABLE_DZ11=1.
+dz11::dz11(bus *const b, comm_io *const io_channels) : b(b), io_channels(io_channels) {}
+dz11::~dz11() {}
+bool dz11::begin() { return true; }
+void dz11::reset(const bool) {}
+void dz11::show_state(console *const) const {}
+void dz11::test_port(const size_t) const {}
+void dz11::test_ports(const int) const {}
+uint8_t dz11::read_byte(const uint16_t) { return 0; }
+uint16_t dz11::read_word(const uint16_t) { return 0; }
+void dz11::write_byte(const uint16_t, const uint8_t) {}
+void dz11::write_word(const uint16_t, const uint16_t) {}
+void dz11::service_deferred() {}
+bool dz11::needs_deferred_service() { return false; }
+void dz11::operator()() {}
+#endif
 
 dc11::dc11(bus *const b, comm_io *const io_channels) : b(b), io_channels(io_channels) {}
 dc11::~dc11() {}
@@ -22,19 +41,6 @@ uint16_t dc11::read_word(const uint16_t) { return 0; }
 void dc11::write_byte(const uint16_t, const uint8_t) {}
 void dc11::write_word(const uint16_t, const uint16_t) {}
 void dc11::operator()() {}
-
-dz11::dz11(bus *const b, comm_io *const io_channels) : b(b), io_channels(io_channels) {}
-dz11::~dz11() {}
-bool dz11::begin() { return true; }
-void dz11::reset(const bool) {}
-void dz11::show_state(console *const) const {}
-void dz11::test_port(const size_t) const {}
-void dz11::test_ports(const int) const {}
-uint8_t dz11::read_byte(const uint16_t) { return 0; }
-uint16_t dz11::read_word(const uint16_t) { return 0; }
-void dz11::write_byte(const uint16_t, const uint8_t) {}
-void dz11::write_word(const uint16_t, const uint16_t) {}
-void dz11::operator()() {}
 
 deqna::deqna(bus *const b, const uint8_t mac_address[6], eth_transport *const eth_dev, abool *const activity_flag)
   : b(b), eth_dev(eth_dev), activity_flag(activity_flag) {

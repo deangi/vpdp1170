@@ -15,9 +15,17 @@ struct AppConfig {
   String wifi_password;
   String wifi_hostname;
 
+  // [ntp] in /wificonfig.ini — SNTP after STA is up; FatFs stamps are UTC
+  bool   ntp_enabled = true;
+  String ntp_server;
+
   // [telnet]
   bool   telnet_enabled = true;
   int    telnet_port    = 23;
+
+  // [dz11] in /wificonfig.ini — second Telnet port for DZ11 line 0
+  bool   dz11_enabled     = true;
+  int    dz11_telnet_port = 2323;
 
   // [console]
   // Bytes injected into the KL11 input queue after each PDP-11 boot/reset.
@@ -214,6 +222,7 @@ bool config_copy_file(const char* src, const char* dst);
 // List variant files in SD root matching "<prefix>NAME.ini". Stores the
 // middle portion (between prefix and ".ini") in names[i]. Returns the
 // count actually stored (capped at max). Skips the active file itself.
+// Names are sorted case-insensitively for GUI pickers.
 int  config_list_variants(const char* prefix, char names[][44], int max);
 
 // Logging helper

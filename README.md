@@ -246,6 +246,19 @@ ssid     = YourNetwork        ; blank uses secrets.h defaults
 password = YourPassword
 hostname = vpdp1170
 
+[ntp]
+enabled  = true
+server   = pool.ntp.org       ; UTC clock for SD FAT create/modify stamps
+
+[telnet]
+enabled  = true
+port     = 23                 ; PDP console + management shell
+
+[dz11]
+enabled  = true
+port     = 2323               ; DZ11 line 0 (raw Telnet, no shell)
+                              ; ~10–15% MIPS cost when enabled; see docs/dz11.md
+
 [ftp]
 enabled  = true               ; exposes the SD card root
 port     = 21                 ; passive data uses port+1
@@ -255,10 +268,6 @@ password = esp32
 
 `/pdpconfig.ini`:
 ```ini
-[telnet]
-enabled = true
-port    = 23
-
 [console]
 boot_input  = ""              ; e.g. "unix\r", "^CSTART\r", or "<<2.5>>START\r<<2>>\r"
 boot_script = ""              ; e.g. "login: => root\r || Password: => \r"

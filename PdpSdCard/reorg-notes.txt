@@ -1,0 +1,180 @@
+PdpSdCard reorg notes
+=====================
+Convention: pdpconfig-<os>-<ver>[-variant].ini
+            disk images: <os>-<ver>[-variant].dsk  (flat under PdpSdCard root)
+Date: 2026-08-10
+
+------------------------------------------------------------------------------
+T1 — Rename pdpconfig-*.ini
+------------------------------------------------------------------------------
+Status: DONE 2026-08-10
+
+Old name                          -> New name
+--------------------------------  --------------------------------
+pdpconfig-rstsv93.ini             -> pdpconfig-rsts-93.ini
+pdpconfig-rstsv7.ini              -> pdpconfig-rsts-7.ini
+pdpconfig-rstsv7full.ini          -> pdpconfig-rsts-7-full.ini
+pdpconfig-rstsv4.ini              -> pdpconfig-rsts-4b.ini
+pdpconfig-unixv6.ini              -> pdpconfig-unix-6.ini
+pdpconfig-unixv7.ini              -> pdpconfig-unix-7.ini
+pdpconfig-rt11v5.ini              -> pdpconfig-rt11-5.ini
+pdpconfig-xxdp22.ini              -> pdpconfig-xxdp-22.ini
+pdpconfig-xxdp25.ini              -> pdpconfig-xxdp-25.ini
+pdpconfig-dosbatch11.ini          -> pdpconfig-dosbatch-11.ini
+pdpconfig-bsd211.ini              -> pdpconfig-bsd-211.ini
+pdpconfig-bsd211-pidp.ini         -> pdpconfig-bsd-211-pidp.ini
+pdpconfig-211bsd.ini              -> pdpconfig-bsd-211-rl.ini
+pdpconfig-211bsd-rp0.ini          -> pdpconfig-bsd-211-rp.ini
+pdpconfig-rsx11m.ini              -> pdpconfig-rsx11m-40.ini
+pdpconfig-11mark.ini              -> pdpconfig-rsx11m-48.ini
+pdpconfig-rsx11mp46.ini           -> pdpconfig-rsx11mp-46.ini
+pdpconfig-rsx11mp46-pidp.ini      -> pdpconfig-rsx11mp-46-pidp.ini
+pdpconfig-rsx11mp46-rp06.ini      -> pdpconfig-rsx11mp-46-rp06.ini
+pdpconfig-rsx11mp30.ini           -> pdpconfig-rsx11mp-30.ini
+pdpconfig-rsx11mp87.ini           -> pdpconfig-rsx11mp-46-bl87.ini
+pdpconfig-rsx11mp46a87.ini        -> pdpconfig-rsx11mp-46-bl87a.ini
+pdpconfig-rsx11m70.ini            -> pdpconfig-rsx11mp-46-m70.ini
+pdpconfig.ini                     -> (unchanged; active runtime copy)
+
+Follow-ups (still open):
+- Update tools/* and docs that still cite old pdpconfig-* names.
+
+------------------------------------------------------------------------------
+T2 — Flatten + rename *.dsk / *.rl02
+------------------------------------------------------------------------------
+Status: DONE 2026-08-10
+Full action log: PdpSdCard/_t2-actions.log
+
+Rules applied:
+- Flat root only (on-card browser cannot browse folders).
+- OS images: <os>-<ver>[-variant].dsk
+- Duplicates / extras: -a, -b, -c
+- RSX-11M V4.0 companions: rsx11m-40-rlutil/mcrsrc/excprv/hlpdcl
+- KEEP: spareRl02, emptyrl02, rk05_scratch, scratchRP06_full, bootabledu0, SaturnRSX
+- DELETE RSX V3.1 set
+- Remove empty subfolders
+
+### DELETE (executed)
+RSX11/rsx11m31execsrc.dsk, …mcrfcp, …system, …utilobj
+RSX11/RSX11M_V3.1_SYSTEM0.dsk, …SYSTEM1, RSX11M_USER.dsk
+root: RSX11M_V3.1_SYSTEM0.dsk, SYSTEM1, RSX11M_USER.dsk
+(MISS: RSX11/rsx11m31basline.dsk — already absent)
+
+### RENAME / MOVE (executed)
+Old                                               -> New
+------------------------------------------------  --------------------------------
+rsts93boot.dsk                                    -> rsts-93.dsk
+rsts93boot_stock_rl02.dsk                         -> rsts-93-stock.dsk
+rsts7small.dsk                                    -> rsts-7.dsk
+rsts7_full_rl.dsk                                 -> rsts-7-full.dsk
+rsts7_swap_rl.dsk                                 -> rsts-7-swap.dsk
+rsts7/rsts_min_rl.dsk                             -> rsts-7-a.dsk
+rsts7/rsts_full_rl.dsk                            -> rsts-7-full-a.dsk
+rsts7/rsts_swap_rl.dsk                            -> rsts-7-swap-a.dsk
+rsts7_full_rl - Copy.dsk                          -> rsts-7-full-b.dsk
+rsts7_swap_rl - Copy.dsk                          -> rsts-7-swap-b.dsk
+RSTS11v4B.dsk                                     -> rsts-4b.dsk
+RSTS11v4B - Copy.DSK                              -> rsts-4b-a.dsk
+unixv6.dsk                                        -> unix-6.dsk
+unix_v7_rl.dsk                                    -> unix-7.dsk
+unix7-rp06-0.dsk                                  -> unix-7-rp.dsk
+unixv7.dsk                                        -> unix-7-a.dsk
+u7ed_rp.dsk                                       -> unix-7-b.dsk
+rt11v5.dsk                                        -> rt11-5.dsk
+xxdp22.dsk                                        -> xxdp-22.dsk
+xxdp25.dsk                                        -> xxdp-25.dsk
+dosbatch-11.dsk                                   -> (unchanged)
+211bsd_rl_root.dsk                                -> MISS (was already absent)
+211bsd_rlset/211bsd_rl_root.dsk                   -> bsd-211-rl-root.dsk
+211bsd_rlset/211bsd_rl_usr.dsk                    -> bsd-211-rl-usr.dsk
+211bsd-rp06.dsk                                   -> bsd-211-rp.dsk
+2.11BSD_rq.dsk                                    -> bsd-211-rq.dsk
+  + COPIED bsd-211-rl-root.dsk -> bsd-211.dsk (stand-in for missing root image)
+rsxm32.dsk                                        -> rsx11m-40.dsk
+RSX11M40/rsxm32.dsk                               -> rsx11m-40-a.dsk
+RSXM32DM.DSK                                      -> rsx11m-40-b.dsk
+rlutil.dsk                                        -> rsx11m-40-rlutil.dsk
+mcrsrc.dsk                                        -> rsx11m-40-mcrsrc.dsk
+excprv.dsk                                        -> rsx11m-40-excprv.dsk
+hlpdcl.dsk                                        -> rsx11m-40-hlpdcl.dsk
+RSX11M40/{rlutil,mcrsrc,excprv,hlpdcl}.dsk        -> rsx11m-40-*-a.dsk
+11m-mark/rsxdl0.rl02                              -> rsx11m-48.rl02
+11m-mark/rsx11m48_1140.dsk                        -> rsx11m-48-a.dsk
+rsx11mp46/rsx11mp46-rl02pg.dsk                    -> rsx11mp-46.dsk
+rsx11mp46/uninstalled-rsx11mp46-rl02pg.dsk        -> rsx11mp-46-uninstalled.dsk
+pidp-rsx11mp.dsk                                  -> rsx11mp-46-pidp.dsk
+rsx11mp-30.dsk                                    -> (unchanged)
+RSX11/rsx11mp-30.dsk                              -> rsx11mp-30-a.dsk
+rsx11m46-rp06-bootable.dsk                        -> rsx11mp-46-rp06.dsk
+rsx11mp46-rp0.dsk                                 -> rsx11mp-46-a.dsk
+rsx11mpbl87.dsk                                   -> rsx11mp-46-bl87.dsk
+rsx11mplus_4_6_bl87.dsk                           -> rsx11mp-46-bl87a.dsk
+rsxm70.dsk                                        -> rsx11mp-46-m70.dsk
+
+### FLATTEN leftovers + RMDIR (executed)
+11m-mark/rsxdl1.rl01, sim-1140_Dean.ini → root; RMDIR 11m-mark
+211bsd_rlset licenses → root; RMDIR 211bsd_rlset
+rsts7/rsts_readme.txt → root; RMDIR rsts7
+RSX11/rsx11m31.zip → rsx11m31-a.zip; RMDIR RSX11
+RSX11M40/rsxm32.zip → root; RMDIR RSX11M40
+rsx11mp46/boot.ini → root; RMDIR rsx11mp46
+
+Result: 0 subdirs, 54 disk images at root.
+
+------------------------------------------------------------------------------
+T3 — Update pdpconfig mount paths
+------------------------------------------------------------------------------
+Status: DONE 2026-08-10
+
+Patched all catalog pdpconfig-*.ini plus pdpconfig.ini.
+
+Config                     | Field | Old path                              | New path
+-------------------------  ------  -------------------------------------  -------------------------------
+pdpconfig-rsts-93.ini      | dl0   | /rsts93boot.dsk                       | /rsts-93.dsk
+pdpconfig-rsts-93.ini      | dl1   | /rsts93boot_stock_rl02.dsk            | /rsts-93-stock.dsk
+pdpconfig-rsts-7.ini       | dl0   | /rsts7small.dsk                       | /rsts-7.dsk
+pdpconfig-rsts-7.ini       | dl1   | /rsts7_swap_rl.dsk                    | /rsts-7-swap.dsk
+pdpconfig-rsts-7-full.ini  | dl0   | /rsts7_full_rl.dsk                    | /rsts-7-full.dsk
+pdpconfig-rsts-7-full.ini  | dl1   | /rsts7_swap_rl.dsk                    | /rsts-7-swap.dsk
+pdpconfig-rsts-4b.ini      | rk0   | /RSTS11v4B.dsk                        | /rsts-4b.dsk
+pdpconfig-unix-6.ini       | rk0   | /unixv6.dsk                           | /unix-6.dsk
+pdpconfig-unix-7.ini       | dl0   | /unix_v7_rl.dsk                       | /unix-7.dsk
+pdpconfig-unix-7.ini       | dl1   | /spareRl02.dsk                        | (unchanged)
+pdpconfig-unix-7.ini       | rp0   | /unix7-rp06-0.dsk                     | /unix-7-rp.dsk
+pdpconfig-rt11-5.ini       | rk0   | /rt11v5.dsk                           | /rt11-5.dsk
+pdpconfig-rt11-5.ini       | dl1   | /spareRl02.dsk                        | (unchanged)
+pdpconfig-xxdp-22.ini      | dl0   | /xxdp22.dsk                           | /xxdp-22.dsk
+pdpconfig-xxdp-22.ini      | dl1   | /emptyrl02.dsk                        | (unchanged)
+pdpconfig-xxdp-25.ini      | dl0   | /xxdp25.dsk                           | /xxdp-25.dsk
+pdpconfig-xxdp-25.ini      | dl1   | /emptyrl02.dsk                        | (unchanged)
+pdpconfig-xxdp-25.ini      | rk0   | /rk05_scratch.dsk                     | (unchanged)
+pdpconfig-xxdp-25.ini      | rp0   | /scratchRP06_full.dsk                 | (unchanged)
+pdpconfig-dosbatch-11.ini  | rk0   | /dosbatch-11.dsk                      | (unchanged)
+pdpconfig-bsd-211.ini      | dl0   | /211bsd_rl_root.dsk                   | /bsd-211.dsk
+pdpconfig-bsd-211-pidp.ini | dl0   | /211bsd_rl_root.dsk                   | /bsd-211.dsk
+pdpconfig-bsd-211-pidp.ini | du0   | /2.11BSD_rq.dsk                       | /bsd-211-rq.dsk
+pdpconfig-bsd-211-rl.ini   | dl0   | /211bsd_rlset/211bsd_rl_root.dsk      | /bsd-211-rl-root.dsk
+pdpconfig-bsd-211-rl.ini   | dl1   | /211bsd_rlset/211bsd_rl_usr.dsk       | /bsd-211-rl-usr.dsk
+pdpconfig-bsd-211-rp.ini   | dl0   | /211bsd_rlset/211bsd_rl_root.dsk      | /bsd-211-rl-root.dsk
+pdpconfig-bsd-211-rp.ini   | dl1   | /211bsd_rlset/211bsd_rl_usr.dsk       | /bsd-211-rl-usr.dsk
+pdpconfig-bsd-211-rp.ini   | du0   | /2.11BSD_rq.dsk                       | /bsd-211-rq.dsk
+pdpconfig-bsd-211-rp.ini   | rp0   | /211bsd-rp06.dsk                      | /bsd-211-rp.dsk
+pdpconfig-rsx11m-40.ini    | dl0   | /rsxm32.dsk                           | /rsx11m-40.dsk
+pdpconfig-rsx11m-40.ini    | dl1   | /rlutil.dsk                           | /rsx11m-40-rlutil.dsk
+pdpconfig-rsx11m-40.ini    | dl2   | /mcrsrc.dsk                           | /rsx11m-40-mcrsrc.dsk
+pdpconfig-rsx11m-40.ini    | dl3   | /excprv.dsk                           | /rsx11m-40-excprv.dsk
+pdpconfig-rsx11m-48.ini    | dl0   | /11m-mark/rsxdl0.rl02                 | /rsx11m-48.rl02
+pdpconfig-rsx11m-48.ini    | dl1   | /rlutil.dsk                           | /rsx11m-40-rlutil.dsk
+pdpconfig-rsx11m-48.ini    | dl2   | /mcrsrc.dsk                           | /rsx11m-40-mcrsrc.dsk
+pdpconfig-rsx11m-48.ini    | dl3   | /excprv.dsk                           | /rsx11m-40-excprv.dsk
+pdpconfig-rsx11mp-46.ini   | dl0   | /rsx11mp46/rsx11mp46-rl02pg.dsk       | /rsx11mp-46.dsk
+pdpconfig-rsx11mp-46.ini   | du0   | /rsx11mp46/uninstalled-….dsk          | /rsx11mp-46-uninstalled.dsk
+pdpconfig-rsx11mp-46-pidp.ini | du0 | /pidp-rsx11mp.dsk                    | /rsx11mp-46-pidp.dsk
+pdpconfig.ini              | du0   | /pidp-rsx11mp.dsk                     | /rsx11mp-46-pidp.dsk
+pdpconfig-rsx11mp-30.ini   | dl0   | /rsx11mp46/rsx11mp46-rl02pg.dsk       | /rsx11mp-46.dsk
+pdpconfig-rsx11mp-30.ini   | rp0   | /rsx11mp-30.dsk                       | (unchanged)
+pdpconfig-rsx11mp-46-rp06.ini | rp0 | /rsx11m46-rp06-bootable.dsk          | /rsx11mp-46-rp06.dsk
+pdpconfig-rsx11mp-46-bl87.ini | dl0 | /rsx11mp46/rsx11mp46-rl02pg.dsk      | /rsx11mp-46.dsk
+pdpconfig-rsx11mp-46-bl87.ini | rp0 | /rsx11mpbl87.dsk                     | /rsx11mp-46-bl87.dsk
+pdpconfig-rsx11mp-46-bl87a.ini | rp0 | /rsx11mplus_4_6_bl87.dsk            | /rsx11mp-46-bl87a.dsk
+pdpconfig-rsx11mp-46-m70.ini | rp0 | /rsxm70.dsk                           | /rsx11mp-46-m70.dsk

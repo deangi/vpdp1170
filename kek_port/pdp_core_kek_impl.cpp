@@ -35,6 +35,12 @@
 #include "../kw11.h"
 #include "../platform.h"
 #include "../telnet.h"
+#if VPDP_ENABLE_DZ11
+#include "../_upstream_kek/dz11.h"
+#include "../_upstream_kek/comm.h"
+#include "../telnet_dz.h"
+#include "../comm_vpdp_telnet_dz.h"
+#endif
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -45,6 +51,9 @@ static std::atomic_uint32_t g_event { EVENT_NONE };
 static bus* g_bus = nullptr;
 static cpu* g_cpu = nullptr;
 static tty* g_tty = nullptr;
+#if VPDP_ENABLE_DZ11
+static dz11* g_dz11 = nullptr;
+#endif
 static rk05* g_rk05 = nullptr;
 static rl02* g_rl02 = nullptr;
 static rp06* g_rp06 = nullptr;
@@ -1256,6 +1265,33 @@ bool init() {
   if (!g_tty) return false;
   g_bus->add_tty(g_tty);
 
+#if VPDP_ENABLE_DZ11
+  // DZ11 8-line mux: active Telnet line 0 via host FIFOs; lines 1-7 stubbed.
+  if (cfg.dz11_enabled) {
+    comm_io* io = new comm_io(dz11_n_lines);
+    if (!io) return false;
+    if (!io->set_device(dz11_active_line, new comm_vpdp_telnet_dz())) {
+      delete io;
+      LOGE("kek DZ11: failed to attach Telnet line %d", dz11_active_line);
+      return false;
+    }
+    g_dz11 = new dz11(g_bus, io);
+    if (!g_dz11) {
+      delete io;
+      return false;
+    }
+    g_dz11->begin();
+    g_bus->add_DZ11(g_dz11);
+    LOG("kek DZ11 attached at %06o (RX vec %03o TX vec %03o), Telnet line %d",
+        DZ11_BASE, DZ11_INTERRUPT_VECTOR_RX, DZ11_INTERRUPT_VECTOR_TX,
+        dz11_active_line);
+  } else {
+    LOG("kek DZ11: disabled in /wificonfig.ini");
+  }
+#else
+  LOG("kek DZ11: compile-time disabled (VPDP_ENABLE_DZ11=0)");
+#endif
+
   if (!g_clock_task) {
     xTaskCreatePinnedToCore(line_clock_task, "kek-kw11l", 3072, nullptr,
                             3, &g_clock_task, 0);
@@ -1343,6 +1379,9 @@ static void service_deferred_devices() {
   if (g_rp06) g_rp06->service_deferred();
   if (g_uda50) g_uda50->service_deferred();
   if (g_tty) g_tty->service_deferred();
+#if VPDP_ENABLE_DZ11
+  if (g_dz11) g_dz11->service_deferred();
+#endif
 }
 
 // Per-instruction deferred poll: skip idle devices (#8). Disk IRQ/DMA
@@ -1358,6 +1397,10 @@ static void service_instruction_deferred_devices() {
     g_uda50->service_deferred();
   if (g_tty && g_tty->needs_deferred_service())
     g_tty->service_deferred();
+#if VPDP_ENABLE_DZ11
+  if (g_dz11 && g_dz11->needs_deferred_service())
+    g_dz11->service_deferred();
+#endif
 }
 
 template <bool Diagnostic>
@@ -1369,11 +1412,13 @@ static uint32_t run_loop(uint32_t max_cycles) {
   if (!g_cpu || g_paused) return 0;
   uint32_t ran = 0;
   // A PDP-11 WAIT is guest idle state, not another retired instruction.
-  // Service devices once so a newly-ready TTY can raise its interrupt, then
-  // return immediately if nothing can wake the CPU yet.
+  // Service devices once so a newly-ready TTY/disk can raise its interrupt.
+  // If deferred service itself vectors (RL force-deliver may take a higher
+  // BR such as KW11-L), waiting is cleared — fall through and run the ISR.
   if (g_cpu->is_waiting()) {
     service_instruction_deferred_devices();
-    if (!g_cpu->check_if_interrupts_pending()) return 0;
+    if (g_cpu->is_waiting() && !g_cpu->check_if_interrupts_pending())
+      return 0;
   }
 
   while (ran < max_cycles) {
@@ -1815,6 +1860,10 @@ bool get_interrupt_summary(uint16_t* psw, bool* any_pending,
     first_vectors[level] = queued[level].empty() ? 0 : *queued[level].begin();
   }
   return true;
+}
+
+bool is_waiting() {
+  return g_cpu && g_cpu->is_waiting();
 }
 
 bool get_kw11l_summary(uint16_t* csr, uint32_t* us_since_tick,

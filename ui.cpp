@@ -5,6 +5,9 @@
 #include "disk.h"
 #include "pdp_core.h"
 #include "telnet.h"
+#if VPDP_ENABLE_DZ11
+#include "telnet_dz.h"
+#endif
 #include "ftp.h"
 #include "appconfig.h"
 #include <Arduino.h>
@@ -63,7 +66,8 @@ static char g_files[MAX_FILES][44];
 static int  g_file_count = 0;
 
 // m15: config variants scanned from SD root for the WiFi / PDP pickers.
-#define MAX_VARIANTS 16
+// Catalog after T1 reorg is ~40 pdpconfig-* files; keep headroom.
+#define MAX_VARIANTS 64
 static char g_variants[MAX_VARIANTS][44];
 static int  g_variant_count = 0;
 
@@ -76,7 +80,7 @@ static char  g_pending_src[64];      // e.g. "/wificonfig-home.ini"
 static char  g_pending_dst[24];      // e.g. "/wificonfig.ini"
 static char  g_pending_label[44];    // human-friendly name shown in the title
 
-#define MAX_ITEMS 20
+#define MAX_ITEMS 64
 static char g_title[40];
 static char g_items[MAX_ITEMS][44];
 static int  g_count = 0;
@@ -708,6 +712,17 @@ static void draw_info() {
   else
     snprintf(line, sizeof(line), "Telnet %u: no client", telnet_port());
   put(line);
+
+#if VPDP_ENABLE_DZ11
+  if (!telnet_dz_enabled())
+    snprintf(line, sizeof(line), "DZ Telnet: disabled");
+  else if (telnet_dz_connected())
+    snprintf(line, sizeof(line), "DZ Telnet %u: client %s",
+             telnet_dz_port(), telnet_dz_client_ip());
+  else
+    snprintf(line, sizeof(line), "DZ Telnet %u: no client", telnet_dz_port());
+  put(line);
+#endif
 
   if (!ftp_enabled())
     snprintf(line, sizeof(line), "FTP: disabled");

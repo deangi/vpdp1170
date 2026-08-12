@@ -15,7 +15,10 @@
 #include "my_lock.h"
 
 #if defined(ESP32)
-#include <SC16IS752.h>
+// vpdp1170: optional dual-UART expander used by some kek ESP32 boards.
+// Provide a forward declaration so Arduino builds without the SC16IS752
+// library still compile the DZ11/comm path.
+class SC16IS752;
 #endif
 
 

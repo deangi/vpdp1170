@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <time.h>
 #include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -343,12 +344,23 @@ static void cmd_list(const char* arg, bool name_only) {
       if (stat(child, &st) != 0) { st.st_mode = ent->d_type == DT_DIR ? S_IFDIR : 0; st.st_size = 0; }
       char perms[12];
       format_unix_perms(perms, st.st_mode);
-      // Date fixed to "Jan 01 00:00" — FAT SD timestamps round-trip poorly
-      // through ESP-IDF and FileZilla tolerates the placeholder fine.
+      // Unix ls-style UTC date once the host clock is past 2020-01-01;
+      // placeholder until NTP sync (epoch FAT stamps confuse FileZilla).
+      char datebuf[16] = "Jan 01 00:00";
+      time_t now = time(nullptr);
+      if (now >= 1577836800 && st.st_mtime >= 1577836800) {
+        struct tm file_tm {}, now_tm {};
+        gmtime_r(&st.st_mtime, &file_tm);
+        gmtime_r(&now, &now_tm);
+        if (file_tm.tm_year == now_tm.tm_year)
+          strftime(datebuf, sizeof(datebuf), "%b %d %H:%M", &file_tm);
+        else
+          strftime(datebuf, sizeof(datebuf), "%b %d  %Y", &file_tm);
+      }
       char line[384];
       int n = snprintf(line, sizeof(line),
-                       "%s 1 esp32 esp32 %ld Jan 01 00:00 %s\r\n",
-                       perms, (long)st.st_size, ent->d_name);
+                       "%s 1 esp32 esp32 %ld %s %s\r\n",
+                       perms, (long)st.st_size, datebuf, ent->d_name);
       ok = n >= 0 && (size_t)n < sizeof(line) &&
            data_write_all((const uint8_t*)line, (size_t)n);
     }

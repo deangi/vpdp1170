@@ -98,6 +98,7 @@ inline bool get_interrupt_summary(uint16_t* psw, bool* any_pending,
   return pdp_core_kek::get_interrupt_summary(psw, any_pending, counts,
                                              first_vectors);
 }
+inline bool is_waiting() { return pdp_core_kek::is_waiting(); }
 inline bool get_kw11l_summary(uint16_t* csr, uint32_t* us_since_tick,
                               bool* irq_queued) {
   return pdp_core_kek::get_kw11l_summary(csr, us_since_tick, irq_queued);

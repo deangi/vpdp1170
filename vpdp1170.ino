@@ -84,6 +84,9 @@
 #include "disk.h"
 #include "console.h"
 #include "telnet.h"
+#if VPDP_ENABLE_DZ11
+#include "telnet_dz.h"
+#endif
 #include "telnet_shell.h"
 #include "ftp.h"
 #include "touch.h"
@@ -93,6 +96,7 @@
 #include "host_diag.h"
 #include "boot_script.h"
 #include "boot_input.h"
+#include "host_time.h"
 
 static GfxDisplay tft;
 #if VPDP_HAS_WS2812
@@ -264,8 +268,9 @@ static void wifi_connect() {
     tft_status(ROW_IP,   "IP:    ", WiFi.localIP().toString().c_str(), TFT_GREEN);
     IPAddress ip = WiFi.localIP();
     eth_nat::set_sta_ip(((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) |
-                        ((uint32_t)ip[2] << 8) | (uint32_t)ip[3]);
+                            ((uint32_t)ip[2] << 8) | (uint32_t)ip[3]);
     LOG("WiFi gateway=%s", WiFi.gatewayIP().toString().c_str());
+    host_time_begin(cfg.ntp_enabled, cfg.ntp_server.c_str());
     boot_state = BOOT_OK;
   } else {
     LOGE("WiFi connect timed out");
@@ -715,15 +720,26 @@ static void render_task(void* arg) {
   }
 }
 
-// Telnet contains no SD-card operations, so it can run independently on
-// core 0. FTP remains on core 1 until the shared storage layer can serialize
-// FTP mutations against live PDP-11 disk-image access.
+// Telnet and FTP run on core 0. FTP SD I/O is serialized against guest disk
+// access via SD_FTP_StorageGuard (disk.cpp / FTP share the same lock).
 static void net_task(void* arg) {
   (void)arg;
   uint32_t wifi_ms = 0;
+  bool wifi_was_up = (WiFi.status() == WL_CONNECTED);
   for (;;) {
     telnet_poll();
+#if VPDP_ENABLE_DZ11
+    telnet_dz_poll();
+#endif
+    ftp_poll();
     eth_nat::host_poll();
+    host_time_poll();
+
+    const wl_status_t st = WiFi.status();
+    const bool wifi_up = (st == WL_CONNECTED);
+    if (wifi_up && !wifi_was_up && !host_time_synced())
+      host_time_begin(cfg.ntp_enabled, cfg.ntp_server.c_str());
+    wifi_was_up = wifi_up;
 
     uint32_t now = millis();
     if (now - wifi_ms >= 10000) {
@@ -731,7 +747,6 @@ static void net_task(void* arg) {
       // Only reconnect when fully disconnected. Calling reconnect() while the
       // stack is already in WL_IDLE_STATUS ("sta is connecting") just spams
       // ESP-IDF errors and can delay/abort the in-flight join.
-      const wl_status_t st = WiFi.status();
       if (st == WL_DISCONNECTED || st == WL_CONNECTION_LOST ||
           st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) {
         LOGE("WiFi link down (status=%d) - reconnecting", (int)st);
@@ -881,6 +896,9 @@ void setup() {
   // ---- boot/services: mount drives and start the selected PDP core.
   if (cpu_ok && (!pdp_core::is_kek_engine() || selftest_ok)) {
     telnet_begin(cfg.telnet_port, cfg.telnet_enabled);
+#if VPDP_ENABLE_DZ11
+    telnet_dz_begin(cfg.dz11_telnet_port, cfg.dz11_enabled);
+#endif
     ftp_begin(cfg.ftp_port, cfg.ftp_enabled,
               cfg.ftp_user.c_str(), cfg.ftp_password.c_str());
     pinMode(BUTTON_PIN, INPUT_PULLUP);   // onboard button opens the menu
@@ -937,9 +955,9 @@ void setup() {
   }
 }
 
-// loop() runs on core 1 and IS the PDP-11: CPU emulation plus FTP and
-// settings-menu command handling. It never touches the TFT; render_task owns
-// the display, while dedicated core-0 tasks consume TFT, Telnet and USB output.
+// loop() runs on core 1 and IS the PDP-11: CPU emulation plus settings-menu
+// command handling. It never touches the TFT; render_task owns the display,
+// while dedicated core-0 tasks consume TFT, Telnet, FTP and USB output.
 // Touch handling lives at file scope so render_task can share the same
 // double-tap state with menu hit testing. The 750 ms window is wider than the
 // original 450 ms because users were missing the second tap of a fast
@@ -1013,10 +1031,39 @@ static void poll_pcping() {
       (unsigned)pdp_core::reg16(6),
       (unsigned)pdp_core::psw(),
       (unsigned)pdp_core::instruction_count());
-  // cpu_dump_trace() is available if you need it for stuck-in-loop
-  // diagnosis - the cpu_pdp11.h function dumps the last N entries of
-  // the trace ring. We leave it off by default so the serial console
-  // stays usable for the guest OS.
+
+  // Frozen inst= with MIPS=0 usually means WAIT with no deliverable IRQ.
+  // SPL masks BR levels <= SPL (KW11-L is BR6 — blocked when SPL>=6).
+  {
+    uint16_t psw = pdp_core::psw();
+    const unsigned spl = (psw >> 5) & 7;
+    uint16_t irq_psw = 0;
+    bool any_deliverable = false;
+    uint8_t counts[8] = {};
+    uint16_t vectors[8] = {};
+    pdp_core::get_interrupt_summary(&irq_psw, &any_deliverable, counts, vectors);
+    uint16_t lks = 0;
+    uint32_t since = 0;
+    bool irq100 = false;
+    pdp_core::get_kw11l_summary(&lks, &since, &irq100);
+    char irqbuf[96];
+    size_t n = 0;
+    irqbuf[0] = 0;
+    for (int lvl = 7; lvl >= 4; lvl--) {
+      if (!counts[lvl]) continue;
+      int wrote = snprintf(irqbuf + n, sizeof(irqbuf) - n,
+                           "%sBR%d=%06o", n ? " " : "", lvl,
+                           (unsigned)vectors[lvl]);
+      if (wrote > 0) n += (size_t)wrote;
+      if (n + 1 >= sizeof(irqbuf)) break;
+    }
+    LOG("state: WAIT=%u SPL=%u deliverable=%u LKS=%06o IE=%u DONE=%u irq100=%u queued:%s",
+        pdp_core::is_waiting() ? 1u : 0u, spl,
+        any_deliverable ? 1u : 0u, (unsigned)lks,
+        (lks & 0100) ? 1u : 0u, (lks & 0200) ? 1u : 0u,
+        irq100 ? 1u : 0u,
+        irqbuf[0] ? irqbuf : " none");
+  }
 }
 
 void loop() {
@@ -1097,23 +1144,21 @@ void loop() {
     ESP.restart();   // does not return
   }
 
-  // While the menu is open the PDP-11 is paused, but FTP remains available.
+  // While the menu is open the PDP-11 is paused; FTP keeps running on net_task.
   if (ui_is_open()) {
     emu_control::poll();
     telnet_shell_poll();
     boot_script_poll();
     boot_input_poll();
-    ftp_poll();
     delay(8);
     return;
   }
 
-  // Running: feed the keyboard, run the PDP-11 in small slices, and service
-  // FTP between slices. Output sinks drain independently on core 0.
+  // Running: feed the keyboard and run the PDP-11 in small slices. FTP and
+  // Telnet sockets are serviced on core 0 (net_task).
   for (int slice = 0; slice < 5; slice++) {
     while (Serial.available())
       console_key_push((uint8_t)Serial.read());   // -> Serial-in FIFO
-    ftp_poll();                  // accept + FTP commands/data against SD root
     emu_control::poll();
     telnet_shell_poll();
     boot_script_poll();
@@ -1122,7 +1167,6 @@ void loop() {
     pdp_core::run(1000);
     poll_pcping();
   }
-  ftp_poll();
   emu_control::poll();
   telnet_shell_poll();
   boot_script_poll();

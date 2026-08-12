@@ -30,7 +30,7 @@ The working rule is:
 | RH11/RP04/RP05/RP06 | kek | `rh11.cpp/.h` testing-mode support | `rp06.cpp/.h` | Prefer kek; make this a first-class 11/70 storage path. |
 | TM11 tape | kek | not present in active vpdp1140 | `tm-11.cpp/.h` | New capability; useful for UNIX install/diagnostics later. |
 | DC11 | kek | not present in active vpdp1140 | `dc11.cpp/.h` | New capability; evaluate after basic console boot. |
-| DZ11 | kek | not present in active vpdp1140 | `dz11.cpp/.h` | New capability; useful for multi-user UNIX after core boot. |
+| DZ11 | kek + vpdp Telnet | not present in active vpdp1140 | `dz11.cpp/.h` | Enabled: Unibus mux at `160100`, Telnet line 0 via `/wificonfig.ini` `[dz11]`. ~10–15% MIPS cost when enabled; see `docs/dz11.md`. |
 | DEQNA | kek reference only | not present in active vpdp1140 | `deqna.cpp/.h` | Prefer DEUNA for Unibus; defer until ethernet config lands. |
 | DEUNA | vpdp `kek_deuna` + `eth_nat` | when `[ethernet] enabled` | SIMH XU | Phase 5: ARP + gateway ICMP + STA NAPT (UDP/TCP/ICMP). |
 | Disk backends | hybrid | SD_MMC disk image code | file/NBD/ESP32 disk backend code | Use vpdp SD mounting UI; adapt backend calls to kek devices. |

@@ -62,6 +62,8 @@ TODO:
     TTY/KW11-L/RL/RK/RP + DEUNA/LP11/KWP on bus::reset; warm host reset
     soft-inits bus; eth_nat chatty LOG off; touch double-tap debounce;
     2.11BSD PiDP boots to multiuser with DEUNA
+40) done 8/10 - implement DZ11 8 line serial mux. - performance reduction of about 15%!  
+    compile time flag.
 
 ----------------------
 OS notes:
@@ -87,12 +89,23 @@ OS notes:
   PiDP version - 1Gb system disk, I think has some custom network stack
 - RSTSV7 - DEC RSTS V7 - uses MMU, later version of RSTS - more than basic plus support
   Same as RSTSV7-full??
-  
+- RSTSV9.3 - Runs - hello 1,2, SYSLIB to log in
+ 
+ - notes on configuring BSD 2.11 for networking and such
   
 ifconfig de0 10.11.0.2 netmask 255.255.255.0 up
 route add default 10.11.0.1 1
 netstat -r
 ifconfig de0
+
+/etc/ttys - edit to disable if DZ not enabled.
+mount /dev/da0h /usr
+edit /etc/netstart  - set up networking parameters, hostname, netmask, default10.11.0.1, hostid 10.11.0.2, edit hosts and set 10.11.0.2, resolve.conf 8.8.8.8
+edit /etc/??  - prevent long startup boots doing fsck
+core dumps   core.4 - very big....
+see how to disable core dumps
+dont load so many daemons
+
 
 
 8/3 - Boot status
@@ -114,7 +127,7 @@ BSD211-PiDP     DU0     working    BSD 2.11 #21 has boot script
 211BSD-RP0      RP0     working    BSD 2.11 #5 needs boot script - network up de0 - startnet.sh
 RSTSV7          RL01    working    RSTS/E V7   Ready; LP11 IRQ + /LPn.TXT capture
 RSTSV7-FULL     RL01    working    RSTS/E V7   same as RSTSv7
-
+RSTSV93         RL02    working    RSTS/E 9.3  has boot script, runs RSTS/E V9.3-20
 
 
 

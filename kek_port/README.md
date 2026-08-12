@@ -11,5 +11,5 @@ Upstream sources are pulled in by sketch-root `kek_src_*.cpp` wrappers
 (one translation unit per upstream file).
 
 `kek_src_optional_device_stubs.cpp` satisfies linker references from kek
-`bus.cpp` for optional devices not yet fully ported (DC11, DZ11, DEQNA,
-TM11).
+`bus.cpp` for optional devices not yet fully ported (DC11, DEQNA, TM11).
+DZ11 is implemented via `kek_src_dz11.cpp` + host `telnet_dz` / `comm_vpdp_telnet_dz`.
