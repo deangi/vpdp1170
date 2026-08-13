@@ -6,15 +6,8 @@
 // ~10–15% higher status-bar MIPS when multi-user serial is unused (see
 // docs/dz11.md). Runtime [dz11] in wificonfig.ini is ignored when this is 0.
 #ifndef VPDP_ENABLE_DZ11
-#define VPDP_ENABLE_DZ11 1
+#define VPDP_ENABLE_DZ11 0
 #endif
 
-// Set true at the end of panic() so the post-HALT trace ring is the last
-// thing on the USB-Serial monitor. Reset in cpu_reset() so a reboot from
-// the touch menu re-enables serial output. TFT + Telnet are not gated.
-extern volatile bool g_serial_silenced;
-
-// With USB CDC On Boot Disabled (required for Elecrow), Serial is UART0 —
-// the same port that shows ESP-ROM lines. Single-stream LOG is correct.
-#define LOG(fmt, ...)   do { if (!g_serial_silenced) Serial.printf("[vpdp1170] " fmt "\r\n", ##__VA_ARGS__); } while (0)
-#define LOGE(fmt, ...)  do { if (!g_serial_silenced) Serial.printf("[vpdp1170 ERR] " fmt "\r\n", ##__VA_ARGS__); } while (0)
+#define HOST_LOG_TAG "vpdp1170"
+#include "host_lib/log/host_log.h"

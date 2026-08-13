@@ -22,8 +22,8 @@ guest-to-emulator command channel. A PDP program can use this channel to:
   requiring a guest TT1 device driver.
 - Select an EOF byte and request an EOF notification.
 - Receive optional command status replies through the TTY0 KL11 input queue.
-- Mount, dismount, and query active RL or RK disk images without restarting
-  the ESP32.
+- Mount, dismount, and query active RL, RK, RP, or MSCP (DU0) disk images
+  without restarting the ESP32.
 - Cold-reboot the emulated PDP-11 without restarting WiFi, FTP, or Telnet.
 
 These runtime-control capabilities are new and require testing with each guest
@@ -41,12 +41,14 @@ disk before asking the emulator to detach its image.
 | MMU | PDP-11/70 22-bit memory-management path, under active bring-up |
 | Console | KL11 console at `0177560`, vector `060` |
 | Alternate serial | Optional file-backed DL11-compatible TT1 at `0176500`, receive vector `0300`, transmit vector `0304` |
-| RK disk | RK11 controller for RK05 images |
-| RL disk | RL11 controller, up to two normal RL drives in common configurations, with four host slots available as `DL0`..`DL3` |
-| RP disk | Optional secondary RH11/RP04-RP06 disk as `RP0`; testing mode, not verified yet, and not currently bootable |
+| RK disk | RK11 controller for RK05 images (`RK0`) |
+| RL disk | RL11 controller, four host slots `DL0`..`DL3` (boot stub is RL unit 0 / `DL0` only) |
+| RP disk | RH11/RP04–RP06 as `RP0` (bootable when `boot = rp0`) |
+| MSCP disk | UDA50 controller, unit `DU0` (RA-family geometry from image size; bootable when `boot = du0`) |
+| Ethernet | Optional DEUNA with L3 NAT onto WiFi STA (`[ethernet]`) |
 | Clocks | KW11-L line clock and optional KW11-P programmable clock |
 | Line printer | LP11 at `0177514`/`0177516`, vector `0200` (BR4); print bytes captured to `/LPn.TXT` on the SD card |
-| Boot ROM | M9312-style boot stubs for RK0 and RL0 |
+| Boot ROM | Host boot stubs for `RK0`, `RL0`/`DL0`, `RP0`, and `DU0` |
 
 The V1.1 bring-up path allocates the PDP-11/70 4 MB physical memory target in
 PSRAM. The inherited 11/40-derived CPU/MMU scaffold remains in the source tree
@@ -54,22 +56,29 @@ for reference while the kek device set is ported.
 
 ## Supported Operating Systems
 
-These systems boot with this release:
+These systems boot with the current release (see also the matrix in
+[`README.md`](../README.md) and working notes in `status.txt`):
 
 | System | Typical media | Status |
 | --- | --- | --- |
-| RT-11 V5.04 | RK05 | Boots to the `.` prompt and runs `DIR` |
-| RSTS V4B | RK05 | Boots to the `READY` prompt |
-| UNIX V6 | RK05 | Boots from `@` to the `#` shell |
-| XXDP V2.2 | RL02 | Boots the XXDP monitor |
-| XXDP V2.5 | RL02 | Boots the XXDP monitor |
-| RSX-11M V4.0 | RL01/RL02 | Boots successfully |
-| RSX-11M V4.8 | RL01/RL02 | Boots 124KW mapped system |
+| RT-11 V5.04 | RK05 | Boots to the `.` prompt |
+| DOSBATCH-11 V10 | RK05 | Boots with `boot_script` |
+| RSTS V4B | RK05 | Boots to `READY` |
+| RSTS/E V7 | RL01 | Boots to Ready (LP11 print capture works) |
+| RSTS/E V9.3 | RL / catalog image | Boots; timesharing / DZ11 as configured |
+| UNIX V6 | RK05 | Boots to the `#` shell |
+| UNIX V7 | RL02 | Boots with `boot_script` |
+| 2.11BSD (RL) | RL02 root (+ optional `/usr` on DL1) | Boots; use `boot_script` / typeahead as needed |
+| 2.11BSD (RP06) | RP0 | Boots with `boot = rp0` |
+| 2.11BSD PiDP | DU0 (MSCP) | Boots multiuser with DEUNA when `[ethernet]` enabled |
+| XXDP V2.2 / V2.5 | RL02 | Boots the XXDP monitor |
+| RSX-11M V4.0 | RL02 | Boots |
+| RSX-11M V4.8 | RL02 | Boots 124KW mapped system |
+| RSX-11M+ V4.6 | DU0 (MSCP) | Boots (PiDP-style image; `boot_script` for date/network prompts) |
 
-Other PDP-11 operating systems may probe hardware that is incomplete,
-configured differently, or intentionally disabled for compatibility. RSTS/E V7
-and larger UNIX systems are useful bring-up targets, but may need different
-compatibility settings and more complete MMU/device behavior.
+Other PDP-11 operating systems may probe hardware that is incomplete or
+configured differently. Match the disk image to the controller selected by
+`boot` (`rk0`, `dl0`, `rp0`, or `du0`).
 
 ## SD Card
 
@@ -227,17 +236,21 @@ serialdelay = 20
 io_trace    = 0
 clock_trace = 0
 console_trace = 0
+dl_trace    = 0
+rp_trace    = 0
+du_trace    = 0
 trace       = false
 break       = 0
 kwp_enabled = false
 
 [disks]
-dl0 = /xxdp25.dsk
+dl0 = /xxdp-25.dsk
 dl1 =
 dl2 =
 dl3 =
-rk0 = /unixv6.dsk
+rk0 = /unix-6.dsk
 rp0 =
+du0 =
 rp0_type = rp06
 boot = rk0
 ```
@@ -374,9 +387,11 @@ not written to `pdpconfig.ini` unless you edit the file).
 | `io_trace` | Access count | Log the next N I/O-page reads/writes to USB serial, then stop automatically. `0` disables. |
 | `clock_trace` | Event count | Log the next N KW11-L/KW11-P register accesses and interrupt requests/deliveries, then stop automatically. `0` disables. |
 | `console_trace` | Character count | Log the next N characters read by or written by the PDP through the KL11 console data registers, then stop automatically. `0` disables. |
-| `du_trace` | Event count | Log the next N UDA50/MSCP initialization, ring, command, response, DMA, and interrupt events to USB serial, then stop automatically. `0` disables. |
+| `dl_trace` | Event count | Log the next N RL11/DL controller and host I/O events, then stop. `0` disables. |
+| `rp_trace` | Event count | Log the next N RH/RP (DP) controller and host events, then stop. Alias: `dp_trace`. `0` disables. |
+| `du_trace` | Event count | Log the next N UDA50/MSCP initialization, ring, command, response, DMA, and interrupt events, then stop. `0` disables. |
 | `trace` | Boolean | Enables expensive per-instruction panic trace capture. Use only for debugging. |
-| `break` | Octal PC or `0` | Arm a PC breakpoint before guest boot. `0` / `off` / `clear` disables. Survives cold boot so early loops can be caught before telnet is available. |
+| `break` | Octal PC or `0` | Arm a PC breakpoint before guest boot. `0` / `off` / `clear` disables. Survives cold boot so early loops can be caught before Telnet is available. |
 | `kwp_enabled` | Boolean | Enables KW11-P programmable clock emulation. Default `false`. |
 
 `kwp_enabled = true` enables CSR/CSB/CNTR behavior for the KW11-P programmable
@@ -386,19 +401,23 @@ more stable with the default stub behavior.
 The legacy section name `[emu]` is accepted as an alias for `[diag]`, but new
 config files should use `[diag]`.
 
+Bounded traces (`io_trace`, `clock_trace`, `console_trace`, `dl_trace`,
+`rp_trace`, `du_trace`) may also be set at runtime from the Telnet management
+shell (`set dl_trace=100`, and so on).
+
 ### `[disks]`
 
 | Key | Values | Description |
 | --- | --- | --- |
-| `dl0` | SD path or blank | RL11 unit DL0 image. |
-| `dl1` | SD path or blank | RL11 unit DL1 image. |
-| `dl2` | SD path or blank | RL11 unit DL2 image. |
-| `dl3` | SD path or blank | RL11 unit DL3 image. |
+| `dl0` | SD path or blank | RL11 unit DL0 image (**required** for RL boot). |
+| `dl1` | SD path or blank | RL11 unit DL1 image (data / second pack; not a host boot unit). |
+| `dl2` | SD path or blank | RL11 unit DL2 image (data pack). |
+| `dl3` | SD path or blank | RL11 unit DL3 image (data pack). |
 | `rk0` | SD path or blank | RK05 image used when booting RK0. |
-| `rp0` | SD path or blank | Optional secondary RP-family image. |
-| `du0` | SD path or blank | UDA50/MSCP unit DU0 image. |
+| `rp0` | SD path or blank | RH11/RP-family image used when `boot = rp0` (or as secondary storage). |
+| `du0` | SD path or blank | UDA50/MSCP unit DU0 image used when `boot = du0`. |
 | `rp0_type` | `rp04`, `rp05`, `rp06`, `rp07` | Geometry reported for RP0. |
-| `boot` | `dl0`, `dl1`, `dl2`, `dl3`, `rk0`, `dk0`, `rp0`, `du0`, `0`..`3`, `a`..`d` | Boot controller and unit. |
+| `boot` | `dl0`, `rk0`, `dk0`, `rp0`, `du0` (also `0`/`a` for DL0) | Boot controller and unit. |
 
 `rk0` and `dk0` are treated as the same boot target. `dk0` is useful when
 thinking in UNIX V6 naming.
@@ -406,8 +425,16 @@ thinking in UNIX V6 naming.
 When `boot = rk0`, the RK image is mounted in a dedicated RK0 host slot. It no
 longer replaces `dl0`; RL slots continue to map to `DL0` through `DL3`.
 
-`rp0` is secondary storage in this build. RP0 support is in testing mode and has
-not been verified yet. The boot ROM and menu boot choices are for RK0 and RL0.
+**RL boot is DL0 only.** The firmware installs the RL unit-0 boot stub and
+requires a mounted `dl0` image whenever `boot` selects the RL path. Values
+`boot = dl1`, `dl2`, or `dl3` are accepted in the parser for labeling, but they
+do **not** select a different RL boot unit — put the bootable RL pack on
+`dl0`. Use `dl1`–`dl3` for additional packs the guest mounts after boot (for
+example 2.11BSD `/usr` on DL1).
+
+`boot = rp0` and `boot = du0` are supported host boot paths (RP and MSCP
+stubs). Sample configs: `pdpconfig-bsd-211` with RP, `pdpconfig-bsd-211-pidp`
+and `pdpconfig-rsx11mp-46-pidp` with DU0.
 
 ## Disk Images
 
@@ -418,11 +445,12 @@ Common image sizes:
 
 | Media | Approximate size | Notes |
 | --- | --- | --- |
-| RK05 | 2.5 MB | Used by RT-11, UNIX V6, RSTS/E V4B images |
+| RK05 | 2.5 MB | Used by RT-11, UNIX V6, RSTS V4B, DOSBATCH images |
 | RK05 pair/combined images | About 5 MB | Some distributions use paired packs |
 | RL01 | 5,242,880 bytes | RL11-compatible removable disk pack; exact size required |
-| RL02 | 10,485,760 bytes | Common XXDP and RSTS media; exact size required |
-| RP04/RP05/RP06 | Larger | Optional secondary RH11/RP disk image |
+| RL02 | 10,485,760 bytes | Common XXDP, RSX, RSTS, and BSD media; exact size required |
+| RP04/RP05/RP06 | Larger (e.g. RP06 ~171 MB) | RH11/RP boot or secondary storage (`rp0` / `rp0_type`) |
+| MSCP / RA-family | Image size ÷ 512 blocks | UDA50 `DU0` only; capacity follows the file size |
 
 ## Booting
 
@@ -432,7 +460,7 @@ Set `/pdpconfig.ini`:
 
 ```ini
 [disks]
-rk0 = /unixv6.dsk
+rk0 = /unix-6.dsk
 boot = rk0
 ```
 
@@ -445,11 +473,33 @@ Set `/pdpconfig.ini`:
 
 ```ini
 [disks]
-dl0 = /xxdp25.dsk
+dl0 = /xxdp-25.dsk
 boot = dl0
 ```
 
-The emulator installs the RL boot stub and boots from DL0.
+The emulator installs the RL boot stub and boots from **DL0** only. Additional
+RL packs belong on `dl1`–`dl3` after the guest is up; do not rely on
+`boot = dl1` (or `dl2`/`dl3`) to select a different boot unit.
+
+### Boot From RP0
+
+Set `/pdpconfig.ini`:
+
+```ini
+[disks]
+rp0 = /bsd-211-rp.dsk
+rp0_type = rp06
+boot = rp0
+```
+
+The emulator installs the RP boot stub and mounts `rp0` as RH/RP drive 0.
+Use a disk image that was built for RP06 (or set `rp0_type` to match the
+geometry the guest expects). Example profile shape:
+`pdpconfig-bsd-211` with `boot = rp0` (see `PdpSdCard/OldOsBoots/bsd211/` or
+your renamed catalog copy).
+
+You can also choose **Boot RP0** from the on-device Drives menu (temporary until
+the next config reload / ESP reset unless you edit `pdpconfig.ini`).
 
 ### Boot From UDA50/MSCP DU0
 
@@ -457,7 +507,15 @@ Set `/pdpconfig.ini`:
 
 ```ini
 [disks]
-du0 = /rsx11mp.dsk
+du0 = /bsd-211-rq.dsk
+boot = du0
+```
+
+Or for RSX-11M+:
+
+```ini
+[disks]
+du0 = /rsx11mp-46.dsk
 boot = du0
 ```
 
@@ -469,6 +527,8 @@ The image must contain a bootable MSCP layout for the selected operating
 system. An RK05, RL01/RL02, or RP06 image is not converted merely by mounting
 it on DU0. Use `du_trace = N` in `[diag]` for a bounded USB-serial trace of
 controller initialization and I/O while diagnosing a boot.
+
+Sample configs: `pdpconfig-bsd-211-pidp.ini`, `pdpconfig-rsx11mp-46-pidp.ini`.
 
 ### Startup Console Input
 
@@ -586,10 +646,10 @@ same SD-card lock as FTP and the emulator disk layer.
 | `exit` | Reconnect Telnet to the PDP-11 console. |
 
 RL units accept `RL0` through `RL3`, with `DL0` through `DL3` as aliases.
-`RK0` is a separate RK image slot. `RP0` addresses the experimental RH11/RP
-secondary disk. A drive must be empty before `mount`; use `dismount` first.
-RL mounts accept only exact RL pack images: 5,242,880 bytes for RL01 or
-10,485,760 bytes for RL02. Other file sizes are rejected.
+`RK0`, `RP0`, and `DU0` are separate image slots. A drive must be empty before
+`mount`; use `dismount` first. RL mounts accept only exact RL pack images:
+5,242,880 bytes for RL01 or 10,485,760 bytes for RL02. Other file sizes are
+rejected.
 
 Runtime media changes require cooperation from the guest operating system.
 Flush and offline/dismount the guest device before issuing the shell
@@ -597,10 +657,10 @@ Flush and offline/dismount the guest device before issuing the shell
 execution while the SD card is written.
 
 The runtime-changeable settings are `pcping`, `serialdelay`, `io_trace`,
-`clock_trace`, `console_trace`, `trace`, `break`, `title`, `boot_input`,
-`boot_script`, `ethernet`, `ethernet_mac`, `ethernet_guest_ip`,
-`ethernet_guest_mask`, and `ethernet_gateway_ip`. `boot_text` is accepted as
-an alias for `boot_input`.
+`clock_trace`, `console_trace`, `dl_trace`, `rp_trace` (alias `dp_trace`),
+`du_trace`, `trace`, `break`, `title`, `boot_input`, `boot_script`,
+`ethernet`, `ethernet_mac`, `ethernet_guest_ip`, `ethernet_guest_mask`, and
+`ethernet_gateway_ip`. `boot_text` is accepted as an alias for `boot_input`.
 
 ```text
 set
@@ -609,6 +669,9 @@ set serialdelay=20
 set io_trace=100
 set clock_trace=100
 set console_trace=100
+set dl_trace=100
+set rp_trace=100
+set du_trace=100
 set trace=false
 set break=04642
 set title="PDP 11/70"
@@ -687,6 +750,9 @@ console data registers. `READ` means the PDP consumed a character from its
 console input; `WRITE` means the PDP wrote a character to its console output.
 Each entry includes the octal byte value, a printable/control representation,
 the guest PC, and remaining count. Set it to `0` to cancel an active trace.
+
+`dl_trace=N`, `rp_trace=N` (alias `dp_trace`), and `du_trace=N` are bounded
+USB-serial traces for RL11, RH/RP, and UDA50/MSCP activity respectively.
 
 ## Guest-to-Emulator Commands
 
@@ -869,12 +935,16 @@ The Drives menu includes:
 
 | Item | Action |
 | --- | --- |
-| `Boot RL0` | Selects the RL boot path. |
+| `Boot RL0` | Selects the RL boot path (**DL0** image). |
 | `Boot RK0` | Selects the RK boot path. |
+| `Boot RP0` | Selects the RH/RP boot path. |
 | `RK0 ...` | Opens RK0 image mount/dismount controls. |
-| `DL0 ...` through `DL3 ...` | Opens RL unit mount/dismount controls. |
+| `RP0 ...` | Opens RP0 image mount/dismount controls. |
+| `DL0 ...` through `DL3 ...` | Opens RL unit mount/dismount controls (bootable pack on DL0). |
 
 Mounted drives are highlighted. Read-only mounted images are marked `[RO]`.
+DU0 is configured via `/pdpconfig.ini` (`du0` / `boot = du0`); it is not a
+separate Drives-menu boot row in this build.
 
 ![Drives menu showing mounted DL1 media](images/drives-dl1.jpeg)
 
@@ -892,7 +962,7 @@ files.
 
 ### Config Variant Menus
 
-`WiFi Config` and `PDP Config` show up to 16 variants each. Selecting one opens
+`WiFi Config` and `PDP Config` show up to 64 variants each (sorted A–Z). Selecting one opens
 an `Apply: NAME` confirmation screen:
 
 ![WiFi configuration picker showing named WiFi variants](images/wifi-config-picker.jpeg)

@@ -67,6 +67,11 @@ TODO:
 41) done 8/11 (V2.8): DZ11 compile gate; FTP poll on core 0; NTP UTC for
     FatFs timestamps + System Info mm/dd/yyyy hh:mm; pdpconfig picker 64
     entries sorted A-Z; RSTS WAIT interrupt delivery fix.
+42) done 8/13 (V2.9): extract reusable ESP32 host_lib (FIFO, SD lock, WiFi/
+    net_task, INI variants, gfx/touch, console VT100+ADM-3A, TelnetPipe,
+    NTP, FTP lock, shell registry/settings/MediaOps/GuestControl, boot
+    sequencers, LP capture). DZ11 compile-disabled. Shell `rl` dump no
+    longer fails on missing Unibus BAE. Host regression tests 1–7 passed.
 
 ----------------------
 OS notes:

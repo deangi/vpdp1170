@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "secrets.h"
 #include "SD_FTP_Server/src/SD_FTP_Server.h"
+#include "host_lib/net/net_ini.h"
 
 #include "sd_fs.h"
 #include <stdlib.h>    // strtod for boot_input <<seconds>> markers
@@ -550,6 +551,38 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
 
 enum ConfigDomain : uint8_t { CONFIG_NETWORK, CONFIG_EMULATOR };
 
+static void net_cfg_from_app(HostNetConfig& n, const AppConfig& cfg) {
+  n.wifi_ssid = cfg.wifi_ssid;
+  n.wifi_password = cfg.wifi_password;
+  n.wifi_hostname = cfg.wifi_hostname;
+  n.ntp_enabled = cfg.ntp_enabled;
+  n.ntp_server = cfg.ntp_server;
+  n.telnet_enabled = cfg.telnet_enabled;
+  n.telnet_port = cfg.telnet_port;
+  n.extra_telnet_enabled = cfg.dz11_enabled;
+  n.extra_telnet_port = cfg.dz11_telnet_port;
+  n.ftp_enabled = cfg.ftp_enabled;
+  n.ftp_port = cfg.ftp_port;
+  n.ftp_user = cfg.ftp_user;
+  n.ftp_password = cfg.ftp_password;
+}
+
+static void net_cfg_to_app(AppConfig& cfg, const HostNetConfig& n) {
+  cfg.wifi_ssid = n.wifi_ssid;
+  cfg.wifi_password = n.wifi_password;
+  cfg.wifi_hostname = n.wifi_hostname;
+  cfg.ntp_enabled = n.ntp_enabled;
+  cfg.ntp_server = n.ntp_server;
+  cfg.telnet_enabled = n.telnet_enabled;
+  cfg.telnet_port = n.telnet_port;
+  cfg.dz11_enabled = n.extra_telnet_enabled;
+  cfg.dz11_telnet_port = n.extra_telnet_port;
+  cfg.ftp_enabled = n.ftp_enabled;
+  cfg.ftp_port = n.ftp_port;
+  cfg.ftp_user = n.ftp_user;
+  cfg.ftp_password = n.ftp_password;
+}
+
 static void parse_line(AppConfig& cfg, String& section, const String& raw,
                        ConfigDomain domain) {
   String t = trim(raw);
@@ -565,27 +598,20 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
   String key = to_lower(trim(t.substring(0, eq)));
   String val = strip_inline_comment(t.substring(eq + 1));
 
-  bool network_section = section == "wifi" || section == "telnet" ||
-                         section == "ftp" || section == "dz11" ||
-                         section == "ntp";
+  bool network_section = host_net_ini_is_section(section.c_str());
   if ((domain == CONFIG_NETWORK) != network_section) return;
+
+  if (network_section) {
+    HostNetConfig n;
+    net_cfg_from_app(n, cfg);
+    host_net_ini_apply(n, section.c_str(), key.c_str(), val.c_str());
+    net_cfg_to_app(cfg, n);
+    return;
+  }
 
   if (section == "system") {
     if (key == "title") cfg.title = val;
     else if (key == "mem_size_kw") cfg.mem_size_kw = clamp_mem_size_kw(val.toInt());
-  } else if (section == "wifi") {
-    if      (key == "ssid")     cfg.wifi_ssid     = val;
-    else if (key == "password") cfg.wifi_password = val;
-    else if (key == "hostname") cfg.wifi_hostname = val;
-  } else if (section == "ntp") {
-    if      (key == "enabled") cfg.ntp_enabled = truthy(val);
-    else if (key == "server")  cfg.ntp_server  = val;
-  } else if (section == "telnet") {
-    if      (key == "enabled")  cfg.telnet_enabled = truthy(val);
-    else if (key == "port")     cfg.telnet_port = val.toInt();
-  } else if (section == "dz11") {
-    if      (key == "enabled")  cfg.dz11_enabled = truthy(val);
-    else if (key == "port")     cfg.dz11_telnet_port = val.toInt();
   } else if (section == "console") {
     if      (key == "boot_input" || key == "typeahead" || key == "boot_keys")
       config_set_boot_input(cfg, val);
@@ -621,11 +647,6 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
       else
         LOGE("ethernet: bad gateway_ip \"%s\"", val.c_str());
     }
-  } else if (section == "ftp") {
-    if      (key == "enabled")  cfg.ftp_enabled  = truthy(val);
-    else if (key == "port")     cfg.ftp_port     = val.toInt();
-    else if (key == "user")     cfg.ftp_user     = val;
-    else if (key == "password") cfg.ftp_password = val;
   } else if (section == "diag" || section == "emu") {
     // "emu" kept as an alias for back-compat with the first revision of
     // the parser; "diag" is the canonical section going forward.
@@ -1017,122 +1038,11 @@ bool config_write_default_pdp(const AppConfig& cfg) {
 }
 
 bool config_copy_file(const char* src, const char* dst) {
-  SD_FTP_StorageGuard guard;
-  char temp[192];
-  char backup[192];
-  if (snprintf(temp, sizeof(temp), "%s.tmp", dst) >= (int)sizeof(temp) ||
-      snprintf(backup, sizeof(backup), "%s.bak", dst) >= (int)sizeof(backup)) {
-    LOGE("config_copy_file: destination path too long: %s", dst);
-    return false;
-  }
-
-  File s = SD_FS.open(src, FILE_READ);
-  if (!s) { LOGE("config_copy_file: can't open %s for read", src); return false; }
-  uint32_t srcSize = (uint32_t)s.size();
-
-  if (SD_FS.exists(temp)) SD_FS.remove(temp);
-  File d = SD_FS.open(temp, FILE_WRITE);
-  if (!d) {
-    LOGE("config_copy_file: can't open %s for write", temp);
-    s.close();
-    return false;
-  }
-
-  uint8_t buf[512];
-  size_t total = 0;
-  bool copy_ok = true;
-  while (s.available()) {
-    int n = s.read(buf, sizeof(buf));
-    if (n <= 0) { copy_ok = false; break; }
-    int w = d.write(buf, n);
-    if (w != n) {
-      LOGE("config_copy_file: short write (%d/%d) at %u into %s",
-           w, n, (unsigned)total, temp);
-      copy_ok = false;
-      break;
-    }
-    total += n;
-  }
-  s.close();
-  d.flush();
-  d.close();
-
-  File v = SD_FS.open(temp, FILE_READ);
-  uint32_t verifySize = v ? (uint32_t)v.size() : 0;
-  if (v) v.close();
-  if (!copy_ok || total != srcSize || verifySize != srcSize) {
-    LOGE("config_copy_file: temporary copy failed src=%u written=%u on-disk=%u",
-         (unsigned)srcSize, (unsigned)total, (unsigned)verifySize);
-    SD_FS.remove(temp);
-    return false;
-  }
-
-  if (SD_FS.exists(backup)) SD_FS.remove(backup);
-  bool had_dst = SD_FS.exists(dst);
-  if (had_dst && !SD_FS.rename(dst, backup)) {
-    LOGE("config_copy_file: can't preserve %s as %s", dst, backup);
-    SD_FS.remove(temp);
-    return false;
-  }
-  if (!SD_FS.rename(temp, dst)) {
-    LOGE("config_copy_file: can't activate %s", dst);
-    if (had_dst && !SD_FS.rename(backup, dst))
-      LOGE("config_copy_file: FAILED to restore %s from %s", dst, backup);
-    SD_FS.remove(temp);
-    return false;
-  }
-  if (had_dst) SD_FS.remove(backup);
-  LOG("config_copy_file: atomically replaced %s from %s (%u bytes)",
-      dst, src, (unsigned)srcSize);
-  return true;
-}
-
-static int variant_name_cmp(const void* a, const void* b) {
-  return strcasecmp((const char*)a, (const char*)b);
+  return host_ini_copy_file(src, dst);
 }
 
 int config_list_variants(const char* prefix, char names[][44], int max) {
-  SD_FTP_StorageGuard guard;
-  // Scan SD root for files matching "<prefix>NAME.ini" (case-insensitive
-  // on the ".ini" suffix; the prefix is matched as written). Stores the
-  // middle NAME portion in names[i]. Skips a file that's exactly the
-  // active filename (prefix-without-trailing-dash + ".ini") to keep
-  // wificonfig.ini / pdpconfig.ini out of the picker. Results are sorted
-  // case-insensitively for stable GUI order.
-  if (max <= 0) return 0;
-  int count = 0;
-
-  fs::File root = SD_FS.open("/");
-  if (!root) return 0;
-
-  size_t plen = strlen(prefix);
-  for (fs::File f = root.openNextFile(); f && count < max;
-       f = root.openNextFile()) {
-    if (!f.isDirectory()) {
-      const char* fullname = f.name();
-      const char* slash = strrchr(fullname, '/');
-      const char* base  = slash ? slash + 1 : fullname;
-      size_t blen = strlen(base);
-
-      // prefix match
-      if (strncmp(base, prefix, plen) == 0 &&
-          blen > plen + 4 /* at least 1 char + ".ini" */ &&
-          strcasecmp(base + blen - 4, ".ini") == 0) {
-        size_t midlen = blen - plen - 4;
-        if (midlen > 0 && midlen < 43) {
-          memcpy(names[count], base + plen, midlen);
-          names[count][midlen] = 0;
-          count++;
-        }
-      }
-    }
-    f.close();
-  }
-  root.close();
-
-  if (count > 1)
-    qsort(names, (size_t)count, 44, variant_name_cmp);
-  return count;
+  return host_ini_list_variants(prefix, names, max);
 }
 
 // -------- printer --------

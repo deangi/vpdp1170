@@ -1,6 +1,6 @@
 # vpdp1170 — a DEC PDP-11/70 emulator for the ESP32-S3 with a touch screen display.
 
-> Development status: **V2.8** (2026-08-11). Guest OS boot matrix below
+> Development status: **V2.9** (2026-08-13). Guest OS boot matrix below
 > (RSTS/E V7 through Ready; Unix V6/V7; 2.11BSD on RL/RP; RSX-11M / M+;
 > RT-11; XXDP; DOSBATCH). See `status.txt` for the full working notes.
 > The ESP32 host side is inherited from `vpdp1140`: TFT console, touch menu,
@@ -26,8 +26,10 @@ subdirectories and are pulled in by thin sketch-root wrappers.
 
 | Path | Role |
 |------|------|
-| `vpdp1170.ino`, `config.h`, `board_*.h`, `gfx.h` | Sketch entry, board select, display abstraction |
-| `console.*`, `ui.*`, `touch.*`, `telnet*`, `ftp.*`, `disk.*`, `appconfig.*` | ESP32 host services (TFT, network, SD mounts) |
+| `vpdp1170.ino`, `config.h` | Sketch entry + board select (`VPDP_BOARD`) |
+| `host_lib/` | Reusable ESP32 host (FIFO, SD, WiFi/net_task, INI, gfx/touch, console, TelnetPipe, FTP/NTP, shell, boot, LP capture); see `host_lib/INTEGRATION.md` |
+| `host_lib_build.cpp`, `vpdp_shell_register.cpp` | Sketch-root shims / PDP diag-key registrations |
+| `console.*`, `ui.*`, `touch.*`, `gfx.h`, `board_*.h`, `telnet*`, `ftp.*`, `disk.*`, `appconfig.*` | Sketch-root shims + vpdp adapters (KL11/DZ11, MediaOps, PDP INI) |
 | `kek_src_*.cpp`, `pdp_core_kek.cpp`, `kek_kwp.*` | Sketch-root wrappers that `#include` kek sources |
 | `kek_port/pdp_core_kek_impl.cpp`, `kek_port/pdp_core_kek.h` | kek PDP-11/70 adapter (included, not auto-compiled) |
 | `_upstream_kek/` | Vendored kek engine + devices (subset used via wrappers) |
@@ -60,7 +62,7 @@ this project.
 
 ## Current Bring-Up Status
 
-As of **2026-08-11 (V2.8)**. The sketch reports the `kek PDP-11/70 adapter`
+As of **2026-08-13 (V2.9)**. The sketch reports the `kek PDP-11/70 adapter`
 with up to 4 MB target memory. Sample configs live under `PdpSdCard/pdpconfig-*.ini`.
 
 | Config / Name     | Drive | Status  | OS                    | Notes |

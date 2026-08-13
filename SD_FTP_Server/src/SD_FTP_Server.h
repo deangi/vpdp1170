@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <stdint.h>
+#include "host_lib/sd/storage_guard.h"
 
 // Minimal passive/active FTP server backed by an SD_MMC card mounted under
 // a POSIX VFS root (default "/sdcard"). Single client at a time. Built
@@ -46,17 +47,3 @@ public:
 };
 
 extern SD_FTP_Server SDFTPServer;
-
-// Shared recursive lock for every SD operation that can run concurrently
-// with FTP. Emulator disk backends should hold this around open/close,
-// seek/read/write, and image creation.
-void sd_ftp_storage_lock();
-void sd_ftp_storage_unlock();
-
-class SD_FTP_StorageGuard {
-public:
-  SD_FTP_StorageGuard()  { sd_ftp_storage_lock(); }
-  ~SD_FTP_StorageGuard() { sd_ftp_storage_unlock(); }
-  SD_FTP_StorageGuard(const SD_FTP_StorageGuard&) = delete;
-  SD_FTP_StorageGuard& operator=(const SD_FTP_StorageGuard&) = delete;
-};

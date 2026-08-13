@@ -47,9 +47,6 @@ static char        g_rnfr[128]  = {0};     // pending RNFR source
 static char        g_linebuf[256];
 static size_t      g_linelen    = 0;
 static bool        g_line_overflow = false;
-static SemaphoreHandle_t g_storage_mutex = nullptr;
-static StaticSemaphore_t g_storage_mutex_buffer;
-static portMUX_TYPE g_storage_mutex_init_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // 4 KiB transfer buffer in PSRAM. Tuned empirically for SD_MMC throughput;
 // smaller starves the bus, larger gains nothing on PSRAM-backed memory.
@@ -685,16 +682,3 @@ uint16_t SD_FTP_Server::port()      const { return g_cfg.port; }
 // Singleton instance.
 SD_FTP_Server SDFTPServer;
 
-void sd_ftp_storage_lock() {
-  if (!g_storage_mutex) {
-    portENTER_CRITICAL(&g_storage_mutex_init_mux);
-    if (!g_storage_mutex)
-      g_storage_mutex = xSemaphoreCreateRecursiveMutexStatic(&g_storage_mutex_buffer);
-    portEXIT_CRITICAL(&g_storage_mutex_init_mux);
-  }
-  if (g_storage_mutex) xSemaphoreTakeRecursive(g_storage_mutex, portMAX_DELAY);
-}
-
-void sd_ftp_storage_unlock() {
-  if (g_storage_mutex) xSemaphoreGiveRecursive(g_storage_mutex);
-}

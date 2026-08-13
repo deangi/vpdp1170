@@ -97,6 +97,8 @@
 #include "boot_script.h"
 #include "boot_input.h"
 #include "host_time.h"
+#include "host_lib/net/wifi_sta.h"
+#include "host_lib/net/net_task.h"
 
 static GfxDisplay tft;
 #if VPDP_HAS_WS2812
@@ -234,6 +236,13 @@ static const String& boot_image_path() {
   return *paths[slot];
 }
 
+static void on_sta_ip(uint32_t ip) { eth_nat::set_sta_ip(ip); }
+static void on_wifi_up() {
+  if (!host_time_synced())
+    host_time_begin(cfg.ntp_enabled, cfg.ntp_server.c_str());
+}
+static void poll_eth_nat() { eth_nat::host_poll(); }
+
 static void wifi_connect() {
   const char* ssid = cfg.wifi_ssid.c_str();
   const char* pass = cfg.wifi_password.c_str();
@@ -247,36 +256,18 @@ static void wifi_connect() {
     return;
   }
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setHostname(host);
-  WiFi.setAutoReconnect(true);
-  WiFi.begin(ssid, pass);
-
-  LOG("WiFi connecting to \"%s\" (hostname=%s) ...", ssid, host);
   tft_status(ROW_WIFI, "WiFi:  ", "connecting...", TFT_YELLOW);
-
-  uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
-    delay(250);
-    Serial.print('.');
-  }
-  Serial.println();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    LOG("WiFi connected, IP=%s", WiFi.localIP().toString().c_str());
+  host_wifi_set_sta_ip_hook(on_sta_ip);
+  host_wifi_set_up_hook(on_wifi_up);
+  HostWifiConnectResult r =
+      host_wifi_connect(ssid, pass, host, WIFI_CONNECT_TIMEOUT_MS);
+  if (r.ok) {
     tft_status(ROW_WIFI, "WiFi:  ", ssid, TFT_GREEN);
     tft_status(ROW_IP,   "IP:    ", WiFi.localIP().toString().c_str(), TFT_GREEN);
-    IPAddress ip = WiFi.localIP();
-    eth_nat::set_sta_ip(((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) |
-                            ((uint32_t)ip[2] << 8) | (uint32_t)ip[3]);
-    LOG("WiFi gateway=%s", WiFi.gatewayIP().toString().c_str());
-    host_time_begin(cfg.ntp_enabled, cfg.ntp_server.c_str());
     boot_state = BOOT_OK;
   } else {
-    LOGE("WiFi connect timed out");
     tft_status(ROW_WIFI, "WiFi:  ", "FAILED", TFT_RED);
     tft_status(ROW_IP,   "IP:    ", "(none)", TFT_RED);
-    eth_nat::set_sta_ip(0);
     boot_state = BOOT_FAIL;
   }
 }
@@ -641,6 +632,7 @@ static void start_cpu(bool cold) {
   // m0 stub: PC defaults to 0 from cpu_reset(). m3+ will stamp a bootstrap
   // ROM into high memory and cpu_set_pc() to its entry point here.
 
+  console_set_personality(HOST_TERM_VT100);
   console_init();
   boot_input_arm(cfg);
   boot_script_arm(cfg);
@@ -720,46 +712,15 @@ static void render_task(void* arg) {
   }
 }
 
-// Telnet and FTP run on core 0. FTP SD I/O is serialized against guest disk
-// access via SD_FTP_StorageGuard (disk.cpp / FTP share the same lock).
-static void net_task(void* arg) {
-  (void)arg;
-  uint32_t wifi_ms = 0;
-  bool wifi_was_up = (WiFi.status() == WL_CONNECTED);
-  for (;;) {
-    telnet_poll();
+static void start_net_task() {
+  host_net_task_add(telnet_poll);
 #if VPDP_ENABLE_DZ11
-    telnet_dz_poll();
+  host_net_task_add(telnet_dz_poll);
 #endif
-    ftp_poll();
-    eth_nat::host_poll();
-    host_time_poll();
-
-    const wl_status_t st = WiFi.status();
-    const bool wifi_up = (st == WL_CONNECTED);
-    if (wifi_up && !wifi_was_up && !host_time_synced())
-      host_time_begin(cfg.ntp_enabled, cfg.ntp_server.c_str());
-    wifi_was_up = wifi_up;
-
-    uint32_t now = millis();
-    if (now - wifi_ms >= 10000) {
-      wifi_ms = now;
-      // Only reconnect when fully disconnected. Calling reconnect() while the
-      // stack is already in WL_IDLE_STATUS ("sta is connecting") just spams
-      // ESP-IDF errors and can delay/abort the in-flight join.
-      if (st == WL_DISCONNECTED || st == WL_CONNECTION_LOST ||
-          st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) {
-        LOGE("WiFi link down (status=%d) - reconnecting", (int)st);
-        WiFi.reconnect();
-        eth_nat::set_sta_ip(0);
-      } else if (st == WL_CONNECTED) {
-        IPAddress ip = WiFi.localIP();
-        eth_nat::set_sta_ip(((uint32_t)ip[0] << 24) | ((uint32_t)ip[1] << 16) |
-                            ((uint32_t)ip[2] << 8) | (uint32_t)ip[3]);
-      }
-    }
-    vTaskDelay(pdMS_TO_TICKS(2));
-  }
+  host_net_task_add(ftp_poll);
+  host_net_task_add(poll_eth_nat);
+  host_net_task_add(host_time_poll);
+  host_net_task_start();
 }
 
 void setup() {
@@ -938,7 +899,7 @@ void setup() {
     // directly to three independent SPSC FIFOs; no sink can block core 1.
     g_ui_mutex = xSemaphoreCreateMutex();
     xTaskCreatePinnedToCore(render_task, "render", 10240, NULL, 1, NULL, 0);
-    xTaskCreatePinnedToCore(net_task,    "net",     8192, NULL, 2, NULL, 0);
+    start_net_task();
     bool tft_output_ok = console_start_output_task();
     bool serial_output_ok = kl11::start_serial_output_task();
     if (!tft_output_ok || !serial_output_ok) {

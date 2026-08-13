@@ -7,6 +7,9 @@
 #include "dd11.h"
 #include "emu_control.h"
 #include "fifo.h"
+#include "host_lib/shell/shell_core.h"
+#include "host_lib/shell/shell_media.h"
+#include "host_lib/shell/shell_settings.h"
 #include "kl11.h"
 #include "kw11.h"
 #include "pdp_core.h"
@@ -118,9 +121,13 @@ static bool pop_command(char* command, size_t size) {
   return true;
 }
 
+static void register_vpdp_shell();
+
 void telnet_shell_init() {
   if (g_initialized) return;
   g_output.init(g_output_storage, SHELL_OUTPUT_BYTES);
+  shell_set_out(output_text);
+  register_vpdp_shell();
   g_initialized = true;
 }
 
@@ -302,402 +309,8 @@ static bool parse_octal_value(const char* text, uint32_t maximum,
   return true;
 }
 
-static String unquote_shell_value(const char* value) {
-  String result = value ? value : "";
-  if (result.length() >= 2) {
-    char quote = result[0];
-    if ((quote == '"' || quote == '\'') &&
-        result[result.length() - 1] == quote)
-      result = result.substring(1, result.length() - 1);
-  }
-  return result;
-}
-
-static void show_runtime_settings() {
-  output_printf("pcping=%d\r\n", cfg.diag_pcping_sec);
-  output_printf("serialdelay=%d\r\n", cfg.diag_serialdelay_ms);
-  output_printf("io_trace=%u\r\n",
-                (unsigned)dd11::io_trace_remaining());
-  output_printf("clock_trace=%u\r\n",
-                (unsigned)kw11::clock_trace_remaining());
-  output_printf("console_trace=%u\r\n",
-                (unsigned)kl11::console_trace_remaining());
-  output_printf("kek_console_trace=%u\r\n",
-                (unsigned)kek_tty_trace_remaining());
-  output_printf("dl_trace=%u\r\n",
-                (unsigned)pdp_core::dl_trace_remaining());
-  output_printf("rp_trace=%u\r\n",
-                (unsigned)pdp_core::rp_trace_remaining());
-  output_printf("du_trace=%u\r\n",
-                (unsigned)pdp_core::du_trace_remaining());
-  output_printf("trace=%s\r\n", cfg.diag_trace ? "true" : "false");
-  if (cfg.diag_break_pc != 0)
-    output_printf("break=%06o\r\n", (unsigned)cfg.diag_break_pc);
-  else
-    output_text("break=0\r\n");
-  output_printf("title=\"%s\"\r\n", cfg.title.c_str());
-  output_printf("boot_input=\"%s\"\r\n",
-                config_format_boot_input(cfg).c_str());
-  output_printf("boot_script=\"%s\" (%u step%s)\r\n",
-                config_format_boot_script(cfg).c_str(),
-                (unsigned)cfg.boot_script_count,
-                cfg.boot_script_count == 1 ? "" : "s");
-  {
-    char macbuf[24];
-    char gip[16], mask[16], gw[16];
-    config_format_mac(cfg.eth_mac, macbuf, sizeof(macbuf));
-    config_format_ipv4(cfg.eth_guest_ip, gip, sizeof(gip));
-    config_format_ipv4(cfg.eth_guest_mask, mask, sizeof(mask));
-    config_format_ipv4(cfg.eth_gateway_ip, gw, sizeof(gw));
-    output_printf("ethernet=%s\r\n", cfg.eth_enabled ? "true" : "false");
-    output_printf("ethernet_mac=%s\r\n", macbuf);
-    output_printf("ethernet_guest_ip=%s\r\n", gip);
-    output_printf("ethernet_guest_mask=%s\r\n", mask);
-    output_printf("ethernet_gateway_ip=%s\r\n", gw);
-  }
-}
-
-static void command_tty_stats() {
-  uint32_t tx_chars = 0;
-  uint32_t tx_ready = 0;
-  uint32_t tx_irq_q = 0;
-  uint32_t tx_irq_u = 0;
-  uint32_t rx_chars = 0;
-  uint32_t rx_irq_q = 0;
-  uint32_t rx_irq_u = 0;
-  uint32_t last_tx_ms = 0;
-  uint32_t last_tx_ready_ms = 0;
-  uint32_t trace_remaining = 0;
-  uint8_t last_tx = 0;
-  uint8_t tx_busy = 0;
-  uint16_t tks = 0;
-  uint16_t tkb = 0;
-  uint16_t tps = 0;
-  uint16_t tpb = 0;
-
-  kek_tty_get_stats(&tx_chars, &tx_ready, &tx_irq_q, &tx_irq_u,
-                    &rx_chars, &rx_irq_q, &rx_irq_u, &last_tx,
-                    &last_tx_ms, &last_tx_ready_ms, &trace_remaining,
-                    &tks, &tkb, &tps, &tpb, &tx_busy);
-  output_printf("TTY: tx=%lu txready=%lu irq64 q/u=%lu/%lu\r\n",
-                (unsigned long)tx_chars, (unsigned long)tx_ready,
-                (unsigned long)tx_irq_q, (unsigned long)tx_irq_u);
-  output_printf("     rx=%lu irq60 q/u=%lu/%lu trace_remaining=%lu\r\n",
-                (unsigned long)rx_chars, (unsigned long)rx_irq_q,
-                (unsigned long)rx_irq_u, (unsigned long)trace_remaining);
-  output_printf("     TKS=%06o TKB=%06o TPS=%06o TPB=%06o busy=%u "
-                "last_tx=%03o last_tx_ms=%lu last_ready_ms=%lu\r\n",
-                (unsigned)tks, (unsigned)tkb, (unsigned)tps, (unsigned)tpb,
-                (unsigned)tx_busy, (unsigned)last_tx,
-                (unsigned long)last_tx_ms,
-                (unsigned long)last_tx_ready_ms);
-
-  uint16_t psw = 0;
-  bool any_pending = false;
-  uint8_t counts[8] = {};
-  uint16_t vectors[8] = {};
-  if (pdp_core::get_interrupt_summary(&psw, &any_pending, counts, vectors)) {
-    output_printf("     CPU PS=%06o SPL=%u any_irq=%u queued:",
-                  (unsigned)psw, (unsigned)((psw >> 5) & 7),
-                  any_pending ? 1 : 0);
-    bool printed = false;
-    for (int level = 0; level < 8; level++) {
-      if (!counts[level]) continue;
-      output_printf(" BR%d=%06o", level, (unsigned)vectors[level]);
-      if (counts[level] > 1)
-        output_printf("(+%u)", (unsigned)(counts[level] - 1));
-      printed = true;
-    }
-    if (!printed) output_text(" none");
-    output_text("\r\n");
-  }
-
-  uint32_t tft_pending = 0, tft_dropped = 0;
-  uint32_t telnet_pending = 0, telnet_dropped = 0;
-  uint32_t serial_pending = 0, serial_dropped = 0;
-  console_output_stats(&tft_pending, &tft_dropped);
-  telnet_output_stats(&telnet_pending, &telnet_dropped);
-  kl11::serial_output_stats(&serial_pending, &serial_dropped);
-  output_printf("     sinks TFT=%lu/%lu Telnet=%lu/%lu USB=%lu/%lu "
-                "(pending/dropped)\r\n",
-                (unsigned long)tft_pending, (unsigned long)tft_dropped,
-                (unsigned long)telnet_pending, (unsigned long)telnet_dropped,
-                (unsigned long)serial_pending, (unsigned long)serial_dropped);
-}
-
-static void command_set(char* arguments) {
-  char* assignment = trim_in_place(arguments);
-  if (!*assignment) {
-    show_runtime_settings();
-    return;
-  }
-  char* equals = strchr(assignment, '=');
-  if (!equals) {
-    output_text("usage: set name=value\r\n");
-    return;
-  }
-  *equals = 0;
-  char* name = trim_in_place(assignment);
-  char* value = trim_in_place(equals + 1);
-
-  if (!strcasecmp(name, "pcping")) {
-    int parsed;
-    if (!parse_int_value(value, 0, 86400, &parsed)) {
-      output_text("error: pcping must be 0..86400 seconds\r\n");
-      return;
-    }
-    cfg.diag_pcping_sec = parsed;
-    output_printf("pcping=%d (runtime only)\r\n", parsed);
-    return;
-  }
-  if (!strcasecmp(name, "serialdelay")) {
-    int parsed;
-    if (!parse_int_value(value, 0, 10000, &parsed)) {
-      output_text("error: serialdelay must be 0..10000 ms\r\n");
-      return;
-    }
-    cfg.diag_serialdelay_ms = parsed;
-    kl11::serial_in_delay_ms = (uint32_t)parsed;
-    output_printf("serialdelay=%d (runtime only)\r\n", parsed);
-    return;
-  }
-  if (!strcasecmp(name, "io_trace")) {
-    int parsed;
-    if (!parse_int_value(value, 0, 1000000, &parsed)) {
-      output_text("error: io_trace must be 0..1000000 accesses\r\n");
-      return;
-    }
-    cfg.diag_io_trace = parsed;
-    dd11::set_io_trace((uint32_t)parsed);
-    output_printf("io_trace=%d (runtime only)\r\n", parsed);
-    return;
-  }
-  if (!strcasecmp(name, "clock_trace")) {
-    int parsed;
-    if (!parse_int_value(value, 0, 1000000, &parsed)) {
-      output_text("error: clock_trace must be 0..1000000 events\r\n");
-      return;
-    }
-    cfg.diag_clock_trace = parsed;
-    kw11::set_clock_trace((uint32_t)parsed);
-    output_printf("clock_trace=%d (runtime only)\r\n", parsed);
-    return;
-  }
-  if (!strcasecmp(name, "console_trace")) {
-    int parsed;
-    if (!parse_int_value(value, 0, 1000000, &parsed)) {
-      output_text("error: console_trace must be 0..1000000 characters\r\n");
-      return;
-    }
-    cfg.diag_console_trace = parsed;
-    kl11::set_console_trace((uint32_t)parsed);
-    kek_tty_set_trace((uint32_t)parsed);
-    output_printf("console_trace=%d (runtime only)\r\n", parsed);
-    return;
-  }
-  if (!strcasecmp(name, "dl_trace")) {
-    int parsed;
-    if (!parse_int_value(value, 0, 1000000, &parsed)) {
-      output_text("error: dl_trace must be 0..1000000 events\r\n");
-      return;
-    }
-    cfg.diag_dl_trace = parsed;
-    pdp_core::set_dl_trace((uint32_t)parsed);
-    output_printf("dl_trace=%d (runtime only)\r\n", parsed);
-    return;
-  }
-  if (!strcasecmp(name, "du_trace")) {
-    int parsed;
-    if (!parse_int_value(value, 0, 1000000, &parsed)) {
-      output_text("error: du_trace must be 0..1000000 events\r\n");
-      return;
-    }
-    cfg.diag_du_trace = parsed;
-    pdp_core::set_du_trace((uint32_t)parsed);
-    output_printf("du_trace=%d (runtime only)\r\n", parsed);
-    return;
-  }
-  if (!strcasecmp(name, "rp_trace") || !strcasecmp(name, "dp_trace")) {
-    int parsed;
-    if (!parse_int_value(value, 0, 1000000, &parsed)) {
-      output_text("error: rp_trace/dp_trace must be 0..1000000 events\r\n");
-      return;
-    }
-    cfg.diag_rp_trace = parsed;
-    pdp_core::set_rp_trace((uint32_t)parsed);
-    output_printf("rp_trace=%d (runtime only)\r\n", parsed);
-    return;
-  }
-  if (!strcasecmp(name, "trace")) {
-    bool parsed;
-    if (!parse_bool_value(value, &parsed)) {
-      output_text("error: trace must be true or false\r\n");
-      return;
-    }
-    cfg.diag_trace = parsed;
-    pdp_core::set_trace(parsed);
-    output_printf("trace=%s (runtime only)\r\n",
-                  parsed ? "true" : "false");
-    return;
-  }
-  if (!strcasecmp(name, "break")) {
-    String v = String(value);
-    v.trim();
-    if (!v.length() || v.equalsIgnoreCase("0") ||
-        v.equalsIgnoreCase("off") || v.equalsIgnoreCase("clear") ||
-        v.equalsIgnoreCase("none") || v == "-") {
-      cfg.diag_break_pc = 0;
-      pdp_core::monitor_break_clear();
-      output_text("break=0 (runtime only)\r\n");
-      return;
-    }
-    char* end = nullptr;
-    unsigned long pc = strtoul(v.c_str(), &end, 8);
-    while (end && (*end == ' ' || *end == '\t')) end++;
-    if (!end || *end || (pc & 1UL) || pc > 0177777UL) {
-      output_text("error: break must be an even octal PC, or 0/clear\r\n");
-      return;
-    }
-    cfg.diag_break_pc = (uint16_t)pc;
-    if (!pdp_core::monitor_break_set_pc(cfg.diag_break_pc)) {
-      output_text("error: could not arm PC breakpoint\r\n");
-      return;
-    }
-    output_printf("break=%06lo (runtime only)\r\n", pc);
-    return;
-  }
-  if (!strcasecmp(name, "title")) {
-    cfg.title = unquote_shell_value(value);
-    output_printf("title=\"%s\" (runtime only)\r\n", cfg.title.c_str());
-    return;
-  }
-  if (!strcasecmp(name, "boot_input") ||
-      !strcasecmp(name, "boot_text")) {
-    config_set_boot_input(cfg, String(value));
-    output_printf("boot_input=\"%s\" (%u bytes, %u segment%s; next PDP reboot, runtime only)\r\n",
-                  config_format_boot_input(cfg).c_str(),
-                  (unsigned)cfg.boot_input_len,
-                  (unsigned)cfg.boot_input_segment_count,
-                  cfg.boot_input_segment_count == 1 ? "" : "s");
-    return;
-  }
-  if (!strcasecmp(name, "boot_script")) {
-    config_set_boot_script(cfg, String(value));
-    output_printf("boot_script=\"%s\" (%u step%s; next PDP reboot, runtime only)\r\n",
-                  config_format_boot_script(cfg).c_str(),
-                  (unsigned)cfg.boot_script_count,
-                  cfg.boot_script_count == 1 ? "" : "s");
-    return;
-  }
-  if (!strcasecmp(name, "ethernet") ||
-      !strcasecmp(name, "ethernet_enabled")) {
-    bool parsed;
-    if (!parse_bool_value(value, &parsed)) {
-      output_text("error: ethernet must be true/false or on/off\r\n");
-      return;
-    }
-    cfg.eth_enabled = parsed;
-    kek_deuna::set_enabled(cfg.eth_enabled);
-    output_printf("ethernet=%s (next PDP reboot attaches DEUNA at 174510)\r\n",
-                  cfg.eth_enabled ? "true" : "false");
-    return;
-  }
-  if (!strcasecmp(name, "ethernet_mac")) {
-    uint8_t mac[6];
-    String v = unquote_shell_value(value);
-    if (!config_parse_mac(v.c_str(), mac)) {
-      output_printf("error: bad ethernet_mac \"%s\" "
-                    "(want aa-bb-cc-dd-ee-ff)\r\n", v.c_str());
-      return;
-    }
-    memcpy(cfg.eth_mac, mac, 6);
-    kek_deuna::set_mac(cfg.eth_mac);
-    char macbuf[24];
-    config_format_mac(cfg.eth_mac, macbuf, sizeof(macbuf));
-    output_printf("ethernet_mac=%s (next PDP reboot; runtime only)\r\n",
-                  macbuf);
-    return;
-  }
-  if (!strcasecmp(name, "ethernet_guest_ip")) {
-    uint32_t ip = 0;
-    String v = unquote_shell_value(value);
-    if (!config_parse_ipv4(v.c_str(), &ip)) {
-      output_printf("error: bad ethernet_guest_ip \"%s\"\r\n", v.c_str());
-      return;
-    }
-    cfg.eth_guest_ip = ip;
-    kek_deuna::set_network(cfg.eth_guest_ip, cfg.eth_guest_mask,
-                           cfg.eth_gateway_ip);
-    char ipbuf[16];
-    config_format_ipv4(ip, ipbuf, sizeof(ipbuf));
-    output_printf("ethernet_guest_ip=%s (next PDP reboot; runtime only)\r\n",
-                  ipbuf);
-    return;
-  }
-  if (!strcasecmp(name, "ethernet_guest_mask") ||
-      !strcasecmp(name, "ethernet_mask")) {
-    uint32_t ip = 0;
-    String v = unquote_shell_value(value);
-    if (!config_parse_ipv4(v.c_str(), &ip)) {
-      output_printf("error: bad ethernet_guest_mask \"%s\"\r\n", v.c_str());
-      return;
-    }
-    cfg.eth_guest_mask = ip;
-    kek_deuna::set_network(cfg.eth_guest_ip, cfg.eth_guest_mask,
-                           cfg.eth_gateway_ip);
-    char ipbuf[16];
-    config_format_ipv4(ip, ipbuf, sizeof(ipbuf));
-    output_printf("ethernet_guest_mask=%s (next PDP reboot; runtime only)\r\n",
-                  ipbuf);
-    return;
-  }
-  if (!strcasecmp(name, "ethernet_gateway_ip") ||
-      !strcasecmp(name, "ethernet_gateway")) {
-    uint32_t ip = 0;
-    String v = unquote_shell_value(value);
-    if (!config_parse_ipv4(v.c_str(), &ip)) {
-      output_printf("error: bad ethernet_gateway_ip \"%s\"\r\n", v.c_str());
-      return;
-    }
-    cfg.eth_gateway_ip = ip;
-    kek_deuna::set_network(cfg.eth_guest_ip, cfg.eth_guest_mask,
-                           cfg.eth_gateway_ip);
-    char ipbuf[16];
-    config_format_ipv4(ip, ipbuf, sizeof(ipbuf));
-    output_printf("ethernet_gateway_ip=%s (next PDP reboot; runtime only)\r\n",
-                  ipbuf);
-    return;
-  }
-  output_printf("error: setting is not runtime-changeable: %s\r\n", name);
-}
-
 static void command_help() {
-  output_text(
-      "File commands:\r\n"
-      "  pwd                         show current SD directory\r\n"
-      "  cd <path>                   change current directory\r\n"
-      "  ls [path]                   list a file or directory\r\n"
-      "  cat <path>                  display the first 100 lines\r\n"
-      "  rm <path>                   remove a file\r\n"
-      "  mv <source> <destination>   rename or move a file\r\n"
-      "  cp <source> <destination>   copy a file\r\n"
-      "Emulator commands:\r\n"
-      "  drives                      show mounted disk images\r\n"
-      "  mount <unit> <path> [ro]    mount RL0-RL3, RK0, or RP0\r\n"
-      "  dismount <unit>             dismount a drive\r\n"
-      "  rp <stop|start|status|regs> toggle RP0 STOP or dump RH70/RP06 state\r\n"
-      "  rl [status|regs]            dump RL11/RL02 CSR state (peek)\r\n"
-      "  clock                       dump KW11-L line-clock state (peek)\r\n"
-      "  create <rk|rl01|rl02|rp04|rp05|rp06> <path> create an empty disk image\r\n"
-      "  set [name=value]            show/change runtime settings\r\n"
-      "  lights                      show console address/data lights\r\n"
-      "  switches [octal|bit=0|1]    show or set console switch register\r\n"
-      "  tty                         show console TTY counters\r\n"
-      "  monitor                     enter PDP-11 front-panel monitor\r\n"
-      "  reset                       restart emulator (reload config, remount,\r\n"
-      "                              zero RAM, cold boot; keep WiFi/Telnet/FTP)\r\n"
-      "  reboot                      alias for reset\r\n"
-      "  exit                        reconnect Telnet to the PDP console\r\n");
+  shell_print_help();
 }
 
 static void monitor_help() {
@@ -839,13 +452,16 @@ static const char* rl_command_name(int command) {
 
 static void dump_rl_registers() {
   static const uint16_t kBase = 0174400u;
-  static const char* kNames[] = {"CSR", "BAR", "DAR", "MPR", "BAE"};
-  static constexpr unsigned kCount = sizeof(kNames) / sizeof(kNames[0]);
+  // Unibus RL11: CSR/BAR/DAR/MPR only. BAE (0174410) is RLV12/Qbus;
+  // kek leaves that address unimplemented so RSTS INIT does not treat
+  // the controller as RLV12.
+  static constexpr unsigned kCount = 4;
 
   uint16_t values[kCount] = {};
   for (unsigned i = 0; i < kCount; i++) {
     if (!pdp_core::read_rl02_word((uint16_t)(kBase + i * 2u), &values[i])) {
-      output_text("error: RL11/RL02 is unavailable\r\n");
+      output_text("error: RL11/RL02 is unavailable "
+                  "(no DL0-DL3 media mounted)\r\n");
       return;
     }
   }
@@ -854,8 +470,12 @@ static void dump_rl_registers() {
   output_printf("  %06o: CSR=%06o BAR=%06o DAR=%06o MPR=%06o\r\n",
                 (unsigned)kBase, (unsigned)values[0], (unsigned)values[1],
                 (unsigned)values[2], (unsigned)values[3]);
-  output_printf("  %06o: BAE=%06o", (unsigned)(kBase + 8u),
-                (unsigned)values[4]);
+  uint16_t bae = 0;
+  if (pdp_core::read_rl02_word((uint16_t)(kBase + 8u), &bae))
+    output_printf("  %06o: BAE=%06o\r\n", (unsigned)(kBase + 8u),
+                  (unsigned)bae);
+  else
+    output_text("  BAE not present (Unibus RL11)\r\n");
   const uint16_t csr = values[0];
   output_printf("  unit=%u cmd=%u(%s) IE=%u CRDY=%u DRDY=%u ERR=%u\r\n",
                 (unsigned)((csr >> 8) & 3), (unsigned)((csr >> 1) & 7),
@@ -1605,31 +1225,29 @@ static void command_cp(const char* source_arg, const char* destination_arg) {
 static const char* slot_label(int slot) {
   if (slot == DRIVE_RK0) return "RK0";
   if (slot == DRIVE_RP0) return "RP0";
+  if (slot == DRIVE_DU0) return "DU0";
   if (slot == DRIVE_A) return "RL0";
   if (slot == DRIVE_B) return "RL1";
   if (slot == DRIVE_C) return "RL2";
   return "RL3";
 }
 
-static void command_drives() {
-  for (int slot = 0; slot < DRIVE_COUNT; slot++) {
-    if (!disk_is_mounted(slot)) {
-      output_printf("%-3s  empty\r\n", slot_label(slot));
-      continue;
-    }
-    if (slot >= DRIVE_A && slot <= DRIVE_D) {
-      output_printf("%-3s  %s  %lu bytes  %s  %s\r\n",
-                    slot_label(slot), disk_path(slot),
-                    (unsigned long)disk_size_bytes(slot),
-                    disk_rl_mounted_media_type(slot),
-                    disk_is_readonly(slot) ? "read-only" : "read-write");
-    } else {
-      output_printf("%-3s  %s  %lu bytes  %s\r\n",
-                    slot_label(slot), disk_path(slot),
-                    (unsigned long)disk_size_bytes(slot),
-                    disk_is_readonly(slot) ? "read-only" : "read-write");
-    }
+static bool vpdp_media_list(int index, MediaUnitInfo* out) {
+  if (!out || index < 0 || index >= DRIVE_COUNT) return false;
+  memset(out, 0, sizeof(*out));
+  strncpy(out->name, slot_label(index), sizeof(out->name) - 1);
+  if (!disk_is_mounted(index)) {
+    out->mounted = false;
+    return true;
   }
+  out->mounted = true;
+  strncpy(out->path, disk_path(index), sizeof(out->path) - 1);
+  out->size_bytes = disk_size_bytes(index);
+  out->readonly = disk_is_readonly(index);
+  if (index >= DRIVE_A && index <= DRIVE_D)
+    strncpy(out->extra, disk_rl_mounted_media_type(index),
+            sizeof(out->extra) - 1);
+  return true;
 }
 
 static void command_switches(const char* argument) {
@@ -1702,6 +1320,45 @@ static void command_lights() {
   output_printf(" leds=%06o\r\n", (unsigned)leds);
 }
 
+static void command_tty_stats() {
+  uint32_t tx_chars = 0, tx_ready = 0, tx_irq_q = 0, tx_irq_uq = 0;
+  uint32_t rx_chars = 0, rx_irq_q = 0, rx_irq_uq = 0;
+  uint8_t last_tx = 0, tx_busy = 0;
+  uint32_t last_tx_ms = 0, last_tx_ready_ms = 0, trace_rem = 0;
+  uint16_t tks = 0, tkb = 0, tps = 0, tpb = 0;
+  kek_tty_get_stats(&tx_chars, &tx_ready, &tx_irq_q, &tx_irq_uq,
+                    &rx_chars, &rx_irq_q, &rx_irq_uq,
+                    &last_tx, &last_tx_ms, &last_tx_ready_ms, &trace_rem,
+                    &tks, &tkb, &tps, &tpb, &tx_busy);
+
+  uint32_t tft_pend = 0, tft_drop = 0;
+  uint32_t tel_pend = 0, tel_drop = 0;
+  uint32_t ser_pend = 0, ser_drop = 0;
+  console_output_stats(&tft_pend, &tft_drop);
+  telnet_output_stats(&tel_pend, &tel_drop);
+  kl11::serial_output_stats(&ser_pend, &ser_drop);
+
+  output_printf(
+      "tty tx=%lu txready=%lu irq64 q/u=%lu/%lu rx=%lu irq60 q/u=%lu/%lu\r\n",
+      (unsigned long)tx_chars, (unsigned long)tx_ready,
+      (unsigned long)tx_irq_q, (unsigned long)tx_irq_uq,
+      (unsigned long)rx_chars, (unsigned long)rx_irq_q,
+      (unsigned long)rx_irq_uq);
+  output_printf(
+      "  TKS=%06o TKB=%06o TPS=%06o TPB=%06o busy=%u last_tx=%03o\r\n",
+      (unsigned)tks, (unsigned)tkb, (unsigned)tps, (unsigned)tpb,
+      (unsigned)tx_busy, (unsigned)last_tx);
+  output_printf(
+      "  last_tx_ms=%lu last_ready_ms=%lu trace=%lu\r\n",
+      (unsigned long)last_tx_ms, (unsigned long)last_tx_ready_ms,
+      (unsigned long)trace_rem);
+  output_printf(
+      "  FIFOs tft pend/drop=%lu/%lu telnet=%lu/%lu serial=%lu/%lu\r\n",
+      (unsigned long)tft_pend, (unsigned long)tft_drop,
+      (unsigned long)tel_pend, (unsigned long)tel_drop,
+      (unsigned long)ser_pend, (unsigned long)ser_drop);
+}
+
 static bool unit_is_rl(const char* unit) {
   return unit && (!strncasecmp(unit, "RL", 2) || !strncasecmp(unit, "DL", 2));
 }
@@ -1710,6 +1367,7 @@ static int unit_slot(const char* unit) {
   if (!unit) return -1;
   if (!strcasecmp(unit, "RP0")) return DRIVE_RP0;
   if (!strcasecmp(unit, "RK0")) return DRIVE_RK0;
+  if (!strcasecmp(unit, "DU0")) return DRIVE_DU0;
   if (!strcasecmp(unit, "RL0") || !strcasecmp(unit, "DL0"))
     return DRIVE_A;
   if (!strcasecmp(unit, "RL1") || !strcasecmp(unit, "DL1")) return DRIVE_B;
@@ -1722,61 +1380,68 @@ static void notify_media(int /*slot*/, bool /*mounted*/) {
   // Kek backends read live disk_* mount state; no scaffold notify needed.
 }
 
-static void command_mount(const char* unit, const char* path_arg,
-                          const char* mode) {
+static const char* vpdp_mount_usage() {
+  return "usage: mount <RL0-RL3|RK0|RP0|DU0> <path> [ro]\r\n";
+}
+static const char* vpdp_create_usage() {
+  return "usage: create <rk|rl01|rl02|rp04|rp05|rp06> <path>\r\n";
+}
+
+static bool vpdp_media_mount(const char* unit, const char* path_arg,
+                             bool readonly, char* err, size_t errlen) {
   int slot = unit_slot(unit);
   if (slot < 0 || !path_arg) {
-    output_text("usage: mount <RL0-RL3|RK0|RP0> <path> [ro]\r\n");
-    return;
+    snprintf(err, errlen, "%s", vpdp_mount_usage());
+    return false;
   }
   char path[SHELL_PATH_MAX];
   if (!normalize_path(path_arg, path, sizeof(path))) {
-    output_text("error: invalid path\r\n");
-    return;
+    snprintf(err, errlen, "invalid path");
+    return false;
   }
   if (disk_is_mounted(slot)) {
-    output_printf("error: %s is mounted; dismount it first\r\n",
-                  slot_label(slot));
-    return;
+    snprintf(err, errlen, "%s is mounted; dismount it first", slot_label(slot));
+    return false;
   }
-  bool readonly = mode && (!strcasecmp(mode, "ro") ||
-                           !strcasecmp(mode, "readonly"));
   if (!disk_mount_mode(slot, path, readonly)) {
-    output_printf("error: mount failed: %s: %s\r\n", path,
-                  disk_last_error()[0] ? disk_last_error() : "unknown error");
-    return;
+    snprintf(err, errlen, "mount failed: %s: %s", path,
+             disk_last_error()[0] ? disk_last_error() : "unknown error");
+    return false;
   }
   if (unit_is_rl(unit) && !disk_validate_rl_mounted(slot)) {
     uint32_t bytes = disk_size_bytes(slot);
     disk_dismount(slot);
     notify_media(slot, false);
-    output_printf("error: invalid RL image size: %lu bytes; expected RL01=%lu or RL02=%lu\r\n",
-                  (unsigned long)bytes,
-                  (unsigned long)DISK_RL01_IMAGE_BYTES,
-                  (unsigned long)DISK_RL02_IMAGE_BYTES);
-    return;
+    snprintf(err, errlen,
+             "invalid RL image size: %lu bytes; expected RL01=%lu or RL02=%lu",
+             (unsigned long)bytes, (unsigned long)DISK_RL01_IMAGE_BYTES,
+             (unsigned long)DISK_RL02_IMAGE_BYTES);
+    return false;
   }
   notify_media(slot, true);
-  output_printf("mounted %s on %s (%s)\r\n", path, slot_label(slot),
-                disk_is_readonly(slot) ? "read-only" : "read-write");
+  snprintf(err, errlen, "mounted %s on %s (%s)\r\n", path, slot_label(slot),
+           disk_is_readonly(slot) ? "read-only" : "read-write");
+  return true;
 }
 
-static void command_dismount(const char* unit) {
+static bool vpdp_media_dismount(const char* unit, char* err, size_t errlen) {
   int slot = unit_slot(unit);
   if (slot < 0) {
-    output_text("usage: dismount <RL0-RL3|RK0|RP0>\r\n");
-    return;
+    snprintf(err, errlen, "%s", "usage: dismount <RL0-RL3|RK0|RP0|DU0>\r\n");
+    return false;
   }
   if (!disk_is_mounted(slot)) {
-    output_printf("%s is already empty\r\n", slot_label(slot));
-    return;
+    snprintf(err, errlen, "%s is already empty\r\n", slot_label(slot));
+    return true;
   }
   disk_dismount(slot);
   notify_media(slot, false);
-  output_printf("dismounted %s\r\n", slot_label(slot));
+  snprintf(err, errlen, "dismounted %s\r\n", slot_label(slot));
+  return true;
 }
 
-static void command_create(const char* type, const char* path_arg) {
+static bool vpdp_media_create(const char* type, const char* path_arg,
+                              char* err, size_t errlen) {
   uint32_t bytes = 0;
   if (type && !strcasecmp(type, "rk")) bytes = 2494464u;
   else if (type && !strcasecmp(type, "rl01")) bytes = 5242880u;
@@ -1788,28 +1453,28 @@ static void command_create(const char* type, const char* path_arg) {
   else if (type && !strcasecmp(type, "rp06"))
     bytes = uint32_t(RP06_CYL) * RP_HEADS * RP_SECTORS * RP_BYTES_PER_SEC;
   if (!bytes || !path_arg) {
-    output_text("usage: create <rk|rl01|rl02|rp04|rp05|rp06> <path>\r\n");
-    return;
+    snprintf(err, errlen, "%s", vpdp_create_usage());
+    return false;
   }
   char path[SHELL_PATH_MAX];
   if (!normalize_path(path_arg, path, sizeof(path))) {
-    output_text("error: invalid path\r\n");
-    return;
+    snprintf(err, errlen, "invalid path");
+    return false;
   }
   if (mounted_path(path)) {
-    output_text("error: path is mounted\r\n");
-    return;
+    snprintf(err, errlen, "path is mounted");
+    return false;
   }
-  output_printf("creating %s (%lu bytes)...\r\n", path, (unsigned long)bytes);
+  shell_out_printf("creating %s (%lu bytes)...\r\n", path, (unsigned long)bytes);
   SD_FTP_StorageGuard guard;
   if (SD_FS.exists(path)) {
-    output_printf("error: file already exists: %s\r\n", path);
-    return;
+    snprintf(err, errlen, "file already exists: %s", path);
+    return false;
   }
   File file = SD_FS.open(path, "w");
   if (!file) {
-    output_printf("error: cannot create: %s\r\n", path);
-    return;
+    snprintf(err, errlen, "cannot create: %s", path);
+    return false;
   }
   memset(g_file_buffer, 0, sizeof(g_file_buffer));
   uint32_t remaining = bytes;
@@ -1828,10 +1493,15 @@ static void command_create(const char* type, const char* path_arg) {
   file.close();
   if (!ok) {
     SD_FS.remove(path);
-    output_text("error: create failed; partial file removed\r\n");
-  } else {
-    output_printf("created %s\r\n", path);
+    snprintf(err, errlen, "create failed; partial file removed");
+    return false;
   }
+  snprintf(err, errlen, "created %s\r\n", path);
+  return true;
+}
+
+static bool vpdp_path_protected(const char* path) {
+  return mounted_path(path);
 }
 
 static void execute_command(char* line) {
@@ -1840,87 +1510,147 @@ static void execute_command(char* line) {
     return;
   }
   char* command_start = trim_in_place(line);
-  if (!strncasecmp(command_start, "set", 3) &&
-      (command_start[3] == 0 || command_start[3] == ' ' ||
-       command_start[3] == '\t')) {
-    command_set(command_start + 3);
-    prompt();
-    return;
-  }
   char* words[8];
   int count = split_words(command_start, words, 8);
   if (count == 0) {
     prompt();
     return;
   }
-  if (!strcasecmp(words[0], "help") || !strcmp(words[0], "?"))
-    command_help();
-  else if (!strcasecmp(words[0], "pwd"))
-    output_printf("%s\r\n", g_cwd);
-  else if (!strcasecmp(words[0], "cd"))
-    command_cd(count > 1 ? words[1] : nullptr);
-  else if (!strcasecmp(words[0], "ls"))
-    command_ls(count > 1 ? words[1] : nullptr);
-  else if (!strcasecmp(words[0], "cat"))
-    command_cat(count > 1 ? words[1] : nullptr);
-  else if (!strcasecmp(words[0], "rm"))
-    command_rm(count > 1 ? words[1] : nullptr);
-  else if (!strcasecmp(words[0], "mv"))
-    command_mv(count > 1 ? words[1] : nullptr,
-               count > 2 ? words[2] : nullptr);
-  else if (!strcasecmp(words[0], "cp"))
-    command_cp(count > 1 ? words[1] : nullptr,
-               count > 2 ? words[2] : nullptr);
-  else if (!strcasecmp(words[0], "drives"))
-    command_drives();
-  else if (!strcasecmp(words[0], "mount"))
-    command_mount(count > 1 ? words[1] : nullptr,
-                  count > 2 ? words[2] : nullptr,
-                  count > 3 ? words[3] : nullptr);
-  else if (!strcasecmp(words[0], "dismount") ||
-           !strcasecmp(words[0], "unmount"))
-    command_dismount(count > 1 ? words[1] : nullptr);
-  else if (!strcasecmp(words[0], "rp"))
-    command_rp(count > 1 ? words[1] : nullptr);
-  else if (!strcasecmp(words[0], "rl") || !strcasecmp(words[0], "dl"))
-    command_rl(count > 1 ? words[1] : nullptr);
-  else if (!strcasecmp(words[0], "clock") || !strcasecmp(words[0], "kw11l") ||
-           !strcasecmp(words[0], "lks"))
-    command_clock();
-  else if (!strcasecmp(words[0], "create"))
-    command_create(count > 1 ? words[1] : nullptr,
-                   count > 2 ? words[2] : nullptr);
-  else if (!strcasecmp(words[0], "switches") ||
-           !strcasecmp(words[0], "switch"))
-    command_switches(count > 1 ? words[1] : nullptr);
-  else if (!strcasecmp(words[0], "lights"))
-    command_lights();
-  else if (!strcasecmp(words[0], "tty"))
-    command_tty_stats();
-  else if (!strcasecmp(words[0], "monitor")) {
-    g_monitor_mode = true;
-    output_printf("PDP-11 monitor; CPU is currently %s.\r\n",
-                  pdp_core::monitor_paused() ? "paused" : "running");
-    monitor_help();
-  } else if (!strcasecmp(words[0], "reset") ||
-             !strcasecmp(words[0], "restart") ||
-             !strcasecmp(words[0], "reboot")) {
-    // Same path as UI "Reboot PDP-11": reload /pdpconfig.ini, remount
-    // drives, zero guest RAM, cold-boot. WiFi/Telnet/FTP stay up.
-    if (emu_control::submit("PDP;REBOOT"))
-      output_text("emulator reset scheduled "
-                  "(reload config, remount, zero RAM, cold boot)\r\n");
-    else
-      output_text("error: emulator command queue full\r\n");
-  } else if (!strcasecmp(words[0], "exit")) {
-    output_text("Returning Telnet to the PDP-11 console.\r\n");
-    g_active = false;
-    LOG("telnet shell: returned to PDP console");
-    return;
-  } else {
+  if (!shell_dispatch(count, words))
     output_printf("unknown command: %s (type help)\r\n", words[0]);
-  }
-  prompt();
+  if (g_active) prompt();
+}
+
+extern void vpdp_register_shell_settings();
+
+static void cmd_help(int, char**) { command_help(); }
+static void cmd_pwd(int, char**) { output_printf("%s\r\n", g_cwd); }
+static void cmd_cd(int argc, char** argv) {
+  command_cd(argc > 1 ? argv[1] : nullptr);
+}
+static void cmd_ls(int argc, char** argv) {
+  command_ls(argc > 1 ? argv[1] : nullptr);
+}
+static void cmd_cat(int argc, char** argv) {
+  command_cat(argc > 1 ? argv[1] : nullptr);
+}
+static void cmd_rm(int argc, char** argv) {
+  command_rm(argc > 1 ? argv[1] : nullptr);
+}
+static void cmd_mv(int argc, char** argv) {
+  command_mv(argc > 1 ? argv[1] : nullptr, argc > 2 ? argv[2] : nullptr);
+}
+static void cmd_cp(int argc, char** argv) {
+  command_cp(argc > 1 ? argv[1] : nullptr, argc > 2 ? argv[2] : nullptr);
+}
+static void cmd_rp(int argc, char** argv) {
+  command_rp(argc > 1 ? argv[1] : nullptr);
+}
+static void cmd_rl(int argc, char** argv) {
+  command_rl(argc > 1 ? argv[1] : nullptr);
+}
+static void cmd_clock(int, char**) { command_clock(); }
+static void cmd_switches(int argc, char** argv) {
+  command_switches(argc > 1 ? argv[1] : nullptr);
+}
+static void cmd_lights(int, char**) { command_lights(); }
+static void cmd_tty(int, char**) { command_tty_stats(); }
+static void cmd_monitor(int, char**) {
+  g_monitor_mode = true;
+  output_printf("PDP-11 monitor; CPU is currently %s.\r\n",
+                pdp_core::monitor_paused() ? "paused" : "running");
+  monitor_help();
+}
+static void cmd_exit(int, char**) {
+  output_text("Returning Telnet to the PDP-11 console.\r\n");
+  g_active = false;
+  LOG("telnet shell: returned to PDP console");
+}
+
+static bool vpdp_restart(char* err, size_t errlen) {
+  if (emu_control::submit("PDP;REBOOT")) return true;
+  snprintf(err, errlen, "emulator command queue full");
+  return false;
+}
+static const char* vpdp_restart_help() {
+  return "reload config, remount, zero RAM, cold boot";
+}
+
+static void register_vpdp_shell() {
+  static const char* help_aliases[] = { "?", nullptr };
+  static const char* rl_aliases[] = { "dl", nullptr };
+  static const char* clock_aliases[] = { "kw11l", "lks", nullptr };
+  static const char* switch_aliases[] = { "switch", nullptr };
+
+  shell_register("help", cmd_help,
+                 "help                        show this list",
+                 help_aliases, "File commands");
+  shell_register("pwd", cmd_pwd,
+                 "pwd                         show current SD directory",
+                 nullptr, "File commands");
+  shell_register("cd", cmd_cd,
+                 "cd <path>                   change current directory",
+                 nullptr, "File commands");
+  shell_register("ls", cmd_ls,
+                 "ls [path]                   list a file or directory",
+                 nullptr, "File commands");
+  shell_register("cat", cmd_cat,
+                 "cat <path>                  display the first 100 lines",
+                 nullptr, "File commands");
+  shell_register("rm", cmd_rm,
+                 "rm <path>                   remove a file",
+                 nullptr, "File commands");
+  shell_register("mv", cmd_mv,
+                 "mv <source> <destination>   rename or move a file",
+                 nullptr, "File commands");
+  shell_register("cp", cmd_cp,
+                 "cp <source> <destination>   copy a file",
+                 nullptr, "File commands");
+
+  static MediaOps media = {
+      vpdp_media_list,
+      vpdp_media_mount,
+      vpdp_media_dismount,
+      vpdp_media_create,
+      vpdp_path_protected,
+      vpdp_mount_usage,
+      vpdp_create_usage,
+  };
+  shell_set_media_ops(&media);
+  shell_register_media_commands();
+
+  shell_register_set_command();
+  vpdp_register_shell_settings();
+
+  shell_register("rp", cmd_rp,
+                 "rp <stop|start|status|regs> toggle RP0 STOP or dump RH70/RP06 state",
+                 nullptr, "Emulator commands");
+  shell_register("rl", cmd_rl,
+                 "rl [status|regs]            dump RL11/RL02 CSR state (peek)",
+                 rl_aliases, "Emulator commands");
+  shell_register("clock", cmd_clock,
+                 "clock                       dump KW11-L line-clock state (peek)",
+                 clock_aliases, "Emulator commands");
+  shell_register("lights", cmd_lights,
+                 "lights                      show console address/data lights",
+                 nullptr, "Emulator commands");
+  shell_register("switches", cmd_switches,
+                 "switches [octal|bit=0|1]    show or set console switch register",
+                 switch_aliases, "Emulator commands");
+  shell_register("tty", cmd_tty,
+                 "tty                         show console TTY counters",
+                 nullptr, "Emulator commands");
+  shell_register("monitor", cmd_monitor,
+                 "monitor                     enter PDP-11 front-panel monitor",
+                 nullptr, "Emulator commands");
+
+  static GuestControlOps guest = { vpdp_restart, vpdp_restart_help };
+  shell_set_guest_control_ops(&guest);
+  shell_register_guest_control_commands();
+
+  shell_register("exit", cmd_exit,
+                 "exit                        reconnect Telnet to the PDP console",
+                 nullptr, "Emulator commands");
 }
 
 void telnet_shell_poll() {
